@@ -1,0 +1,137 @@
+{
+  "20250227_AMmilled25-3_Position_16": {
+    "activezone": {
+      "results": {
+        "active_zone": {
+          "active_zone_count": 1,
+          "total_active_pre_points": 202316,
+          "total_active_post_points": 201907,
+          "avg_active_zone_area": 0.08114795817181199,
+          "distance_threshold": 40.0,
+          "active_zone_names": [
+            "active_zone_pre1_post1"
+          ],
+          "membrane_volumes": {
+            "avg_presynaptic_volume_um3": 0.022071590942093648,
+            "avg_postsynaptic_volume_um3": 0.046071144041576514,
+            "presynaptic_count": 1,
+            "postsynaptic_count": 1
+          },
+          "status": "completed"
+        },
+        "cleft_width": {
+          "average_cleft_width": 28.626815904272274,
+          "cleft_width_std": 4.653786453552369,
+          "min_cleft_width": 19.061210618688396,
+          "max_cleft_width": 39.99982834300666,
+          "active_zone_count": 1,
+          "total_measurements": 404223,
+          "individual_zone_results": {
+            "active_zone_pre1_post1": {
+              "average_cleft_width": 28.626815904272274,
+              "cleft_width_std": 4.653786453552369,
+              "min_cleft_width": 19.061210618688396,
+              "max_cleft_width": 39.99982834300666,
+              "measurement_count": 404223
+            }
+          },
+          "status": "completed"
+        }
+      },
+      "analysis_type": "activezone",
+      "timestamp": "2025-07-09T16:52:19.464522",
+      "version": "1.0",
+      "set_name": "unlabeled"
+    }
+  },
+  "20241030_AMmilled12-1_15": {
+    "activezone": {
+      "results": {
+        "active_zone": {
+          "active_zone_count": 1,
+          "total_active_pre_points": 217453,
+          "total_active_post_points": 201634,
+          "avg_active_zone_area": 0.0742731425024057,
+          "distance_threshold": 40.0,
+          "active_zone_names": [
+            "active_zone_pre1_post1"
+          ],
+          "membrane_volumes": {
+            "avg_presynaptic_volume_um3": 0.03270026487721008,
+            "avg_postsynaptic_volume_um3": 0.03014264407685634,
+            "presynaptic_count": 1,
+            "postsynaptic_count": 1
+          },
+          "status": "completed"
+        },
+        "cleft_width": {
+          "average_cleft_width": 28.14456195729975,
+          "cleft_width_std": 4.113282793416732,
+          "min_cleft_width": 17.485061524055364,
+          "max_cleft_width": 39.999802184635946,
+          "active_zone_count": 1,
+          "total_measurements": 419087,
+          "individual_zone_results": {
+            "active_zone_pre1_post1": {
+              "average_cleft_width": 28.14456195729975,
+              "cleft_width_std": 4.113282793416732,
+              "min_cleft_width": 17.485061524055364,
+              "max_cleft_width": 39.999802184635946,
+              "measurement_count": 419087
+            }
+          },
+          "status": "completed"
+        }
+      },
+      "analysis_type": "activezone",
+      "timestamp": "2025-07-09T16:54:41.924072",
+      "version": "1.0",
+      "set_name": "15F1"
+    }
+  },
+  "20231026_HippAu_26": {
+    "activezone": {
+      "results": {
+        "active_zone": {
+          "active_zone_count": 1,
+          "total_active_pre_points": 398607,
+          "total_active_post_points": 403468,
+          "avg_active_zone_area": 0.2335770849846403,
+          "distance_threshold": 40.0,
+          "active_zone_names": [
+            "active_zone_pre1_post1"
+          ],
+          "membrane_volumes": {
+            "avg_presynaptic_volume_um3": 0.04386301988656532,
+            "avg_postsynaptic_volume_um3": 0.02029734986829205,
+            "presynaptic_count": 1,
+            "postsynaptic_count": 1
+          },
+          "status": "completed"
+        },
+        "cleft_width": {
+          "average_cleft_width": 26.80945612561625,
+          "cleft_width_std": 6.050464877344463,
+          "min_cleft_width": 7.628601516005397,
+          "max_cleft_width": 39.99982170510258,
+          "active_zone_count": 1,
+          "total_measurements": 802075,
+          "individual_zone_results": {
+            "active_zone_pre1_post1": {
+              "average_cleft_width": 26.80945612561625,
+              "cleft_width_std": 6.050464877344463,
+              "min_cleft_width": 7.628601516005397,
+              "max_cleft_width": 39.99982170510258,
+              "measurement_count": 802075
+            }
+          },
+          "status": "completed"
+        }
+      },
+      "analysis_type": "activezone",
+      "timestamp": "2025-07-09T16:56:45.368810",
+      "version": "1.0",
+      "set_name": "15F1"
+    }
+  }
+}

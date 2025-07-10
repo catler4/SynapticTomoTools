@@ -1,0 +1,12 @@
+{
+  "presynaptic_membrane_1": {
+    "volume_um3": 0.022071590942093648,
+    "point_count": 473419,
+    "coordinates_file": "presynatpticmembranes_1.txt"
+  },
+  "postsynaptic_membrane_1": {
+    "volume_um3": 0.046071144041576514,
+    "point_count": 745891,
+    "coordinates_file": "postsynapticmembranes_1.txt"
+  }
+}
