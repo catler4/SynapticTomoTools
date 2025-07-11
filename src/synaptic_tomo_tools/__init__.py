@@ -16,7 +16,7 @@ __version__ = "0.1.0"
 # Expose core API functions for top-level imports
 from .activezone import define_active_zone, calculate_cleft_width
 from .vesicles import detect_vesicles, measure_distances_to_az
-from .aunps import analyze_aunps, compute_vesicle_aunp_distances
+from .aunps import analyze_aunps
 
 __all__ = [
     "define_active_zone",
@@ -24,5 +24,4 @@ __all__ = [
     "detect_vesicles",
     "measure_distances_to_az",
     "analyze_aunps",
-    "compute_vesicle_aunp_distances",
 ]

@@ -7,7 +7,6 @@ from synaptic_tomo_tools import (
     detect_vesicles,
     measure_distances_to_az,
     analyze_aunps,
-    compute_vesicle_aunp_distances,
 )
 from .results_manager import ResultsManager
 
@@ -33,10 +32,15 @@ def load_tomograms(csv_path, analysis_type, set_name=None):
     if set_name:
         filtered = filtered[filtered["set"] == set_name]
 
+    # Ensure filtered is a DataFrame (for linter and runtime safety)
+    assert isinstance(filtered, pd.DataFrame)
+    # type: ignore[union-attr]
+
     # Construct full paths based on set-specific root
     paths = []
     for _, row in filtered.iterrows():
-        root = SET_ROOTS.get(row["set"])
+        row: pd.Series  # type hint for linter
+        root = SET_ROOTS.get(str(row["set"]))
         if root is None:
             raise ValueError(f"No root path defined for set: {row['set']}")
         full_path = root / row["tomoname"]
@@ -44,7 +48,67 @@ def load_tomograms(csv_path, analysis_type, set_name=None):
 
     return paths
 
+def print_synapse_ascii_art():
+    synapse_art = r"""
+╔═╗┬ ┬┌┐┌┌─┐┌─┐┌┬┐┬┌─┐╔╦╗┌─┐┌┬┐┌─┐╔╦╗┌─┐┌─┐┬  ┌─┐
+╚═╗└┬┘│││├─┤├─┘ │ ││   ║ │ │││││ │ ║ │ ││ ││  └─┐
+╚═╝ ┴ ┘└┘┴ ┴┴   ┴ ┴└─┘ ╩ └─┘┴ ┴└─┘ ╩ └─┘└─┘┴─┘└─┘
+
+                                    .:::::..             .......                                    
+                                .:::.     ..::.      .....     .....                                
+                            .:::.     .....  .::    ...            ....                             
+                        .:::..       ..    .. .:.  ...                ......                        
+                  ..::::..   ..      ..    .  .:.  ..                     ......                    
+   :::::::::::::::..       ..   ..      ..     ::  ..                          .........            
+    .....                 ..    ..   .....     ::  ..                                 ...........   
+                           ......   ..    .   .::  ..                                               
+                      ......        ..    .   .:. ...                                               
+                     ..    ..    ...  ...     .:.:=--.                                              
+                      .    ..  .    ..        ::. ==-.                                              
+                        ..    ..    ..  ..... .:..-:..                                              
+                                .....  .     ..:..=::.                                              
+                            ....       ..   ...::  ..                                               
+                          ..    ..       ..    ::  ..                                               
+   ::::::::::...          ..    ..    ..       ::  ..                                  ..........   
+              .:::::..      ....    .    ..    ::  ..                          .............   ..   
+                     .:::..        ..    ..   .:.  ..                     ......                    
+                         .:::.       .....    ::.  ...                .....                         
+                             .:::            .:.    ...           .....                             
+                                 :::..   ..:::       .....    .....                                 
+                                     .....                .....                                     
+    """
+    print(synapse_art)
+
+def print_vesicle_ascii_art():
+    vesicle_art = r"""
+                                  
+\  /_ _. _| _   /\  _  _ |   _. _ 
+ \/(-_)|(_|(-  /--\| )(_||\/_)|_) 
+                          /       
+"""
+    print(vesicle_art)
+
+def print_activezone_ascii_art():
+    activezone_art = r"""
+               ___                             
+ /\  _|_.   _   _/ _  _  _   /\  _  _ |   _. _ 
+/--\(_|_|\/(-  /__(_)| )(-  /--\| )(_||\/_)|_) 
+                                       /       
+"""
+    print(activezone_art)
+
+def print_aunps_ascii_art():
+    aunps_art = r"""
+            __                      
+ /\    |\ ||__)   /\  _  _ |   _. _ 
+/--\|_|| \||     /--\| )(_||\/_)|_) 
+                            /       
+"""
+    print(aunps_art)
+
 def run_activezone(tomo_paths, results_manager, skip_completed=False, overwrite=False):
+    print_synapse_ascii_art()
+    print_activezone_ascii_art()
     for i, (tomo, set_name) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
         
@@ -76,7 +140,9 @@ def run_activezone(tomo_paths, results_manager, skip_completed=False, overwrite=
         auto_overwrite = not skip_completed or overwrite
         results_manager.store_tomogram_results(tomogram_name, 'activezone', combined_results, overwrite=auto_overwrite, set_name=set_name)
 
-def run_vesicles(tomo_paths, results_manager, skip_completed=False):
+def run_vesicles(tomo_paths, results_manager, skip_completed=False, overwrite=False):
+    print_synapse_ascii_art()
+    print_vesicle_ascii_art()
     for i, (tomo, set_name) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
         
@@ -104,9 +170,13 @@ def run_vesicles(tomo_paths, results_manager, skip_completed=False):
             'distance_measurements': distance_results
         }
         
-        results_manager.store_tomogram_results(tomogram_name, 'vesicles', combined_results, set_name=set_name)
+        # Auto-overwrite if not using skip_completed (more intuitive behavior)
+        auto_overwrite = not skip_completed or overwrite
+        results_manager.store_tomogram_results(tomogram_name, 'vesicles', combined_results, overwrite=auto_overwrite, set_name=set_name)
 
-def run_aunps(tomo_paths, results_manager, skip_completed=False):
+def run_aunps(tomo_paths, results_manager, skip_completed=False, overwrite=False):
+    print_synapse_ascii_art()
+    print_aunps_ascii_art()
     for i, (tomo, set_name) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
         
@@ -126,15 +196,15 @@ def run_aunps(tomo_paths, results_manager, skip_completed=False):
         
         # Run analyses and collect results
         aunp_results = analyze_aunps(tomo)
-        distance_results = compute_vesicle_aunp_distances(tomo)
         
         # Store combined results
         combined_results = {
             'aunp_analysis': aunp_results,
-            'vesicle_aunp_distances': distance_results
         }
         
-        results_manager.store_tomogram_results(tomogram_name, 'aunps', combined_results, set_name=set_name)
+        # Auto-overwrite if not using skip_completed (more intuitive behavior)
+        auto_overwrite = not skip_completed or overwrite
+        results_manager.store_tomogram_results(tomogram_name, 'aunps', combined_results, overwrite=auto_overwrite, set_name=set_name)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -193,12 +263,12 @@ def main():
     if args.analysis == "activezone":
         run_activezone(tomos, results_manager, args.skip_completed, args.overwrite)
     elif args.analysis == "vesicles":
-        run_vesicles(tomos, results_manager, args.skip_completed)
+        run_vesicles(tomos, results_manager, args.skip_completed, args.overwrite)
     elif args.analysis == "aunps":
-        run_aunps(tomos, results_manager, args.skip_completed)
+        run_aunps(tomos, results_manager, args.skip_completed, args.overwrite)
 
-    # Always export to CSV
-    results_manager.export_to_csv()
+    # Remove the automatic export to CSV at the end of main()
+    # results_manager.export_to_csv()
 
 if __name__ == "__main__":
     main()

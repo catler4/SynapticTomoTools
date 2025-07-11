@@ -9,21 +9,21 @@ with a focus on synaptic structures. Modular, command-line friendly, and designe
 
 - Quantitative measurements
     > Pre- and postsynaptic compartment volumes
-    > Presynaptic vesicle volume, diameter, and localization
     > Active zone area
-    > Active zone synaptic cleft width
+    > Synaptic cleft width
+    > Presynaptic vesicle volume, diameter, and localization
+    > Presynaptic vesicle loading estimation
     > AuNP label nearest neighbor distances
     > AuNP label to vesicle fusion site distances
 - Command-line interface for easy pipeline execution
 
-## 🚀 Workflow
+## ⏯️ Workflow
 
 Modules should be run in the following order for all analyses to be completed
-    > activezone
-    > vesicles
-    > aunps
+    1. activezone
+    2. vesicles
+    3. aunps
 
-To skip analyses that are already done, use the --skip-completed flag when running the CLI script.
 ---
 
 ## 📦 Installation
