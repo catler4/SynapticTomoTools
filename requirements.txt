@@ -2,8 +2,6 @@
 numpy>=1.21
 scipy>=1.7
 pandas>=1.3
-scikit-image>=0.18
-scikit-learn>=1.0
 
 # File and data handling
 starfile>=0.1.3
@@ -12,12 +10,8 @@ mrcfile>=1.4
 # Plotting and visualization
 matplotlib>=3.4
 
-# CLI tools and UX
-click>=8.0          # Optional if used for more complex CLI than argparse
-tqdm>=4.62          # Progress bars
+# Progress bars and CLI tools
+tqdm>=4.62
 
-# Testing
-pytest>=7.0
-
-# Optional visualization (e.g., for interactive 3D)
-napari>=0.4         # Optional; include only if used in your actual analysis code
+# Optional dependencies for analysis scripts
+seaborn>=0.11       # Used in analysis scripts for enhanced plotting

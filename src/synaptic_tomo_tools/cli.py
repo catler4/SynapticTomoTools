@@ -17,8 +17,12 @@ except ImportError:
 
 # Map each tomogram set name to its specific root directory
 SET_ROOTS = {
-    "15F1": Path("data/15F1_tomograms/TOP_TOMOS"),
-    "unlabeled": Path("data/unlabeled_tomograms/TOP_TOMOS"),
+    "15F1": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1_tomograms/TOP_TOMOS"),
+    "5F11": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/5F11_tomograms/TOP_TOMOS"),
+    "15F1and5F11": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1and5F11_tomograms/TOP_TOMOS"),
+    "15F1and5F11dimer": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1and5F11dimer_tomograms/TOP_TOMOS"),
+    "11B8": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/11B8_tomograms/TOP_TOMOS"),
+    "unlabeled": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/unlabeled_tomograms/TOP_TOMOS"),
     # Add more sets here if needed
 }
 
@@ -124,9 +128,10 @@ def print_aunps_ascii_art():
 """
     print(aunps_art)
 
-def run_activezone(tomo_paths, results_manager, skip_completed=False, overwrite=False):
-    print_synapse_ascii_art()
-    print_activezone_ascii_art()
+def run_activezone(tomo_paths, results_manager, skip_completed=False, overwrite=False, print_ascii=True):
+    if print_ascii:
+        print_synapse_ascii_art()
+        print_activezone_ascii_art()
     for i, (tomo, set_name) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
         
@@ -158,9 +163,10 @@ def run_activezone(tomo_paths, results_manager, skip_completed=False, overwrite=
         auto_overwrite = not skip_completed or overwrite
         results_manager.store_tomogram_results(tomogram_name, 'activezone', combined_results, overwrite=auto_overwrite, set_name=set_name)
 
-def run_vesicles(tomo_paths, results_manager, skip_completed=False, overwrite=False):
-    print_synapse_ascii_art()
-    print_vesicle_ascii_art()
+def run_vesicles(tomo_paths, results_manager, skip_completed=False, overwrite=False, print_ascii=True):
+    if print_ascii:
+        print_synapse_ascii_art()
+        print_vesicle_ascii_art()
     for i, (tomo, set_name) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
         
@@ -250,19 +256,19 @@ def run_all_analyses(tomo_paths, results_manager, skip_completed=False, overwrit
     print("\n" + "="*80)
     print("STEP 1: ACTIVE ZONE ANALYSIS")
     print("="*80)
-    run_activezone(tomo_paths, results_manager, skip_completed, overwrite)
+    run_activezone(tomo_paths, results_manager, skip_completed, overwrite, print_ascii=False)
     
     # Step 2: Vesicle Analysis
     print("\n" + "="*80)
     print("STEP 2: VESICLE ANALYSIS")
     print("="*80)
-    run_vesicles(tomo_paths, results_manager, skip_completed, overwrite)
+    run_vesicles(tomo_paths, results_manager, skip_completed, overwrite, print_ascii=False)
     
     # Step 3: AuNP Analysis
     print("\n" + "="*80)
     print("STEP 3: AUNP ANALYSIS")
     print("="*80)
-    run_aunps(tomo_paths, results_manager, skip_completed, overwrite)
+    run_aunps(tomo_paths, results_manager, skip_completed, overwrite, print_ascii=False)
     
     # Step 4: Visualizations
     print("\n" + "="*80)
@@ -274,9 +280,10 @@ def run_all_analyses(tomo_paths, results_manager, skip_completed=False, overwrit
     print("ALL ANALYSES COMPLETED!")
     print("="*80)
 
-def run_aunps(tomo_paths, results_manager, skip_completed=False, overwrite=False):
-    print_synapse_ascii_art()
-    print_aunps_ascii_art()
+def run_aunps(tomo_paths, results_manager, skip_completed=False, overwrite=False, print_ascii=True):
+    if print_ascii:
+        print_synapse_ascii_art()
+        print_aunps_ascii_art()
     for i, (tomo, set_name) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
         
