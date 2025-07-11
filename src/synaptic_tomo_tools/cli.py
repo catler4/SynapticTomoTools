@@ -1,14 +1,19 @@
 import argparse
 import pandas as pd
 from pathlib import Path
-from synaptic_tomo_tools import (
-    define_active_zone,
-    calculate_cleft_width,
-    detect_vesicles,
-    measure_distances_to_az,
-    analyze_aunps,
-)
+import sys
+import os
+from .activezone import define_active_zone, calculate_cleft_width
+from .vesicles import detect_vesicles, measure_distances_to_az
+from .aunps import analyze_aunps
 from .results_manager import ResultsManager
+
+# Import visualization module
+try:
+    from .visualization import plot_tomogram_overlays
+except ImportError:
+    print("Warning: Could not import visualization module. Visualizations will be skipped.")
+    plot_tomogram_overlays = None
 
 # Map each tomogram set name to its specific root directory
 SET_ROOTS = {
@@ -25,10 +30,23 @@ def load_tomograms(csv_path, analysis_type, set_name=None):
     """
     df = pd.read_csv(csv_path)
 
-    if analysis_type not in df.columns:
-        raise ValueError(f"Column '{analysis_type}' not found in {csv_path}.")
-
-    filtered = df[df[analysis_type] == True]
+    # Handle 'all' analysis type - include tomograms that have any analysis enabled
+    if analysis_type == 'all':
+        # Include tomograms that have at least one analysis enabled
+        analysis_columns = ['activezone', 'vesicles', 'aunps']
+        available_columns = [col for col in analysis_columns if col in df.columns]
+        if not available_columns:
+            raise ValueError(f"No analysis columns found in {csv_path}.")
+        
+        # Create a mask for tomograms that have any analysis enabled
+        analysis_mask = df[available_columns].any(axis=1)
+        filtered = df[analysis_mask]
+    else:
+        # For individual analysis types, check if the column exists
+        if analysis_type not in df.columns:
+            raise ValueError(f"Column '{analysis_type}' not found in {csv_path}.")
+        filtered = df[df[analysis_type] == True]
+    
     if set_name:
         filtered = filtered[filtered["set"] == set_name]
 
@@ -174,6 +192,88 @@ def run_vesicles(tomo_paths, results_manager, skip_completed=False, overwrite=Fa
         auto_overwrite = not skip_completed or overwrite
         results_manager.store_tomogram_results(tomogram_name, 'vesicles', combined_results, overwrite=auto_overwrite, set_name=set_name)
 
+def generate_visualizations(tomo_paths, results_manager, skip_completed=False, overwrite=False):
+    """Generate visualization images for each tomogram after analysis is complete."""
+    if plot_tomogram_overlays is None:
+        print("Skipping visualization generation (visualization module not available)")
+        return
+        
+    print("\n" + "="*80)
+    print("GENERATING VISUALIZATIONS")
+    print("="*80)
+    
+    # Create combined visualization directory in results
+    combined_viz_dir = Path(results_manager.results_dir) / 'visualizations'
+    combined_viz_dir.mkdir(exist_ok=True)
+    print(f"Combined visualizations will be saved to: {combined_viz_dir}")
+    
+    for i, (tomo, set_name) in enumerate(tomo_paths):
+        tomogram_name = Path(tomo).name
+        
+        # Create visualization output directory within the tomogram's results folder
+        viz_output_dir = Path(tomo) / 'best_alignment' / 'STT_results' / 'visualizations'
+        viz_output_dir.mkdir(exist_ok=True)
+        
+        print(f"\nGenerating visualizations for {tomogram_name}")
+        print(f"Individual output directory: {viz_output_dir}")
+        
+        try:
+            # Generate the three visualization types in the tomogram's directory
+            plot_tomogram_overlays(tomo, viz_output_dir)
+            
+            # Copy the generated files to the combined directory with tomogram name prefix
+            for viz_file in viz_output_dir.glob(f"{tomogram_name}_*.png"):
+                combined_file = combined_viz_dir / viz_file.name
+                import shutil
+                shutil.copy2(viz_file, combined_file)
+                print(f"  Copied {viz_file.name} to combined directory")
+            
+            print(f"✓ Successfully generated visualizations for {tomogram_name}")
+        except Exception as e:
+            print(f"✗ Failed to generate visualizations for {tomogram_name}: {e}")
+            continue
+    
+    print(f"\nAll visualizations saved to:")
+    print(f"  Individual: {viz_output_dir}")
+    print(f"  Combined: {combined_viz_dir}")
+
+def run_all_analyses(tomo_paths, results_manager, skip_completed=False, overwrite=False):
+    """Run all analyses in the correct order: activezone, vesicles, aunps, visualizations."""
+    print_synapse_ascii_art()
+    print("="*80)
+    print("RUNNING ALL ANALYSES")
+    print("="*80)
+    print("Order: activezone → vesicles → aunps → visualizations")
+    print("="*80)
+    
+    # Step 1: Active Zone Analysis
+    print("\n" + "="*80)
+    print("STEP 1: ACTIVE ZONE ANALYSIS")
+    print("="*80)
+    run_activezone(tomo_paths, results_manager, skip_completed, overwrite)
+    
+    # Step 2: Vesicle Analysis
+    print("\n" + "="*80)
+    print("STEP 2: VESICLE ANALYSIS")
+    print("="*80)
+    run_vesicles(tomo_paths, results_manager, skip_completed, overwrite)
+    
+    # Step 3: AuNP Analysis
+    print("\n" + "="*80)
+    print("STEP 3: AUNP ANALYSIS")
+    print("="*80)
+    run_aunps(tomo_paths, results_manager, skip_completed, overwrite)
+    
+    # Step 4: Visualizations
+    print("\n" + "="*80)
+    print("STEP 4: VISUALIZATION GENERATION")
+    print("="*80)
+    generate_visualizations(tomo_paths, results_manager, skip_completed, overwrite)
+    
+    print("\n" + "="*80)
+    print("ALL ANALYSES COMPLETED!")
+    print("="*80)
+
 def run_aunps(tomo_paths, results_manager, skip_completed=False, overwrite=False):
     print_synapse_ascii_art()
     print_aunps_ascii_art()
@@ -211,8 +311,8 @@ def main():
         description="Run SynapticTomoTools analysis on selected tomograms."
     )
     parser.add_argument(
-        "--analysis", required=True, choices=["activezone", "vesicles", "aunps"],
-        help="Which analysis to run."
+        "--analysis", required=True, choices=["activezone", "vesicles", "aunps", "all"],
+        help="Which analysis to run. Use 'all' to run activezone, vesicles, aunps, and visualizations in sequence."
     )
     parser.add_argument(
         "--set", default=None,
@@ -237,6 +337,10 @@ def main():
     parser.add_argument(
         "--results-dir", default="results",
         help="Directory to store analysis results."
+    )
+    parser.add_argument(
+        "--generate-visualizations", action="store_true",
+        help="Generate visualization images for each tomogram after analysis completion."
     )
 
     args = parser.parse_args()
@@ -266,6 +370,12 @@ def main():
         run_vesicles(tomos, results_manager, args.skip_completed, args.overwrite)
     elif args.analysis == "aunps":
         run_aunps(tomos, results_manager, args.skip_completed, args.overwrite)
+    elif args.analysis == "all":
+        run_all_analyses(tomos, results_manager, args.skip_completed, args.overwrite)
+    else:
+        # Generate visualizations if requested (only for individual analyses)
+        if args.generate_visualizations:
+            generate_visualizations(tomos, results_manager, args.skip_completed, args.overwrite)
 
     # Remove the automatic export to CSV at the end of main()
     # results_manager.export_to_csv()

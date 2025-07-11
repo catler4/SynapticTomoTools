@@ -6,10 +6,10 @@ import numpy as np
 from scipy.spatial import KDTree
 from pathlib import Path
 import starfile
-from synaptic_tomo_tools.activezone import import_membrane_segmentations
+from .activezone import import_membrane_segmentations
 from datetime import datetime
 import json
-from synaptic_tomo_tools.vesicles import import_presynaptic_membranes_and_active_zones
+from .vesicles import import_presynaptic_membranes_and_active_zones
 
 def save_aunp_results_to_csv(tomogram_path, aunp_df, csv_file=None, overwrite=True):
     tomogram_path = Path(tomogram_path)
