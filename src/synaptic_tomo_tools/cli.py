@@ -218,7 +218,7 @@ def generate_visualizations(tomo_paths, results_manager, skip_completed=False, o
         
         # Create visualization output directory within the tomogram's results folder
         viz_output_dir = Path(tomo) / 'best_alignment' / 'STT_results' / 'visualizations'
-        viz_output_dir.mkdir(exist_ok=True)
+        viz_output_dir.mkdir(parents=True, exist_ok=True)
         
         print(f"\nGenerating visualizations for {tomogram_name}")
         print(f"Individual output directory: {viz_output_dir}")
