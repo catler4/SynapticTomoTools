@@ -1,0 +1,11 @@
+
+set directory /Users/andecath/Documents/GitHub/SynapticTomoTools/frames_zmovie
+set basename frame
+set format tif
+set digits 4
+set start 1
+set end 375
+set step 1
+set axis Z
+save
+exit
