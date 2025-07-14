@@ -199,8 +199,11 @@ def analyze_aunps(tomogram_path):
 
     # --- New: Calculate distance to closest pre/post membrane segmentation ---
     membranes = import_membrane_segmentations(tomogram_path)
-    pre_points = np.concatenate(membranes['presynaptic'], axis=0) if membranes['presynaptic'] else np.zeros((0, 3))
-    post_points = np.concatenate(membranes['postsynaptic'], axis=0) if membranes['postsynaptic'] else np.zeros((0, 3))
+    # Ensure all arrays are 2D and have shape (N, 3)
+    pre_arrays = [np.atleast_2d(arr) for arr in membranes['presynaptic'] if np.atleast_2d(arr).shape[1] == 3]
+    post_arrays = [np.atleast_2d(arr) for arr in membranes['postsynaptic'] if np.atleast_2d(arr).shape[1] == 3]
+    pre_points = np.concatenate(pre_arrays, axis=0) if pre_arrays else np.zeros((0, 3))
+    post_points = np.concatenate(post_arrays, axis=0) if post_arrays else np.zeros((0, 3))
     if len(pre_points) > 0:
         pre_tree = KDTree(pre_points)
         pre_dists, _ = pre_tree.query(coords)

@@ -132,7 +132,7 @@ TOMOGRAM_SET_ROOT/
 │   ├── tomogram1/
 │   │   ├── best_alignment/
 │   │   │   ├── aunps/
-│   │   │   │   ├── presynatpticmembranes_1.txt
+│   │   │   │   ├── presynatpticmembranes_1.txt (NOTE THE TYPO presynaTptic, IT IS EXPECTED!)
 │   │   │   │   ├── postsynapticmembranes_1.txt
 │   │   │   │   ├── synapticvesicles_1.txt
 │   │   │   │   ├── synapticvesicles_2.txt
