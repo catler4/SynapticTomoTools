@@ -384,8 +384,10 @@ def main():
         if args.generate_visualizations:
             generate_visualizations(tomos, results_manager, args.skip_completed, args.overwrite)
 
-    # Remove the automatic export to CSV at the end of main()
-    # results_manager.export_to_csv()
+    # Always export summary CSVs if --export-csv is set
+    if args.export_csv:
+        print("\nExporting all summary CSVs from stored results...")
+        results_manager.export_to_csv()
 
 if __name__ == "__main__":
     main()
