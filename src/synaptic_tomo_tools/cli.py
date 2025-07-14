@@ -219,6 +219,16 @@ def generate_visualizations(tomo_paths, results_manager, skip_completed=False, o
         # Create visualization output directory within the tomogram's results folder
         viz_output_dir = Path(tomo) / 'best_alignment' / 'STT_results' / 'visualizations'
         viz_output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Check if all expected visualization files exist and skip_completed is True
+        expected_files = [
+            viz_output_dir / f"{tomogram_name}_activezone.png",
+            viz_output_dir / f"{tomogram_name}_aunps.png",
+            viz_output_dir / f"{tomogram_name}_combined.png",
+        ]
+        if skip_completed and all(f.exists() for f in expected_files):
+            print(f"Skipping visualization for {tomogram_name} (already completed)")
+            continue
         
         print(f"\nGenerating visualizations for {tomogram_name}")
         print(f"Individual output directory: {viz_output_dir}")
