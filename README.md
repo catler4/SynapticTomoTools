@@ -6,6 +6,31 @@
 ╚═╝ ┴ ┘└┘┴ ┴┴   ┴ ┴└─┘ ╩ └─┘┴ ┴└─┘ ╩ └─┘└─┘┴─┘└─┘
 ```
 
+```text
+                                    .:::::..             .......                                    
+                                .:::.     ..::.      .....     .....                                
+                            .:::.     .....  .::    ...            ....                             
+                        .:::..       ..    .. .:.  ...                ......                        
+                  ..::::..   ..      ..    .  .:.  ..                     ......                    
+   :::::::::::::::..       ..   ..      ..     ::  ..                          .........            
+    .....                 ..    ..   .....     ::  ..                                 ...........   
+                           ......   ..    .   .::  ..                                               
+                      ......        ..    .   .:. ...                                               
+                     ..    ..    ...  ...     .:.:=--.                                              
+                      .    ..  .    ..        ::. ==-.                                              
+                        ..    ..    ..  ..... .:..-:..                                              
+                                .....  .     ..:..=::.                                              
+                            ....       ..   ...::  ..                                               
+                          ..    ..       ..    ::  ..                                               
+   ::::::::::...          ..    ..    ..       ::  ..                                  ..........   
+              .:::::..      ....    .    ..    ::  ..                          .............   ..   
+                     .:::..        ..    ..   .:.  ..                     ......                    
+                         .:::.       .....    ::.  ...                .....                         
+                             .:::            .:.    ...           .....                             
+                                 :::..   ..:::       .....    .....                                 
+                                     .....                .....                                     
+```
+
 A Python toolkit for running various analyses on cryo-electron tomography (cryo-ET) data,  
 with a focus on synaptic structures. Modular, command-line friendly, and designed for reproducible research workflows.
 
@@ -14,23 +39,24 @@ with a focus on synaptic structures. Modular, command-line friendly, and designe
 ## 🚀 Features
 
 - Quantitative measurements
-    > Pre- and postsynaptic compartment volumes
-    > Active zone area
-    > Synaptic cleft width
-    > Presynaptic vesicle volume, diameter, and localization
-    > Presynaptic vesicle loading estimation
-    > AuNP label nearest neighbor distances
-    > AuNP label to vesicle fusion site distances
+    - Pre- and postsynaptic compartment volumes
+    - Active zone area
+    - Synaptic cleft width
+    - Presynaptic vesicle volume, diameter, and localization
+    - Presynaptic vesicle loading estimation
+    - AuNP label nearest neighbor distances
+    - AuNP label to vesicle fusion site distances
 - Command-line interface for easy pipeline execution
 - Automated visualization generation
 
 ## ⏯️ Workflow
 
-Modules should be run in the following order for all analyses to be completed
-    1. activezone
-    2. vesicles
-    3. aunps
-    4. visualization (optional)
+Modules should be run in the following order for all analyses to be completed:
+
+1. activezone
+2. vesicles
+3. aunps
+4. visualization (optional)
 
 ---
 
