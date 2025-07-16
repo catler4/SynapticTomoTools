@@ -5,6 +5,7 @@
 /data/15F1_tomograms/TOP_TOMOS/20231026_HippAu_26/best_alignment/20231026_HippAu_26_full_rec_BP_3DCTF_BIN4_ddw.mrc
 /data/unlabeled_tomograms/TOP_TOMOS/20250227_AMmilled25-3_Position_16/best_alignment/Position_16_full_rec_BP_3DCTF_BIN4_ddw.mrc 
 data/15F1_tomograms/TOP_TOMOS/20241030_AMmilled12-1_15/best_alignment/STT_results/vesicles/vesicle_results.json
+data/15F1_tomograms/TOP_TOMOS/20231017_EGmilled24-2_68/best_alignment/STT_results/vesicles/vesicle_results.json
 data/15F1_tomograms/TOP_TOMOS/20231026_HippAu_26/best_alignment/STT_results/vesicles/vesicle_results.json
 data/unlabeled_tomograms/TOP_TOMOS/20250227_AMmilled25-3_Position_16/best_alignment/STT_results/vesicles/vesicle_results.json
 sam_vit_h_4b8939.pth

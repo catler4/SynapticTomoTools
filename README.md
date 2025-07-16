@@ -71,6 +71,61 @@ pip install -r requirements.txt
 
 ## 📁 Data organization
 
+### Required File Formats
+
+Each tomogram directory must contain the following files in the specified locations and formats:
+
+#### presynatpticmembranes_*.txt and postsynapticmembranes_*.txt
+- **Location:** `best_alignment/aunps/`
+- **Format:** Plain text file. Each line contains three whitespace-separated numbers representing the X, Y, Z coordinates of a point on the membrane segmentation.
+- **Example:**
+  ```text
+  123.4 567.8 90.1
+  124.0 568.2 90.3
+  ...
+  ```
+- **Notes:**
+  - The typo `presynatptic` (instead of `presynaptic`) is expected and required for now.
+
+#### synapticvesicles_*.txt
+- **Location:** `best_alignment/aunps/`
+- **Format:** Plain text file. Each line contains three whitespace-separated numbers representing the X, Y, Z coordinates of a point on the vesicle surface or center.
+- **Example:**
+  ```text
+  200.1 300.2 50.0
+  201.0 301.1 50.2
+  ...
+  ```
+- **Notes:**
+  - Multiple files may exist (e.g., `synapticvesicles_1.txt`, `synapticvesicles_2.txt`, ...), each corresponding to a different vesicle or segmentation.
+
+#### aunp_tm_BP_active_zone_*.star
+- **Location:** `best_alignment/aunps/`
+- **Format:** [STAR file](https://www.ccpem.ac.uk/download/starfile.php) (Self-defining Text Archival and Retrieval format), typically used in cryo-EM. Contains a table of AuNP coordinates and metadata.
+- **Key columns:**
+  - `faCoordinateX`, `faCoordinateY`, `faCoordinateZ`: Coordinates of each AuNP.
+  - `active_zone`: Index of the active zone the AuNP is associated with.
+- **Example:**
+  ```
+  data_
+  loop_
+  _faCoordinateX _faCoordinateY _faCoordinateZ _active_zone
+  100.0 200.0 50.0 0
+  101.2 201.5 50.1 0
+  ...
+  ```
+- **Notes:**
+  - There may be multiple files, one per active zone (e.g., `aunp_tm_BP_active_zone_0.star`, `aunp_tm_BP_active_zone_1.star`, ...).
+
+#### *_ddw.mrc
+- **Location:** `best_alignment/`
+- **Format:** [MRC file](https://en.wikipedia.org/wiki/MRC_(file_format)), a standard format for electron density maps in cryo-EM.
+- **Purpose:** Used as the tomogram volume for visualization overlays and analysis.
+- **Notes:**
+  - The filename must end with `_ddw.mrc` and match the tomogram's name prefix.
+
+### Required File Organization
+
 Tomograms are grouped by sets based on experimental conditions and marked for certain analyses in /data/tomograms.csv
 
 The cli.py must be updated with the root directories for each of the tomogram sets, in which each tomogram's data should be stored in a separate directory.
@@ -88,8 +143,9 @@ SET_ROOTS = {
 }
 ```
 
-Within each tomogram subdirectory, a best_alignment/aunps subdirectory is expected that contains the pre- and postsynaptic membrane segmentations (presynatpticmembranes_1.txt, postsynapticmembranes_1.txt, ...), vesicle segmentations (synapticvesicles_1.txt, synapticvesicles_2.txt, ...), and aunp picks saved in individual .star files per active zone (aunp_tm_BP_active_zone_0.star, aunp_tm_BP_active_zone_1.star, ...). 
+Within each tomogram subdirectory, a best_alignment/aunps subdirectory is expected that contains the pre- and postsynaptic membrane segmentations (presynatpticmembranes_1.txt, postsynapticmembranes_1.txt, ...), vesicle segmentations (synapticvesicles_1.txt, synapticvesicles_2.txt, ...), and aunp picks saved in individual .star files per active zone (aunp_tm_BP_active_zone_0.star, aunp_tm_BP_active_zone_1.star, ...).
 
+```text
 TOMOGRAM_SET_ROOT/
 ├── TOP_TOMOS/
 │   ├── tomogram1/
@@ -113,6 +169,7 @@ TOMOGRAM_SET_ROOT/
 │   │   │   │   ├── aunp_tm_BP_active_zone_0.star
 │   │   │   │   └── aunp_tm_BP_active_zone_1.star
 ...
+```
 
 
 The `data/tomograms.csv` file controls which tomograms are analyzed and how. Each row corresponds to a tomogram and specifies which analyses to run and (optionally) which AuNP active zones to use.
@@ -169,7 +226,7 @@ python -m src.synaptic_tomo_tools.cli --analysis activezone
 ### Example: Full Pipeline on non-default tomogram test set
 
 ```bash
-python -m src.synaptic_tomo_tools.cli --analysis all --csv data/tomograms-test.csv
+python -m src.synaptic_tomo_tools.cli --analysis all --test
 ```
 
 ### Example: Full Pipeline with All Options
