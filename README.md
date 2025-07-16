@@ -6,20 +6,20 @@
 ╚═╝ ┴ ┘└┘┴ ┴┴   ┴ ┴└─┘ ╩ └─┘┴ ┴└─┘ ╩ └─┘└─┘┴─┘└─┘
 ```
 A Python toolkit for running various analyses on cryo-electron tomography (cryo-ET) data,  
-with a focus on synaptic structures. Modular, command-line friendly, and designed for reproducible research workflows.
+with a focus on synaptic structures.
 
 ---
 
 ## 🚀 Features
 
 - Quantitative measurements
-    - Pre- and postsynaptic compartment volumes
-    - Active zone area
-    - Synaptic cleft width
-    - Presynaptic vesicle volume, diameter, and localization
-    - Presynaptic vesicle loading estimation
+    - Active zone identification
+    - Synaptic cleft width measurement
+    - Presynaptic vesicle volume, diameter, localization, enclosed signal analyses
+    - Presynaptic vesicle fusion site estimation
     - AuNP label nearest neighbor distances
-    - AuNP label to vesicle fusion site distances
+    - AuNP label to active zone membrane and vesicle fusion site distances
+    - AuNP label cluster analyses
 - Command-line interface for easy pipeline execution
 - Automated visualization generation
 
@@ -98,7 +98,7 @@ Each tomogram directory must contain the following files in the specified locati
 #### *_ddw.mrc
 - **Location:** `best_alignment/`
 - **Format:** [MRC file](https://en.wikipedia.org/wiki/MRC_(file_format)), a standard format for electron density maps in cryo-EM.
-- **Purpose:** Used as the tomogram volume for visualization overlays and analysis.
+- **Purpose:** Used as the tomogram volume for visualization overlays and analysis. Typically the best version of a tomogram for visualization (e.g. denoised or filtered) is used. We typically use the DeepDeWedge denoised (ddw) versions of tomograms.
 - **Notes:**
   - The filename must end with `_ddw.mrc` and match the tomogram's name prefix.
 
