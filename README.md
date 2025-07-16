@@ -53,7 +53,7 @@ pip install -r requirements.txt
 
 Each tomogram directory must contain the following files in the specified locations and formats:
 
-#### presynatpticmembranes_*.txt and postsynapticmembranes_*.txt
+#### `presynatpticmembranes_*.txt` and `postsynapticmembranes_*.txt`
 - **Location:** `best_alignment/aunps/`
 - **Format:** Plain text file. Each line contains three whitespace-separated numbers representing the X, Y, Z coordinates of a point on the membrane segmentation.
 - **Example:**
