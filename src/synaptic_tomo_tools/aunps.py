@@ -10,6 +10,7 @@ from .activezone import import_membrane_segmentations
 from datetime import datetime
 import json
 from .vesicles import import_presynaptic_membranes_and_active_zones
+import re
 
 def save_aunp_results_to_csv(tomogram_path, aunp_df, csv_file=None, overwrite=True):
     tomogram_path = Path(tomogram_path)
@@ -153,32 +154,51 @@ def compute_fusion_points(tomogram_path, vesicle_distance_threshold=10.0, fusion
     else:
         return np.zeros((0, 3))
 
-def analyze_aunps(tomogram_path):
+def analyze_aunps(tomogram_path, active_zone_indices=None):
     """
     Performs analysis of gold nanoparticles (AuNPs) in the tomogram.
 
     Parameters:
         tomogram_path (str or Path): Path to the tomogram file.
+        active_zone_indices (list of int or None): Which active zone .star files to read. If None, read all.
     """
     print(f"Analyzing AuNPs in {Path(tomogram_path).name}")
-    # Nearest neighbor analysis
     aunps_dir = Path(tomogram_path) / "best_alignment" / "aunps"
-    star_file = aunps_dir / "aunp_tm_BP_active_zone_all.star"
-    if not star_file.exists():
-        print(f"AuNP .star file not found: {star_file}")
-        return None
-
-    # Use starfile to read the .star file
-    star_data = starfile.read(star_file)
-    df = None
-    if isinstance(star_data, dict):
-        # Use the first DataFrame block
-        for v in star_data.values():
-            if isinstance(v, pd.DataFrame):
-                df = v
-                break
-    elif isinstance(star_data, pd.DataFrame):
-        df = star_data
+    import glob
+    import os
+    star_dfs = []
+    if active_zone_indices is not None:
+        for idx in active_zone_indices:
+            star_file = aunps_dir / f"aunp_tm_BP_active_zone_{idx}.star"
+            print("Trying to load:", star_file)
+            if star_file.exists():
+                star_data = starfile.read(star_file)
+                if isinstance(star_data, dict):
+                    for v in star_data.values():
+                        if isinstance(v, pd.DataFrame):
+                            star_dfs.append(v)
+                            break
+                elif isinstance(star_data, pd.DataFrame):
+                    star_dfs.append(star_data)
+    else:
+        # Load all aunp_tm_BP_active_zone_*.star files with numeric suffix (not _all.star)
+        pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
+        for file in glob.glob(pattern):
+            fname = Path(file).name
+            m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
+            if m:
+                star_data = starfile.read(Path(file))
+                if isinstance(star_data, dict):
+                    for v in star_data.values():
+                        if isinstance(v, pd.DataFrame):
+                            star_dfs.append(v)
+                            break
+                elif isinstance(star_data, pd.DataFrame):
+                    star_dfs.append(star_data)
+        if not star_dfs:
+            print("No numeric aunp_tm_BP_active_zone_*.star files found and _all.star fallback is disabled.")
+            return None
+    df = pd.concat(star_dfs, ignore_index=True)
     if df is None:
         print("No DataFrame found in .star file.")
         return None

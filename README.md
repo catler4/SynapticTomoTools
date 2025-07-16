@@ -1,5 +1,33 @@
 # SynapticTomoTools
 
+╔═╗┬ ┬┌┐┌┌─┐┌─┐┌┬┐┬┌─┐╔╦╗┌─┐┌┬┐┌─┐╔╦╗┌─┐┌─┐┬  ┌─┐
+╚═╗└┬┘│││├─┤├─┘ │ ││   ║ │ │││││ │ ║ │ ││ ││  └─┐
+╚═╝ ┴ ┘└┘┴ ┴┴   ┴ ┴└─┘ ╩ └─┘┴ ┴└─┘ ╩ └─┘└─┘┴─┘└─┘
+
+                                    .:::::..             .......                                    
+                                .:::.     ..::.      .....     .....                                
+                            .:::.     .....  .::    ...            ....                             
+                        .:::..       ..    .. .:.  ...                ......                        
+                  ..::::..   ..      ..    .  .:.  ..                     ......                    
+   :::::::::::::::..       ..   ..      ..     ::  ..                          .........            
+    .....                 ..    ..   .....     ::  ..                                 ...........   
+                           ......   ..    .   .::  ..                                               
+                      ......        ..    .   .:. ...                                               
+                     ..    ..    ...  ...     .:.:=--.                                              
+                      .    ..  .    ..        ::. ==-.                                              
+                        ..    ..    ..  ..... .:..-:..                                              
+                                .....  .     ..:..=::.                                              
+                            ....       ..   ...::  ..                                               
+                          ..    ..       ..    ::  ..                                               
+   ::::::::::...          ..    ..    ..       ::  ..                                  ..........   
+              .:::::..      ....    .    ..    ::  ..                          .............   ..   
+                     .:::..        ..    ..   .:.  ..                     ......                    
+                         .:::.       .....    ::.  ...                .....                         
+                             .:::            .:.    ...           .....                             
+                                 :::..   ..:::       .....    .....                                 
+                                     .....                .....                                     
+    
+
 A Python toolkit for running various analyses on cryo-electron tomography (cryo-ET) data,  
 with a focus on synaptic structures. Modular, command-line friendly, and designed for reproducible research workflows.
 
@@ -41,110 +69,166 @@ pip install -r requirements.txt
 
 ---
 
-## 🖥️ Usage
-
-### Command Line Interface
-
-The toolkit provides a command-line interface for running analyses. Navigate to the project root directory and use the following commands:
-
-#### Running Individual Analyses
-
-```bash
-# Run active zone analysis
-python -m src.synaptic_tomo_tools.cli activezone
-
-# Run vesicle analysis
-python -m src.synaptic_tomo_tools.cli vesicles
-
-# Run AuNP analysis
-python -m src.synaptic_tomo_tools.cli aunps
-
-# Run visualization generation
-python -m src.synaptic_tomo_tools.cli visualization
-```
-
-#### Running All Analyses Sequentially
-
-```bash
-# Run all analyses in the correct order
-python -m src.synaptic_tomo_tools.cli all
-```
-
-#### Generating Visualizations
-
-Visualizations can be generated in two ways:
-
-1. **As part of the analysis pipeline** (recommended):
-```bash
-# Run all analyses including visualizations
-python -m src.synaptic_tomo_tools.cli all --generate-visualizations
-```
-
-2. **Standalone visualization** (requires previous analysis results):
-```bash
-# Generate visualizations for existing analysis results
-python -m src.synaptic_tomo_tools.cli visualization
-```
-
-#### Command Line Options
-
-- `--tomogram-set`: Specify a particular tomogram set (default: all sets)
-- `--generate-visualizations`: Include visualization generation in the pipeline
-- `--help`: Show help information for any command
-
-Example with specific tomogram set:
-```bash
-python -m src.synaptic_tomo_tools.cli all --tomogram-set 15F1 --generate-visualizations
-```
-
-### Output Files
-
-Analysis results are saved in the following locations:
-
-- **Active zone results**: `results/activezone_results.csv`
-- **Vesicle results**: `results/vesicle_results.csv`
-- **AuNP results**: `results/aunp_results.csv`
-- **Combined results**: `results/analysis_results.json`
-- **Visualizations**: 
-  - Individual tomogram visualizations: `data/{tomogram_set}/TOP_TOMOS/{tomogram}/best_alignment/STT_results/visualizations/`
-  - Combined visualizations: `results/visualizations/`
-
-### Visualization Outputs
-
-For each tomogram, three types of visualization images are generated:
-
-1. **Active zone visualization** (`{tomo_name}_activezone.png`): Shows vesicles and active zones with fusion sites
-2. **AuNP visualization** (`{tomo_name}_aunps.png`): Shows vesicles and AuNP labels
-3. **Combined visualization** (`{tomo_name}_combined.png`): Shows all elements together
-
----
-
 ## 📁 Data organization
 
 Tomograms are grouped by sets based on experimental conditions and marked for certain analyses in /data/tomograms.csv
 
-The cli.py must be updated with the root directories for the tomogram sets, in which each tomogram's data should be stored in a separate directory.
+The cli.py must be updated with the root directories for each of the tomogram sets, in which each tomogram's data should be stored in a separate directory.
 
-Within each tomogram subdirectory, a best_alignment/aunps subdirectory is expected that contains the pre- and postsynaptic membrane segmentations (presynatpticmembranes_1.txt, postsynapticmembranes_1.txt, ...), vesicle segmentations (synapticvesicles_1.txt, synapticvesicles_2.txt, ...), and aunp picks (aunp_tm_BP_active_zone_all.star). 
+### **Example:**
+```
+SET_ROOTS = {
+    "15F1": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1_tomograms/TOP_TOMOS"),
+    "5F11": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/5F11_tomograms/TOP_TOMOS"),
+    "15F1and5F11": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1and5F11_tomograms/TOP_TOMOS"),
+    "15F1and5F11dimer": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1and5F11dimer_tomograms/TOP_TOMOS"),
+    "11B8": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/11B8_tomograms/TOP_TOMOS"),
+    "unlabeled": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/unlabeled_tomograms/TOP_TOMOS"),
+    # Add more sets here if needed
+}
+```
+
+Within each tomogram subdirectory, a best_alignment/aunps subdirectory is expected that contains the pre- and postsynaptic membrane segmentations (presynatpticmembranes_1.txt, postsynapticmembranes_1.txt, ...), vesicle segmentations (synapticvesicles_1.txt, synapticvesicles_2.txt, ...), and aunp picks saved in individual .star files per active zone (aunp_tm_BP_active_zone_0.star, aunp_tm_BP_active_zone_1.star, ...). 
 
 TOMOGRAM_SET_ROOT/
 ├── TOP_TOMOS/
 │   ├── tomogram1/
 │   │   ├── best_alignment/
+│   │   │   ├── tomogram1_ddw.mrc (tomogram that will be used for visualizations)
 │   │   │   ├── aunps/
-│   │   │   │   ├── presynatpticmembranes_1.txt (NOTE THE TYPO presynaTptic, IT IS EXPECTED!)
+│   │   │   │   ├── presynatpticmembranes_1.txt (NOTE THE TYPO presynaTptic, IT IS EXPECTED until this is fixed in findingampa code!)
 │   │   │   │   ├── postsynapticmembranes_1.txt
 │   │   │   │   ├── synapticvesicles_1.txt
 │   │   │   │   ├── synapticvesicles_2.txt
-│   │   │   │   └── aunp_tm_BP_active_zone_all.star
+│   │   │   │   └── aunp_tm_BP_active_zone_0.star
 │   ├── tomogram2/
 │   │   ├── best_alignment/
+│   │   │   ├── tomogram2_ddw.mrc
 │   │   │   ├── aunps/
 │   │   │   │   ├── presynatpticmembranes_1.txt
+│   │   │   │   ├── presynatpticmembranes_2.txt
 │   │   │   │   ├── postsynapticmembranes_1.txt
 │   │   │   │   ├── synapticvesicles_1.txt
 │   │   │   │   ├── synapticvesicles_2.txt
-│   │   │   │   └── aunp_tm_BP_active_zone_all.star
+│   │   │   │   ├── aunp_tm_BP_active_zone_0.star
+│   │   │   │   └── aunp_tm_BP_active_zone_1.star
 ...
+
+
+The `data/tomograms.csv` file controls which tomograms are analyzed and how. Each row corresponds to a tomogram and specifies which analyses to run and (optionally) which AuNP active zones to use.
+
+### **Required columns:**
+- `tomoname`: Name of the tomogram directory (matches folder name under your set root)
+- `set`: Experimental set name (must match a key in your SET_ROOTS in cli.py)
+- `activezone`: `True` or `False` — whether to run active zone analysis
+- `vesicles`: `True` or `False` — whether to run vesicle analysis
+- `aunps`: `True` or `False` — whether to run AuNP analysis
+- `aunp_active_zones` (optional): Comma-separated list of active zone numbers (e.g., `"0,2"`).
+    - If empty, all numbered `aunp_tm_BP_active_zone_*.star` files are used.
+    - If set, only those indices are used (e.g., `2` → only `aunp_tm_BP_active_zone_2.star`).
+
+### **Example:**
+```csv
+tomoname,set,activezone,vesicles,aunps,aunp_active_zones
+20231017_EGmilled24-2_68,15F1,True,True,True,"2"
+20231017_HippAu_141,15F1,True,True,True,"0,2"
+20231026_HippAu_26,15F1,True,True,True,
+```
+
+---
+
+## 🖥️ Usage
+
+### Command Line Interface
+
+Run from the project root:
+
+```bash
+python -m src.synaptic_tomo_tools.cli --analysis all
+```
+
+### Key CLI Flags
+
+| Flag                        | Description                                                                                      |
+|-----------------------------|--------------------------------------------------------------------------------------------------|
+| `--analysis`                | **Required.** Which analysis to run. Choices: `activezone`, `vesicles`, `aunps`, `all`          |
+| `--set`                     | (Optional) Filter tomograms by experimental set name (e.g., 15F1, unlabeled)                    |
+| `--csv`                     | Path to CSV file listing tomograms and analysis flags (default: `data/tomograms.csv`)            |
+| `--rerun`                   | Rerun analysis on already completed steps and overwrite existing results                                 |
+| `--results-dir`             | Directory to store analysis results (default: `results`)                                         |
+| `--generate-visualizations` | Generate visualization images for each tomogram after analysis completion                        |
+| `--delete-results`          | **Delete all analysis results files before running analysis**                                    |
+| `--test`                    | Use local test data roots and default to `data/tomograms-test.csv` unless `--csv` is specified. All test set roots are set relative to the repo root. Supported test sets: 15F1, 5F11, 15F1and5F11, 15F1and5F11dimer, 11B8, unlabeled. |
+
+### Example: Active Zone Analysis
+
+```bash
+python -m src.synaptic_tomo_tools.cli --analysis activezone
+```
+
+### Example: Full Pipeline on non-default tomogram test set
+
+```bash
+python -m src.synaptic_tomo_tools.cli --analysis all --csv data/tomograms-test.csv
+```
+
+### Example: Full Pipeline with All Options
+
+```bash
+python -m src.synaptic_tomo_tools.cli --analysis all --csv data/tomograms.csv --rerun --generate-visualizations --delete-results
+```
+
+### Test Mode
+
+The `--test` flag switches the pipeline to use local test data directories and defaults to `data/tomograms-test.csv` for the tomogram list (unless you specify `--csv`).
+
+- All test set roots are set as relative paths from the repository root, so the code works on any machine where the repo is cloned.
+- Supported test sets: `15F1`, `5F11`, `15F1and5F11`, `15F1and5F11dimer`, `11B8`, `unlabeled`.
+- Example usage:
+
+```bash
+python -m src.synaptic_tomo_tools.cli --analysis all --test
+```
+
+You can override the CSV file with `--csv` if you want to use a different test list.
+
+### See All Options
+
+For the latest options and descriptions, run:
+```bash
+python -m src.synaptic_tomo_tools.cli --help
+```
+
+---
+
+### Output Files
+
+Analysis and visualization results are saved in the following locations:
+
+- **Active zone results:**
+  - `results/activezone_results.csv` — summary statistics for all tomograms
+  - Per-tomogram results in each tomogram's `best_alignment/STT_results/active_zones/`
+- **Vesicle results:**
+  - `results/vesicle_results.csv` — summary statistics for all tomograms
+  - Per-tomogram results in each tomogram's `best_alignment/STT_results/vesicles/` (e.g., `vesicle_results.json`)
+- **AuNP results:**
+  - `results/aunp_results.csv` — summary statistics for all tomograms
+  - `results/all_aunp_distances.csv` — all per-AuNP distances for all tomograms
+  - Per-tomogram results in each tomogram's `best_alignment/aunps/` (e.g., `aunp_nearest_neighbor_distances.csv`)
+- **Combined results:**
+  - `results/analysis_results.json` — all results for all tomograms in a single JSON
+- **Visualizations:**
+  - **Per-tomogram images:**
+    - `best_alignment/STT_results/visualizations/` inside each tomogram directory:
+      - `{tomo_name}_vesicles_active_zones.png`: Vesicles and active zones
+      - `{tomo_name}_aunps.png`: Vesicles and AuNPs (filtered by aunp_active_zones)
+      - `{tomo_name}_combined.png`: All elements together
+      - `{tomo_name}_vesicles_signal.png`: Vesicles colored by average signal intensity (gradient fill)
+  - **Combined images:**
+    - `results/visualizations/` — copies of all per-tomogram images for easy access
+
+**Notes:**
+- All visualizations use the same AuNP filtering as the analysis step (based on `aunp_active_zones`).
+- Only vesicles intersecting the central slice (±1 pixel) are shown by default in visualizations.
 
 ---

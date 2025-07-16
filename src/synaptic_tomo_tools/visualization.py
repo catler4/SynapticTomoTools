@@ -77,21 +77,46 @@ def load_vesicles(tomo_path):
         data = json.load(f)
     return data['vesicles']
 
-def load_aunps(tomo_path):
-    """Load AuNP coordinates from STAR file."""
-    aunp_file = Path(tomo_path) / 'best_alignment' / 'aunps' / 'aunp_tm_BP_active_zone_all.star'
-    try:
-        import starfile
-        star_data = starfile.read(aunp_file)
-        if isinstance(star_data, dict):
-            for v in star_data.values():
-                if isinstance(v, pd.DataFrame):
-                    return v
-        elif isinstance(star_data, pd.DataFrame):
-            return star_data
-    except Exception as e:
-        print(f'Could not load AuNPs: {e}')
-    return None
+def load_aunps(tomo_path, active_zone_indices=None):
+    """Load AuNP coordinates from STAR file(s), optionally filtered by active_zone_indices."""
+    aunps_dir = Path(tomo_path) / 'best_alignment' / 'aunps'
+    import starfile
+    import glob
+    import pandas as pd
+    star_dfs = []
+    if active_zone_indices is not None:
+        for idx in active_zone_indices:
+            star_file = aunps_dir / f"aunp_tm_BP_active_zone_{idx}.star"
+            print("[viz] Trying to load:", star_file)
+            if star_file.exists():
+                star_data = starfile.read(star_file)
+                if isinstance(star_data, dict):
+                    for v in star_data.values():
+                        if isinstance(v, pd.DataFrame):
+                            star_dfs.append(v)
+                            break
+                elif isinstance(star_data, pd.DataFrame):
+                    star_dfs.append(star_data)
+    else:
+        print("[viz] active_zone_indices is None, loading all aunp_tm_BP_active_zone_*.star files")
+        import re
+        pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
+        for file in glob.glob(pattern):
+            fname = Path(file).name
+            m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
+            if m:
+                star_data = starfile.read(Path(file))
+                if isinstance(star_data, dict):
+                    for v in star_data.values():
+                        if isinstance(v, pd.DataFrame):
+                            star_dfs.append(v)
+                            break
+                elif isinstance(star_data, pd.DataFrame):
+                    star_dfs.append(star_data)
+        if not star_dfs:
+            print("[viz] No numeric aunp_tm_BP_active_zone_*.star files found and _all.star fallback is disabled.")
+            return None
+    return pd.concat(star_dfs, ignore_index=True)
 
 def load_fusion_points(tomo_path):
     """Load fusion points for vesicles within 10nm of active zone."""
@@ -182,14 +207,14 @@ def load_postsynaptic_active_zone_coords(tomo_path):
     coords = [np.loadtxt(f) for f in files if f.exists()]
     return coords
 
-def plot_tomogram_overlays(tomo_path, output_dir):
-    """Generate 2D overlay plot and save to file."""
+def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None):
+    """Generate 2D overlay plot and save to file. Optionally filter AuNPs by active zone indices."""
     vesicles = load_vesicles(tomo_path)
     pre_mem = load_membrane_coords(tomo_path, 'presynatptic')
     post_mem = load_membrane_coords(tomo_path, 'postsynaptic')
     azs_pre = load_active_zone_coords(tomo_path)
     azs_post = load_postsynaptic_active_zone_coords(tomo_path)
-    aunps = load_aunps(tomo_path)
+    aunps = load_aunps(tomo_path, aunp_active_zone_indices)
     fusion_points = load_fusion_points(tomo_path)
     
     # Debug: Check what was loaded
@@ -467,6 +492,50 @@ def plot_tomogram_overlays(tomo_path, output_dir):
     plt.savefig(output_file3, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved combined visualization: {output_file3}")
+
+    # Version 4: Vesicles colored by average signal intensity
+    fig4, ax4 = plt.subplots(figsize=(12, 12))
+    ax4.imshow(slice2d, cmap='gray')
+    # Gather signal values for color mapping
+    vesicle_signals = [v.get('average_signal', 0.0) for v in vesicles_in_slice]
+    # Handle case where all signals are the same
+    if len(vesicle_signals) == 0 or np.all(np.array(vesicle_signals) == vesicle_signals[0]):
+        norm = plt.Normalize(vmin=0, vmax=1)
+        colors = ['gray'] * len(vesicles_in_slice)
+    else:
+        norm = plt.Normalize(vmin=min(vesicle_signals), vmax=max(vesicle_signals))
+        cmap = plt.get_cmap('plasma')
+        colors = [cmap(norm(s)) for s in vesicle_signals]
+    # Draw filled vesicles
+    for v, color in zip(vesicles_in_slice, colors):
+        c = np.array(v['center'])
+        r = v['radius']
+        circ = Circle((c[0], c[1]), r, color=color, fill=True, lw=0, alpha=0.8)
+        ax4.add_patch(circ)
+    # Overlay vesicle outlines as in original
+    for v in vesicles_in_slice:
+        c = np.array(v['center'])
+        r = v['radius']
+        circ = Circle((c[0], c[1]), r, color='black', fill=False, lw=1, alpha=0.7)
+        ax4.add_patch(circ)
+    # Overlay presynaptic active zone with transparent red
+    for coords in azs_pre_in_slice:
+        ax4.scatter(coords[:,0], coords[:,1], color='red', s=3, alpha=0.1)
+    # Overlay postsynaptic active zone with transparent green
+    for coords in azs_post_in_slice:
+        ax4.scatter(coords[:,0], coords[:,1], color='green', s=3, alpha=0.1)
+    # Add colorbar
+    sm = plt.cm.ScalarMappable(cmap='plasma', norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax4, fraction=0.046, pad=0.04)
+    cbar.set_label('Average Vesicle Signal Intensity')
+    ax4.set_title(f'Vesicles Colored by Signal Intensity - {tomo_name}')
+    ax4.set_xlabel('X (pixels)')
+    ax4.set_ylabel('Y (pixels)')
+    output_file4 = output_dir / f"{tomo_name}_vesicles_signal.png"
+    plt.savefig(output_file4, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Saved vesicles colored by signal: {output_file4}")
 
 def main():
     """Main function to process all tomograms and generate visualizations."""
