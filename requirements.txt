@@ -13,5 +13,16 @@ matplotlib>=3.4
 # Progress bars and CLI tools
 tqdm>=4.62
 
+# Image processing and computer vision
+scikit-image>=0.19
+opencv-python>=4.5
+
+# Deep learning (for SAM segmentation)
+torch>=1.9
+segment-anything>=1.0
+
+# Video and animation
+imageio>=2.9
+
 # Optional dependencies for analysis scripts
 seaborn>=0.11       # Used in analysis scripts for enhanced plotting
