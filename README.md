@@ -75,7 +75,7 @@ Each tomogram directory must contain the following files in the specified locati
   ...
   ```
 - **Notes:**
-  - Multiple files may exist (e.g., `synapticvesicles_1.txt`, `synapticvesicles_2.txt`, ...), each corresponding to a different vesicle or segmentation.
+  - Multiple files may exist (e.g., `synapticvesicles_1.txt`, `synapticvesicles_2.txt`, ...), each corresponding to a different vesicle segmentation. Inner and outer vesicle membranes can be segmented individually. If this is the case, the inner membrane will be removed from analysis in a later filtering step.
 
 #### aunp_tm_BP_active_zone_*.star
 - **Location:** `best_alignment/aunps/`
