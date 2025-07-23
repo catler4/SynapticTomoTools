@@ -247,9 +247,7 @@ python -m src.synaptic_tomo_tools.cli --help
 
 ---
 
-### Output Files
-
-Analysis and visualization results are saved in the following locations:
+## Outputs
 
 - **Active zone results:**
   - `results/activezone_results.csv` — summary statistics for all tomograms
@@ -261,6 +259,12 @@ Analysis and visualization results are saved in the following locations:
   - `results/aunp_results.csv` — summary statistics for all tomograms
   - `results/all_aunp_distances.csv` — all per-AuNP distances for all tomograms
   - Per-tomogram results in each tomogram's `best_alignment/aunps/` (e.g., `aunp_nearest_neighbor_distances.csv`)
+- **AuNP cluster analysis outputs:**
+  - `best_alignment/STT_results/aunps/aunp_clusters.csv`: Per-cluster summary (cluster label, number of AuNPs, area, max dimension, density)
+  - `best_alignment/STT_results/aunps/aunp_clusters.star`: Per-AuNP cluster assignments in STAR format
+  - `results/aunp_cluster_results.csv`: All cluster summary info from all tomograms (like vesicle_results.csv)
+  - `results/visualizations/{tomogram_name}_combined_aunpclusters.png`: Combined overlay with all AuNPs colored by cluster assignment (noise in grey)
+  - `results/visualizations/{tomogram_name}_aunpclusters.png`: All AuNPs colored by cluster, best 2D projection (noise in grey)
 - **Combined results:**
   - `results/analysis_results.json` — all results for all tomograms in a single JSON
 - **Visualizations:**
@@ -272,10 +276,6 @@ Analysis and visualization results are saved in the following locations:
       - `{tomo_name}_vesicles_signal.png`: Vesicles colored by average signal intensity (gradient fill)
   - **Combined images:**
     - `results/visualizations/` — copies of all per-tomogram images for easy access
-
-**Notes:**
-- All visualizations use the same AuNP filtering as the analysis step (based on `aunp_active_zones`).
-- Only vesicles intersecting the central slice (±1 pixel) are shown by default in visualizations.
 
 ---
 

@@ -613,6 +613,32 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None)
         plt.savefig(out_clusters, dpi=300, bbox_inches='tight')
         plt.close()
         print(f"Saved AuNP cluster summary image: {out_clusters}")
+        # Save also to the tomogram's own visualization directory
+        tomo_viz_dir = Path(tomo_path) / "best_alignment" / "STT_results" / "visualizations"
+        tomo_viz_dir.mkdir(parents=True, exist_ok=True)
+        out_combined_tomo = tomo_viz_dir / f"{tomo_name}_combined_aunpclusters.png"
+        out_clusters_tomo = tomo_viz_dir / f"{tomo_name}_aunpclusters.png"
+        # Save the same figures to the tomogram's visualization directory
+        plt.figure(figsize=(12, 12))
+        plt.imshow(slice2d, cmap='gray')
+        plt.scatter(aunp_clusters['faCoordinateX'], aunp_clusters['faCoordinateY'],
+                    c=colors, s=40, edgecolor='k', linewidth=0.5, alpha=0.9, label='AuNPs (clustered)')
+        plt.title(f"{tomo_name} - Combined Overlay with AuNP Clusters")
+        plt.xlabel('X (pixels)')
+        plt.ylabel('Y (pixels)')
+        plt.legend(handles=legend_elements, loc='best')
+        plt.savefig(out_combined_tomo, dpi=300, bbox_inches='tight')
+        plt.close()
+        plt.figure(figsize=(10, 10))
+        plt.scatter(coords[:, best_proj[0]], coords[:, best_proj[1]],
+                    c=colors, s=40, edgecolor='k', linewidth=0.5, alpha=0.9)
+        plt.xlabel(['X', 'Y', 'Z'][best_proj[0]])
+        plt.ylabel(['X', 'Y', 'Z'][best_proj[1]])
+        plt.title(f"{tomo_name} - AuNP Clusters (Best 2D Projection)")
+        plt.legend(handles=legend_elements, loc='best')
+        plt.savefig(out_clusters_tomo, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"Also saved cluster visualizations to {tomo_viz_dir}")
     # --- End AuNP Cluster Visualization ---
 
 def main():
