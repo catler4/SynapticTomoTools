@@ -498,14 +498,21 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None)
     ax4.imshow(slice2d, cmap='gray')
     # Gather signal values for color mapping
     vesicle_signals = [v.get('average_signal', 0.0) for v in vesicles_in_slice]
-    # Handle case where all signals are the same
+    # Normalize signals per tomogram
     if len(vesicle_signals) == 0 or np.all(np.array(vesicle_signals) == vesicle_signals[0]):
         norm = plt.Normalize(vmin=0, vmax=1)
         colors = ['gray'] * len(vesicles_in_slice)
+        vesicle_signals_norm = vesicle_signals
     else:
-        norm = plt.Normalize(vmin=min(vesicle_signals), vmax=max(vesicle_signals))
+        min_signal = min(vesicle_signals)
+        max_signal = max(vesicle_signals)
+        if max_signal > min_signal:
+            vesicle_signals_norm = [(s - min_signal) / (max_signal - min_signal) for s in vesicle_signals]
+        else:
+            vesicle_signals_norm = [0.0 for s in vesicle_signals]
+        norm = plt.Normalize(vmin=0, vmax=1)
         cmap = plt.get_cmap('plasma')
-        colors = [cmap(norm(s)) for s in vesicle_signals]
+        colors = [cmap(norm(s)) for s in vesicle_signals_norm]
     # Draw filled vesicles
     for v, color in zip(vesicles_in_slice, colors):
         c = np.array(v['center'])
@@ -528,14 +535,85 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None)
     sm = plt.cm.ScalarMappable(cmap='plasma', norm=norm)
     sm.set_array([])
     cbar = plt.colorbar(sm, ax=ax4, fraction=0.046, pad=0.04)
-    cbar.set_label('Average Vesicle Signal Intensity')
-    ax4.set_title(f'Vesicles Colored by Signal Intensity - {tomo_name}')
+    cbar.set_label('Normalized Vesicle Signal Intensity (per tomogram)')
+    ax4.set_title(f'Vesicles Colored by Normalized Signal Intensity - {tomo_name}')
     ax4.set_xlabel('X (pixels)')
     ax4.set_ylabel('Y (pixels)')
     output_file4 = output_dir / f"{tomo_name}_vesicles_signal.png"
     plt.savefig(output_file4, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved vesicles colored by signal: {output_file4}")
+
+    # --- AuNP Cluster Visualization ---
+    # Try to load cluster assignments from aunp_clusters.star or aunp_nearest_neighbor_distances.csv
+    import starfile
+    aunps_results_dir = Path(tomo_path) / "best_alignment" / "STT_results" / "aunps"
+    cluster_star = aunps_results_dir / "aunp_clusters.star"
+    cluster_csv = aunps_results_dir / "aunp_nearest_neighbor_distances.csv"
+    aunp_clusters = None
+    if cluster_star.exists():
+        try:
+            aunp_clusters = starfile.read(cluster_star)
+        except Exception:
+            aunp_clusters = None
+    if aunp_clusters is None and cluster_csv.exists():
+        try:
+            aunp_clusters = pd.read_csv(cluster_csv)
+        except Exception:
+            aunp_clusters = None
+    if aunp_clusters is not None and not aunp_clusters.empty:
+        # Assign colors to clusters
+        import matplotlib.colors as mcolors
+        import matplotlib.cm as cm
+        clusters = aunp_clusters['aunp_cluster'].values
+        unique_clusters = np.unique(clusters)
+        n_clusters = len(unique_clusters[unique_clusters != -1])
+        cmap = cm.get_cmap('tab20', n_clusters)
+        cluster_color_map = {c: cmap(i) for i, c in enumerate(unique_clusters) if c != -1}
+        cluster_color_map[-1] = (0.5, 0.5, 0.5, 1.0)  # grey for noise
+        colors = [cluster_color_map.get(c, (0.5, 0.5, 0.5, 1.0)) for c in clusters]
+        # 1. Overlay all AuNPs on the combined visualization, colored by cluster
+        fig, ax = plt.subplots(figsize=(12, 12))
+        ax.imshow(slice2d, cmap='gray')
+        # Plot all AuNPs
+        ax.scatter(aunp_clusters['faCoordinateX'], aunp_clusters['faCoordinateY'],
+                   c=colors, s=40, edgecolor='k', linewidth=0.5, alpha=0.9, label='AuNPs (clustered)')
+        ax.set_title(f"{tomo_name} - Combined Overlay with AuNP Clusters")
+        ax.set_xlabel('X (pixels)')
+        ax.set_ylabel('Y (pixels)')
+        # Legend for clusters
+        from matplotlib.patches import Patch
+        legend_elements = [Patch(facecolor=cluster_color_map[c], edgecolor='k',
+                                 label=f'Cluster {c}' if c != -1 else 'Noise')
+                          for c in unique_clusters]
+        ax.legend(handles=legend_elements, loc='best')
+        output_dir_viz = Path('results/visualizations')
+        output_dir_viz.mkdir(parents=True, exist_ok=True)
+        out_combined = output_dir_viz / f"{tomo_name}_combined_aunpclusters.png"
+        plt.savefig(out_combined, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"Saved combined AuNP cluster overlay: {out_combined}")
+        # 2. Save a separate image showing all AuNPs colored by cluster, best 2D projection
+        coords = np.stack([aunp_clusters['faCoordinateX'],
+                          aunp_clusters['faCoordinateY'],
+                          aunp_clusters['faCoordinateZ']], axis=1)
+        # Find projection with largest spread
+        spreads = [np.ptp(coords[:, i]) for i in range(3)]
+        proj_pairs = [(0, 1), (0, 2), (1, 2)]
+        proj_spreads = [spreads[i] + spreads[j] for i, j in proj_pairs]
+        best_proj = proj_pairs[np.argmax(proj_spreads)]
+        fig, ax = plt.subplots(figsize=(10, 10))
+        ax.scatter(coords[:, best_proj[0]], coords[:, best_proj[1]],
+                   c=colors, s=40, edgecolor='k', linewidth=0.5, alpha=0.9)
+        ax.set_xlabel(['X', 'Y', 'Z'][best_proj[0]])
+        ax.set_ylabel(['X', 'Y', 'Z'][best_proj[1]])
+        ax.set_title(f"{tomo_name} - AuNP Clusters (Best 2D Projection)")
+        ax.legend(handles=legend_elements, loc='best')
+        out_clusters = output_dir_viz / f"{tomo_name}_aunpclusters.png"
+        plt.savefig(out_clusters, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"Saved AuNP cluster summary image: {out_clusters}")
+    # --- End AuNP Cluster Visualization ---
 
 def main():
     """Main function to process all tomograms and generate visualizations."""

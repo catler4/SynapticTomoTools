@@ -53,7 +53,7 @@ pip install -r requirements.txt
 
 Each tomogram directory must contain the following files in the specified locations and formats:
 
-#### `presynatpticmembranes_*.txt` and `postsynapticmembranes_*.txt`
+#### `presynapticmembranes_*.txt` and `postsynapticmembranes_*.txt`
 - **Location:** `best_alignment/aunps/`
 - **Format:** Plain text file. Each line contains three whitespace-separated numbers representing the X, Y, Z coordinates of a point on the membrane segmentation.
 - **Example:**
@@ -62,8 +62,6 @@ Each tomogram directory must contain the following files in the specified locati
   124.0 568.2 90.3
   ...
   ```
-- **Notes:**
-  - The typo `presynatptic` (instead of `presynaptic`) is expected and required for now.
 
 #### synapticvesicles_*.txt
 - **Location:** `best_alignment/aunps/`
@@ -121,7 +119,7 @@ SET_ROOTS = {
 }
 ```
 
-Within each tomogram subdirectory, a best_alignment/aunps subdirectory is expected that contains the pre- and postsynaptic membrane segmentations (presynatpticmembranes_1.txt, postsynapticmembranes_1.txt, ...), vesicle segmentations (synapticvesicles_1.txt, synapticvesicles_2.txt, ...), and aunp picks saved in individual .star files per active zone (aunp_tm_BP_active_zone_0.star, aunp_tm_BP_active_zone_1.star, ...).
+Within each tomogram subdirectory, a best_alignment/aunps subdirectory is expected that contains the pre- and postsynaptic membrane segmentations (presynapticmembranes_1.txt, postsynapticmembranes_1.txt, ...), vesicle segmentations (synapticvesicles_1.txt, synapticvesicles_2.txt, ...), and aunp picks saved in individual .star files per active zone (aunp_tm_BP_active_zone_0.star, aunp_tm_BP_active_zone_1.star, ...).
 
 ```text
 TOMOGRAM_SET_ROOT/
@@ -130,7 +128,7 @@ TOMOGRAM_SET_ROOT/
 │   │   ├── best_alignment/
 │   │   │   ├── tomogram1_ddw.mrc (tomogram that will be used for visualizations)
 │   │   │   ├── aunps/
-│   │   │   │   ├── presynatpticmembranes_1.txt (NOTE THE TYPO presynaTptic, IT IS EXPECTED until this is fixed in findingampa code!)
+│   │   │   │   ├── presynapticmembranes_1.txt
 │   │   │   │   ├── postsynapticmembranes_1.txt
 │   │   │   │   ├── synapticvesicles_1.txt
 │   │   │   │   ├── synapticvesicles_2.txt
@@ -139,8 +137,8 @@ TOMOGRAM_SET_ROOT/
 │   │   ├── best_alignment/
 │   │   │   ├── tomogram2_ddw.mrc
 │   │   │   ├── aunps/
-│   │   │   │   ├── presynatpticmembranes_1.txt
-│   │   │   │   ├── presynatpticmembranes_2.txt
+│   │   │   │   ├── presynapticmembranes_1.txt
+│   │   │   │   ├── presynapticmembranes_2.txt
 │   │   │   │   ├── postsynapticmembranes_1.txt
 │   │   │   │   ├── synapticvesicles_1.txt
 │   │   │   │   ├── synapticvesicles_2.txt
@@ -193,6 +191,7 @@ python -m src.synaptic_tomo_tools.cli --analysis all
 | `--results-dir`             | Directory to store analysis results (default: `results`)                                         |
 | `--generate-visualizations` | Generate visualization images for each tomogram after analysis completion                        |
 | `--delete-results`          | **Delete all analysis results files before running analysis**                                    |
+| `--check-files`             | Check that all expected files for the tomograms listed in the CSV are present in the expected locations. No analysis is run. |
 | `--test`                    | Use local test data roots and default to `data/tomograms-test.csv` unless `--csv` is specified. All test set roots are set relative to the repo root. Supported test sets: 15F1, 5F11, 15F1and5F11, 15F1and5F11dimer, 11B8, unlabeled. |
 
 ### Example: Active Zone Analysis
@@ -226,6 +225,18 @@ python -m src.synaptic_tomo_tools.cli --analysis all --test
 ```
 
 You can override the CSV file with `--csv` if you want to use a different test list.
+
+### Checking Required Files
+
+You can use the `--check-files` flag to verify that all required input files for the tomograms listed in your CSV are present in the expected locations. This is useful for dataset validation before running the full analysis pipeline.
+
+**Example usage:**
+
+```bash
+python -m src.synaptic_tomo_tools.cli --analysis all --csv data/tomograms.csv --check-files
+```
+
+This will print a summary for each tomogram, listing any missing files or confirming that all required files are present. No analysis or file modification will occur.
 
 ### See All Options
 
@@ -267,3 +278,5 @@ Analysis and visualization results are saved in the following locations:
 - Only vesicles intersecting the central slice (±1 pixel) are shown by default in visualizations.
 
 ---
+
+

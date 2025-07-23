@@ -4,9 +4,11 @@ from typing import List
 import pandas as pd
 import numpy as np
 from scipy.spatial import KDTree
+from sklearn.cluster import DBSCAN
 from pathlib import Path
 import starfile
 from .activezone import import_membrane_segmentations
+from .activezone import import_active_zone_segmentations
 from datetime import datetime
 import json
 from .vesicles import import_presynaptic_membranes_and_active_zones
@@ -217,6 +219,124 @@ def analyze_aunps(tomogram_path, active_zone_indices=None):
     dists, idxs = tree.query(coords, k=2)
     df_valid['nearest_neighbor_distance'] = dists[:, 1]
 
+    # --- New: AuNP clustering analysis using DBSCAN ---
+    try:
+        db = DBSCAN(eps=20, min_samples=4).fit(coords)
+        df_valid['aunp_cluster'] = db.labels_
+        n_clusters = len(set(db.labels_)) - (1 if -1 in db.labels_ else 0)
+        print(f"DBSCAN found {n_clusters} AuNP clusters (eps=20 nm, min_samples=4)")
+    except Exception as e:
+        print(f"Error in DBSCAN clustering: {e}")
+        df_valid['aunp_cluster'] = -1
+    # --- End clustering ---
+
+    aunps_results_dir = Path(tomogram_path) / "best_alignment" / "STT_results" / "aunps"
+    aunps_results_dir.mkdir(parents=True, exist_ok=True)
+    output_file = aunps_results_dir / "aunp_nearest_neighbor_distances.csv"
+
+    # --- New: Output .star file with cluster assignments ---
+    try:
+        # Use the same columns as the imported .star, plus aunp_cluster
+        star_cols = [col for col in df.columns if col in df_valid.columns] + ['aunp_cluster']
+        star_df = df_valid[star_cols].copy()
+        if not isinstance(star_df, pd.DataFrame):
+            star_df = pd.DataFrame(star_df)
+        star_outfile = aunps_results_dir / "aunp_clusters.star"
+        starfile.write(star_df, star_outfile, overwrite=True)
+        print(f"Saved AuNP cluster assignments to {star_outfile}")
+    except Exception as e:
+        print(f"Error writing .star file with clusters: {e}")
+    # --- End .star output ---
+
+    # --- Output cluster summary CSV ---
+    try:
+        from scipy.spatial import ConvexHull, distance_matrix
+        cluster_labels = np.unique(db.labels_)
+        cluster_rows = []
+        for label in cluster_labels:
+            if label == -1:
+                continue  # Skip noise
+            cluster_points = coords[db.labels_ == label]
+            n_points = len(cluster_points)
+            if n_points < 3:
+                area = np.nan
+                max_dim = np.nan
+            else:
+                try:
+                    hull = ConvexHull(cluster_points)
+                    area = hull.area / 2.0
+                except Exception:
+                    area = np.nan
+                try:
+                    dists = distance_matrix(cluster_points, cluster_points)
+                    max_dim = np.nanmax(dists)
+                except Exception:
+                    max_dim = np.nan
+            density = n_points / area if area and area > 0 else np.nan
+            cluster_rows.append({
+                'cluster_label': label,
+                'n_aunps': n_points,
+                'cluster_area': area,
+                'cluster_max_dimension': max_dim,
+                'cluster_density': density
+            })
+        cluster_df = pd.DataFrame(cluster_rows)
+        cluster_csv = aunps_results_dir / "aunp_clusters.csv"
+        cluster_df.to_csv(cluster_csv, index=False)
+        print(f"Saved AuNP cluster summary to {cluster_csv}")
+        # --- Append to global results/aunp_cluster_results.csv ---
+        tomogram_name = Path(tomogram_path).name
+        # Extract set name from tomogram path
+        path_parts = Path(tomogram_path).parts
+        set_name = "unknown"
+        for i, part in enumerate(path_parts):
+            if part.endswith("_tomograms") and i > 0:
+                set_name = part.replace("_tomograms", "")
+                break
+        cluster_df['tomogram_name'] = tomogram_name
+        cluster_df['set_name'] = set_name
+        global_csv = Path("results/aunp_cluster_results.csv")
+        global_csv.parent.mkdir(parents=True, exist_ok=True)
+        if global_csv.exists():
+            try:
+                df_existing = pd.read_csv(global_csv)
+                df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
+                df_combined = pd.concat([df_existing, cluster_df], ignore_index=True)
+                df_combined.to_csv(global_csv, index=False)
+            except Exception as e:
+                print(f"Error updating global aunp_cluster_results.csv: {e}")
+                cluster_df.to_csv(global_csv, index=False)
+        else:
+            cluster_df.to_csv(global_csv, index=False)
+        print(f"Appended cluster info to {global_csv}")
+        # --- End global results ---
+    except Exception as e:
+        print(f"Error writing aunp_clusters.csv: {e}")
+    # --- End cluster summary ---
+
+    # Calculate distance to active zone center
+    try:
+        az_segmentations = import_active_zone_segmentations(tomogram_path)
+        all_az_points = []
+        for az in az_segmentations.values():
+            if 'presynaptic_coords' in az and len(az['presynaptic_coords']) > 0:
+                all_az_points.append(np.asarray(az['presynaptic_coords']))
+            if 'postsynaptic_coords' in az and len(az['postsynaptic_coords']) > 0:
+                all_az_points.append(np.asarray(az['postsynaptic_coords']))
+        if all_az_points:
+            all_az_points = np.vstack(all_az_points)
+            az_center = np.mean(all_az_points, axis=0)
+            distances_to_center = np.linalg.norm(coords - az_center, axis=1)
+        else:
+            az_center = np.array([np.nan, np.nan, np.nan])
+            distances_to_center = np.full(coords.shape[0], np.nan)
+    except Exception as e:
+        print(f"Error calculating active zone center: {e}")
+        az_center = np.array([np.nan, np.nan, np.nan])
+        distances_to_center = np.full(coords.shape[0], np.nan)
+    df_valid['distance_to_active_zone_center'] = distances_to_center
+    # --- End new ---
+
     # --- New: Calculate distance to closest pre/post membrane segmentation ---
     membranes = import_membrane_segmentations(tomogram_path)
     # Ensure all arrays are 2D and have shape (N, 3)
@@ -237,7 +357,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None):
     df_valid['distance_to_presynaptic'] = pre_dists
     df_valid['distance_to_postsynaptic'] = post_dists
     # --- End new ---
-    output_file = aunps_dir / "aunp_nearest_neighbor_distances.csv"
+    # Save nearest neighbor distances in STT_results/aunps directory
     # Compute fusion points
     fusion_points = compute_fusion_points(tomogram_path)
     fusion_points = np.asarray(fusion_points)
@@ -251,7 +371,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None):
     cols_out = [
         'active_zone', 'faCoordinateX', 'faCoordinateY', 'faCoordinateZ',
         'nearest_neighbor_distance', 'distance_to_presynaptic', 'distance_to_postsynaptic',
-        'distance_to_fusion_point'
+        'distance_to_fusion_point', 'distance_to_active_zone_center', 'aunp_cluster'
     ]
     df_valid.loc[:, cols_out].to_csv(output_file, index=False)
     print(f"Saved nearest neighbor, membrane, and fusion distances for AuNPs to {output_file}")

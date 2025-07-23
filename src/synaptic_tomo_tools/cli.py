@@ -367,6 +367,10 @@ def main():
         "--delete-results", action="store_true",
         help="Delete all analysis results files before running analysis."
     )
+    parser.add_argument(
+        "--check-files", action="store_true",
+        help="Only check that all expected files for the tomograms listed in the CSV are present in the expected locations."
+    )
 
     args = parser.parse_args()
 
@@ -391,6 +395,56 @@ def main():
     if args.delete_results:
         delete_all_analysis_results(args.results_dir, "data")
 
+    if args.check_files:
+        tomos = load_tomograms(args.csv, args.analysis, args.set)
+        if not tomos:
+            print("No matching tomograms found.")
+            return
+        print(f"Checking required files for {len(tomos)} tomograms...")
+        missing = False
+        for tomo, set_name, _ in tomos:
+            missing_files = []
+            base = Path(tomo) / "best_alignment"
+            # Check for main reconstruction
+            rec_file = list(base.glob("*_ddw.mrc"))
+            if not rec_file:
+                missing_files.append("main reconstruction (*.mrc)")
+            # Check for vesicle files
+            ves_dir = base / "aunps"
+            ves_files = list(ves_dir.glob("synapticvesicles_*.txt"))
+            if not ves_files:
+                missing_files.append("vesicle files (synapticvesicles_*.txt)")
+            # Check for membrane files
+            pre_mem = list(ves_dir.glob("presynapticmembranes_*.txt"))
+            post_mem = list(ves_dir.glob("postsynapticmembranes_*.txt"))
+            if not pre_mem:
+                missing_files.append("presynaptic membrane files (presynapticmembranes_*.txt)")
+            if not post_mem:
+                missing_files.append("postsynaptic membrane files (postsynapticmembranes_*.txt)")
+            # Check for active zone segmentations
+            az_dir = base.parent / "STT_results" / "active_zones"
+            az_pre = list(az_dir.glob("*_pre.txt"))
+            az_post = list(az_dir.glob("*_post.txt"))
+            if not az_pre:
+                missing_files.append("active zone pre files (*_pre.txt)")
+            if not az_post:
+                missing_files.append("active zone post files (*_post.txt)")
+            # Check for MemBrain segmentation
+            membrain_dir = base / "membrain"
+            membrain_files = list(membrain_dir.glob("*.mrc"))
+            if not membrain_files:
+                missing_files.append("MemBrain segmentation (*.mrc)")
+            if missing_files:
+                missing = True
+                print(f"[MISSING] {Path(tomo).name}:")
+                for f in missing_files:
+                    print(f"  - {f}")
+            else:
+                print(f"[OK] {Path(tomo).name}: All required files present.")
+        if not missing:
+            print("All required files are present for all tomograms.")
+        return
+
     # Initialize results manager
     results_manager = ResultsManager(args.results_dir)
     
@@ -411,9 +465,11 @@ def main():
     print(f"Found {len(tomos)} tomograms for analysis '{args.analysis}'")
 
     if args.analysis == "activezone":
-        run_activezone(tomos, results_manager, rerun=args.rerun)
+        activezone_paths = [(tomo, set_name) for (tomo, set_name, _) in tomos]
+        run_activezone(activezone_paths, results_manager, rerun=args.rerun)
     elif args.analysis == "vesicles":
-        run_vesicles(tomos, results_manager, rerun=args.rerun)
+        vesicles_paths = [(tomo, set_name) for (tomo, set_name, _) in tomos]
+        run_vesicles(vesicles_paths, results_manager, rerun=args.rerun)
     elif args.analysis == "aunps":
         run_aunps(tomos, results_manager, rerun=args.rerun)
     elif args.analysis == "all":

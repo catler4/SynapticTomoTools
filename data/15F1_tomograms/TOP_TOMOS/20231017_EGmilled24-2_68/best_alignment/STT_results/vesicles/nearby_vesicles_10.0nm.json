@@ -41187,9 +41187,9 @@
         ]
       ],
       "distance_to_az": 7.731587015096657,
-      "closest_membrane": "presynatpticmembranes_2",
-      "average_signal": 0.012207732535898685,
-      "scaled_signal": 1.002130562585906,
+      "closest_membrane": "presynapticmembranes_2",
+      "average_signal": 0.012494957074522972,
+      "scaled_signal": 0.991603645563968,
       "sphericity_volume": 0.9977116770646447,
       "sphericity_fit_quality": 0.9747529779344907,
       "mean_distance_to_center": 20.92556535414429,

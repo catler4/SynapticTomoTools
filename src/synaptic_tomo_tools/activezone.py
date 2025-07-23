@@ -59,7 +59,7 @@ def save_membrane_volumes(membranes: Dict[str, List[np.ndarray]], tomogram_path)
         volumes_data[membrane_name] = {
             'volume_um3': volume,
             'point_count': len(coords),
-            'coordinates_file': f"presynatpticmembranes_{i+1}.txt"
+            'coordinates_file': f"presynapticmembranes_{i+1}.txt"
         }
         print(f"Presynaptic membrane {i+1} volume: {volume:.6f} µm³ ({len(coords)} points)")
     
@@ -168,7 +168,7 @@ def import_membrane_segmentations(tomogram_path) -> Dict[str, List[np.ndarray]]:
     }
     
     # Find all presynaptic membrane files
-    presyn_files = list(aunps_dir.glob("presynatpticmembranes_*.txt"))
+    presyn_files = list(aunps_dir.glob("presynapticmembranes_*.txt"))
     postsyn_files = list(aunps_dir.glob("postsynapticmembranes_*.txt"))
     
     print(f"Found {len(presyn_files)} presynaptic membrane files")

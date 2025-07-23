@@ -91,22 +91,19 @@ def calculate_vesicle_signal(vesicle_data: Tuple[int, Dict[str, Any]],
     # Calculate distances from center to all points
     distances = np.sqrt((X - center[0])**2 + (Y - center[1])**2 + (Z - center[2])**2)
     
-    # Create mask for points inside the sphere
-    inside_mask = distances <= radius
+    # Exclude the outer ~7 nm of the vesicle sphere
+    effective_radius = max(0, radius - 7.0)
+    mask = distances <= effective_radius
     
-    if not np.any(inside_mask):
+    if not np.any(mask):
         return index, 0.0
     
-    # Extract coordinates of points inside the sphere
-    inside_coords = np.where(inside_mask)
+    # Extract coordinates of points inside the effective sphere
+    coords = np.where(mask)
+    z_coords = coords[2].astype(int)
+    y_coords = coords[1].astype(int)
+    x_coords = coords[0].astype(int)
     
-    # Convert to integer indices for array indexing
-    # Note: mrcfile uses z,y,x order, so we need to reorder
-    z_coords = inside_coords[2].astype(int)  # Z coordinate
-    y_coords = inside_coords[1].astype(int)  # Y coordinate  
-    x_coords = inside_coords[0].astype(int)  # X coordinate
-    
-    # Extract signal values at all points inside the vesicle
     try:
         signal_values = tomogram_data[z_coords, y_coords, x_coords]
         average_signal = float(np.mean(signal_values))
@@ -382,7 +379,7 @@ def import_presynaptic_membranes_and_active_zones(tomogram_path) -> Dict[str, Di
         raise FileNotFoundError(f"Active zones directory not found: {stt_results_dir}")
     
     # Find all presynaptic membrane files in aunps directory
-    pre_membrane_files = list(aunps_dir.glob("presynatpticmembranes_*.txt"))
+    pre_membrane_files = list(aunps_dir.glob("presynapticmembranes_*.txt"))
     
     if not pre_membrane_files:
         print("No presynaptic membrane files found")
@@ -396,7 +393,7 @@ def import_presynaptic_membranes_and_active_zones(tomogram_path) -> Dict[str, Di
             membrane_points = np.loadtxt(membrane_file, delimiter=None)
             
             # Find corresponding active zone files
-            membrane_name = membrane_file.stem  # e.g., "presynatpticmembranes_1"
+            membrane_name = membrane_file.stem  # e.g., "presynapticmembranes_1"
             membrane_number = membrane_name.split('_')[-1]  # e.g., "1"
             
             # Look for ALL active zone files with matching number in STT_results/active_zones
@@ -869,6 +866,17 @@ def save_all_vesicle_distances_to_csv(vesicles: List[Dict[str, Any]], tomogram_p
             'combined_sphericity': vesicle.get('combined_sphericity', 0.0)
         }
         vesicle_rows.append(vesicle_row)
+    
+    # Normalize average_signal per tomogram for this batch
+    avg_signals = [row['average_signal'] for row in vesicle_rows]
+    if avg_signals and (max(avg_signals) > min(avg_signals)):
+        min_signal = min(avg_signals)
+        max_signal = max(avg_signals)
+        norm_signals = [(s - min_signal) / (max_signal - min_signal) for s in avg_signals]
+    else:
+        norm_signals = [0.0 for s in avg_signals]
+    for row, norm in zip(vesicle_rows, norm_signals):
+        row['normalized_signal'] = norm
     
     # Create or update CSV file
     csv_path = Path(csv_file)
