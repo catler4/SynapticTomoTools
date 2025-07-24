@@ -46,6 +46,7 @@ class AnalysisPipelineGUI(tk.Tk):
         self.root_dir = tk.StringVar()
         self.log_text = None
         self._img_refs = []  # Keep references to PhotoImage objects
+        self._current_process = None  # Track running process for stopping
         self._build_tabs()
 
     def _build_home_tab_content(self, tab):
@@ -160,6 +161,10 @@ class AnalysisPipelineGUI(tk.Tk):
             view_btn.pack(anchor=tk.W)
         if step == "Full Pipeline":
             run_btn.config(command=lambda: self._run_analysis(step, tab))
+        # Add Stop button in bottom right of tab (not Home)
+        if step != "Home":
+            stop_btn = ttk.Button(tab, text="Stop", command=self._stop_current_process)
+            stop_btn.place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-10)
 
     def _browse_csv(self):
         path = filedialog.askopenfilename(title="Select tomogram CSV", filetypes=[("CSV files", "*.csv")])
@@ -206,11 +211,21 @@ class AnalysisPipelineGUI(tk.Tk):
         threading.Thread(target=self._run_subprocess, args=(cli, env)).start()
 
     def _run_subprocess(self, cli, env):
-        process = subprocess.Popen(cli, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
-        for line in process.stdout:
-            self._log(line)
-        process.wait()
-        self._log(f"\n[Process exited with code {process.returncode}]\n\n")
+        self._current_process = subprocess.Popen(cli, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+        try:
+            for line in self._current_process.stdout:
+                self._log(line)
+            self._current_process.wait()
+            self._log(f"\n[Process exited with code {self._current_process.returncode}]\n\n")
+        finally:
+            self._current_process = None
+
+    def _stop_current_process(self):
+        if self._current_process and self._current_process.poll() is None:
+            self._current_process.terminate()
+            self._log("\n[Process terminated by user]\n\n")
+        else:
+            self._log("\n[No process is currently running]\n\n")
 
     def _log(self, msg):
         self.log_text.config(state=tk.NORMAL)
