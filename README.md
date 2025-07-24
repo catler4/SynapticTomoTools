@@ -244,7 +244,7 @@ You can also run the analysis pipeline using a graphical interface:
 
 - Launch the GUI with:
   ```bash
-  python scripts/analysis_pipeline_gui.py
+  python scripts/processing_and_analysis_pipeline_gui.py
   ```  
   ![SynapticTomoTools GUI](figures/gui_screenshot_1.png)
   
