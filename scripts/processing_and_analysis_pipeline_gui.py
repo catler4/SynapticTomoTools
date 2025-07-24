@@ -102,11 +102,15 @@ class AnalysisPipelineGUI(tk.Tk):
         ttk.Label(findingampa_tab, text="Use FindingAMPA processing commands here.").pack(anchor=tk.W, pady=(10, 0), padx=20)
         # --- Single tomogram mode UI ---
         self.findingampa_single_mode = tk.BooleanVar(value=False)
+        self.findingampa_all_mode = tk.BooleanVar(value=False)
         self.findingampa_single_dir = tk.StringVar()
         single_frame = ttk.Frame(findingampa_tab)
         single_frame.pack(anchor=tk.W, fill=tk.X, padx=20, pady=(10, 0))
         single_cb = ttk.Checkbutton(single_frame, text="Run on single tomogram only", variable=self.findingampa_single_mode, command=self._toggle_findingampa_single_dir)
         single_cb.pack(side=tk.LEFT)
+        # Add 'Run on all tomograms' checkbox below
+        all_cb = ttk.Checkbutton(findingampa_tab, text="Run on all tomograms in provided Tomogram CSV file", variable=self.findingampa_all_mode, command=self._toggle_findingampa_all_mode)
+        all_cb.pack(anchor=tk.W, padx=20, pady=(2, 10))
         # Directory input widgets (initially hidden)
         self.single_dir_label = ttk.Label(single_frame, text="Tomogram directory:")
         self.single_dir_entry = ttk.Entry(single_frame, textvariable=self.findingampa_single_dir, width=20)
@@ -187,15 +191,28 @@ class AnalysisPipelineGUI(tk.Tk):
         self._run_findingampa_command("select-aunp-picks")
 
     # Add this new method to toggle the directory input
+    def _toggle_findingampa_all_mode(self):
+        # Make checkboxes mutually exclusive
+        if self.findingampa_all_mode.get():
+            self.findingampa_single_mode.set(False)
+            self._toggle_findingampa_single_dir()
+        # If both are unchecked, default to all mode
+        elif not self.findingampa_single_mode.get():
+            self.findingampa_all_mode.set(True)
+
     def _toggle_findingampa_single_dir(self):
         if self.findingampa_single_mode.get():
             self.single_dir_label.pack(side=tk.LEFT, padx=(10, 0))
             self.single_dir_entry.pack(side=tk.LEFT, padx=(5, 0))
             self.single_dir_browse.pack(side=tk.LEFT, padx=5)
+            self.findingampa_all_mode.set(False)
         else:
             self.single_dir_label.pack_forget()
             self.single_dir_entry.pack_forget()
             self.single_dir_browse.pack_forget()
+            # If both are unchecked, default to all mode
+            if not self.findingampa_all_mode.get():
+                self.findingampa_all_mode.set(True)
     # Add this new method to browse for a directory
     def _browse_findingampa_single_dir(self):
         path = filedialog.askdirectory(title="Select tomogram directory", initialdir=".")
@@ -217,7 +234,7 @@ class AnalysisPipelineGUI(tk.Tk):
             self._log(f"Running (single tomogram): {' '.join(cli)} in {self.findingampa_single_dir.get()}\n")
             env = os.environ.copy()
             threading.Thread(target=self._run_subprocess, args=(cli, env, self.findingampa_single_dir.get())).start()
-        else:
+        elif self.findingampa_all_mode.get() or not self.findingampa_single_mode.get():
             # Run for all tomograms in CSV, using best_alignment dir for each
             csv_path = self.csv_path.get()
             root_dir = self.root_dir.get()
