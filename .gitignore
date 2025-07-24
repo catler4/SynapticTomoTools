@@ -27,3 +27,5 @@ results/summary_pdfs/*.pdf
 # Ignore all .mrc files
 *.mrc
 **/*.mrc
+# Ignore all scripts/utilities (standalone utilities)
+scripts/utilities/
