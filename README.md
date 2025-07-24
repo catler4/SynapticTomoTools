@@ -50,6 +50,142 @@ pip install -r requirements.txt
 
 ---
 
+## 🖥️ Graphical User Interface (GUI)
+
+You can also run the analysis pipeline using a graphical interface:
+
+- Launch the GUI with:
+  ```bash
+  python scripts/processing_and_analysis_pipeline_gui.py
+  ```  
+  ![SynapticTomoTools GUI](figures/gui_screenshot_1.png)
+  
+- The GUI provides:
+  - A Home tab to select your tomogram CSV and root directory (with browse buttons)
+  - A FindingAMPA tab to run commands from the FindingAMPA github repo (preprocessing for this workflow)
+  - Tabs for each analysis step (Active Zone, Vesicles, AuNPs, Visualization, Full Pipeline)
+  - Figure previews for each analysis step
+  - Run controls and checkboxes for key CLI flags (rerun, delete-results, check-files)
+  - Live log output for all analysis steps
+  - Buttons to generate and view the PDF summary directly from the GUI
+- The GUI uses the same CLI workflow under the hood, so all results and outputs are identical to running the CLI directly.
+
+  ![SynapticTomoTools GUI](figures/gui_screenshot_2.png)
+  ![SynapticTomoTools GUI](figures/gui_screenshot_3.png)
+  ![SynapticTomoTools GUI](figures/gui_screenshot_4.png)
+  ![SynapticTomoTools GUI](figures/gui_screenshot_5.png)
+  ![SynapticTomoTools GUI](figures/gui_screenshot_6.png)
+
+---
+
+### Command Line Interface
+
+Run from the project root:
+
+```bash
+python -m src.synaptic_tomo_tools.cli --analysis all
+```
+
+### Key CLI Flags
+
+| Flag                        | Description                                                                                      |
+|-----------------------------|--------------------------------------------------------------------------------------------------|
+| `--analysis`                | **Required.** Which analysis to run. Choices: `activezone`, `vesicles`, `aunps`, `all`          |
+| `--set`                     | (Optional) Filter tomograms by experimental set name (e.g., 15F1, unlabeled)                    |
+| `--csv`                     | Path to CSV file listing tomograms and analysis flags (default: `data/tomograms.csv`)            |
+| `--rerun`                   | Rerun analysis on already completed steps and overwrite existing results                                 |
+| `--results-dir`             | Directory to store analysis results (default: `results`)                                         |
+| `--generate-visualizations` | Generate visualization images for each tomogram after analysis completion                        |
+| `--delete-results`          | **Delete all analysis results files before running analysis**                                    |
+| `--check-files`             | Check that all expected files for the tomograms listed in the CSV are present in the expected locations. No analysis is run. |
+| `--test`                    | Use local test data roots and default to `data/tomograms-test.csv` unless `--csv` is specified. All test set roots are set relative to the repo root. Supported test sets: 15F1, 5F11, 15F1and5F11, 15F1and5F11dimer, 11B8, unlabeled. |
+| `--generate-pdf-summary`   | Generate a PDF summary for all tomograms at the end of the analysis pipeline. This will run the PDF summary script automatically after all analyses and exports are complete. |
+
+### Example: Active Zone Analysis
+
+```bash
+python -m src.synaptic_tomo_tools.cli --analysis activezone
+```
+
+### Example: Full Pipeline on non-default tomogram test set
+
+```bash
+python -m src.synaptic_tomo_tools.cli --analysis all --test
+```
+
+### Example: Full Pipeline with All Options
+
+```bash
+python -m src.synaptic_tomo_tools.cli --analysis all --csv data/tomograms.csv --rerun --generate-visualizations --delete-results
+```
+
+### Test Mode
+
+The `--test` flag switches the pipeline to use local test data directories and defaults to `data/tomograms-test.csv` for the tomogram list (unless you specify `--csv`).
+
+- All test set roots are set as relative paths from the repository root, so the code works on any machine where the repo is cloned.
+- Supported test sets: `15F1`, `5F11`, `15F1and5F11`, `15F1and5F11dimer`, `11B8`, `unlabeled`.
+- Example usage:
+
+```bash
+python -m src.synaptic_tomo_tools.cli --analysis all --test
+```
+
+You can override the CSV file with `--csv` if you want to use a different test list.
+
+### Checking Required Files
+
+You can use the `--check-files` flag to verify that all required input files for the tomograms listed in your CSV are present in the expected locations. This is useful for dataset validation before running the full analysis pipeline.
+
+**Example usage:**
+
+```bash
+python -m src.synaptic_tomo_tools.cli --analysis all --csv data/tomograms.csv --check-files
+```
+
+This will print a summary for each tomogram, listing any missing files or confirming that all required files are present. No analysis or file modification will occur.
+
+### See All Options
+
+For the latest options and descriptions, run:
+```bash
+python -m src.synaptic_tomo_tools.cli --help
+```
+
+---
+
+## Outputs
+
+- **Active zone results:**
+  - `results/activezone_results.csv` — summary statistics for all tomograms
+  - Per-tomogram results in each tomogram's `best_alignment/STT_results/active_zones/`
+- **Vesicle results:**
+  - `results/vesicle_results.csv` — summary statistics for all tomograms
+  - Per-tomogram results in each tomogram's `best_alignment/STT_results/vesicles/` (e.g., `vesicle_results.json`)
+- **AuNP results:**
+  - `results/aunp_results.csv` — summary statistics for all tomograms
+  - `results/all_aunp_distances.csv` — all per-AuNP distances for all tomograms
+  - Per-tomogram results in each tomogram's `best_alignment/aunps/` (e.g., `aunp_nearest_neighbor_distances.csv`)
+- **AuNP cluster analysis outputs:**
+  - `best_alignment/STT_results/aunps/aunp_clusters.csv`: Per-cluster summary (cluster label, number of AuNPs, area, max dimension, density)
+  - `best_alignment/STT_results/aunps/aunp_clusters.star`: Per-AuNP cluster assignments in STAR format
+  - `results/aunp_cluster_results.csv`: All cluster summary info from all tomograms (like vesicle_results.csv)
+  - `results/visualizations/{tomogram_name}_combined_aunpclusters.png`: Combined overlay with all AuNPs colored by cluster assignment (noise in grey)
+  - `results/visualizations/{tomogram_name}_aunpclusters.png`: All AuNPs colored by cluster, best 2D projection (noise in grey)
+- **Combined results:**
+  - `results/analysis_results.json` — all results for all tomograms in a single JSON
+- **Visualizations:**
+  - **Per-tomogram images:**
+    - `best_alignment/STT_results/visualizations/` inside each tomogram directory:
+      - `{tomo_name}_vesicles_active_zones.png`: Vesicles and active zones
+      - `{tomo_name}_aunps.png`: Vesicles and AuNPs (filtered by aunp_active_zones)
+      - `{tomo_name}_combined.png`: All elements together
+      - `{tomo_name}_vesicles_signal.png`: Vesicles colored by average signal intensity (gradient fill)
+  - **Combined images:**
+    - `results/visualizations/` — copies of all per-tomogram images for easy access
+
+---
+
 ## 📁 Data organization
 
 ### Required File Formats
@@ -157,143 +293,5 @@ tomoname,set,activezone,vesicles,aunps,aunp_active_zones
 20231017_HippAu_141,15F1,True,True,True,"0,2"
 20231026_HippAu_26,15F1,True,True,True,
 ```
-
----
-
-## 🖥️ Usage
-
-### Command Line Interface
-
-Run from the project root:
-
-```bash
-python -m src.synaptic_tomo_tools.cli --analysis all
-```
-
-### Key CLI Flags
-
-| Flag                        | Description                                                                                      |
-|-----------------------------|--------------------------------------------------------------------------------------------------|
-| `--analysis`                | **Required.** Which analysis to run. Choices: `activezone`, `vesicles`, `aunps`, `all`          |
-| `--set`                     | (Optional) Filter tomograms by experimental set name (e.g., 15F1, unlabeled)                    |
-| `--csv`                     | Path to CSV file listing tomograms and analysis flags (default: `data/tomograms.csv`)            |
-| `--rerun`                   | Rerun analysis on already completed steps and overwrite existing results                                 |
-| `--results-dir`             | Directory to store analysis results (default: `results`)                                         |
-| `--generate-visualizations` | Generate visualization images for each tomogram after analysis completion                        |
-| `--delete-results`          | **Delete all analysis results files before running analysis**                                    |
-| `--check-files`             | Check that all expected files for the tomograms listed in the CSV are present in the expected locations. No analysis is run. |
-| `--test`                    | Use local test data roots and default to `data/tomograms-test.csv` unless `--csv` is specified. All test set roots are set relative to the repo root. Supported test sets: 15F1, 5F11, 15F1and5F11, 15F1and5F11dimer, 11B8, unlabeled. |
-| `--generate-pdf-summary`   | Generate a PDF summary for all tomograms at the end of the analysis pipeline. This will run the PDF summary script automatically after all analyses and exports are complete. |
-
-### Example: Active Zone Analysis
-
-```bash
-python -m src.synaptic_tomo_tools.cli --analysis activezone
-```
-
-### Example: Full Pipeline on non-default tomogram test set
-
-```bash
-python -m src.synaptic_tomo_tools.cli --analysis all --test
-```
-
-### Example: Full Pipeline with All Options
-
-```bash
-python -m src.synaptic_tomo_tools.cli --analysis all --csv data/tomograms.csv --rerun --generate-visualizations --delete-results
-```
-
-### Test Mode
-
-The `--test` flag switches the pipeline to use local test data directories and defaults to `data/tomograms-test.csv` for the tomogram list (unless you specify `--csv`).
-
-- All test set roots are set as relative paths from the repository root, so the code works on any machine where the repo is cloned.
-- Supported test sets: `15F1`, `5F11`, `15F1and5F11`, `15F1and5F11dimer`, `11B8`, `unlabeled`.
-- Example usage:
-
-```bash
-python -m src.synaptic_tomo_tools.cli --analysis all --test
-```
-
-You can override the CSV file with `--csv` if you want to use a different test list.
-
-### Checking Required Files
-
-You can use the `--check-files` flag to verify that all required input files for the tomograms listed in your CSV are present in the expected locations. This is useful for dataset validation before running the full analysis pipeline.
-
-**Example usage:**
-
-```bash
-python -m src.synaptic_tomo_tools.cli --analysis all --csv data/tomograms.csv --check-files
-```
-
-This will print a summary for each tomogram, listing any missing files or confirming that all required files are present. No analysis or file modification will occur.
-
-### See All Options
-
-For the latest options and descriptions, run:
-```bash
-python -m src.synaptic_tomo_tools.cli --help
-```
-
----
-
-## 🖥️ Graphical User Interface (GUI)
-
-You can also run the analysis pipeline using a graphical interface:
-
-- Launch the GUI with:
-  ```bash
-  python scripts/processing_and_analysis_pipeline_gui.py
-  ```  
-  ![SynapticTomoTools GUI](figures/gui_screenshot_1.png)
-  
-- The GUI provides:
-  - A Home tab to select your tomogram CSV and root directory (with browse buttons)
-  - A FindingAMPA tab to run commands from the FindingAMPA github repo (preprocessing for this workflow)
-  - Tabs for each analysis step (Active Zone, Vesicles, AuNPs, Visualization, Full Pipeline)
-  - Figure previews for each analysis step
-  - Run controls and checkboxes for key CLI flags (rerun, delete-results, check-files)
-  - Live log output for all analysis steps
-  - Buttons to generate and view the PDF summary directly from the GUI
-- The GUI uses the same CLI workflow under the hood, so all results and outputs are identical to running the CLI directly.
-
-  ![SynapticTomoTools GUI](figures/gui_screenshot_2.png)
-  ![SynapticTomoTools GUI](figures/gui_screenshot_3.png)
-  ![SynapticTomoTools GUI](figures/gui_screenshot_4.png)
-  ![SynapticTomoTools GUI](figures/gui_screenshot_5.png)
-  ![SynapticTomoTools GUI](figures/gui_screenshot_6.png)
-
----
-
-## Outputs
-
-- **Active zone results:**
-  - `results/activezone_results.csv` — summary statistics for all tomograms
-  - Per-tomogram results in each tomogram's `best_alignment/STT_results/active_zones/`
-- **Vesicle results:**
-  - `results/vesicle_results.csv` — summary statistics for all tomograms
-  - Per-tomogram results in each tomogram's `best_alignment/STT_results/vesicles/` (e.g., `vesicle_results.json`)
-- **AuNP results:**
-  - `results/aunp_results.csv` — summary statistics for all tomograms
-  - `results/all_aunp_distances.csv` — all per-AuNP distances for all tomograms
-  - Per-tomogram results in each tomogram's `best_alignment/aunps/` (e.g., `aunp_nearest_neighbor_distances.csv`)
-- **AuNP cluster analysis outputs:**
-  - `best_alignment/STT_results/aunps/aunp_clusters.csv`: Per-cluster summary (cluster label, number of AuNPs, area, max dimension, density)
-  - `best_alignment/STT_results/aunps/aunp_clusters.star`: Per-AuNP cluster assignments in STAR format
-  - `results/aunp_cluster_results.csv`: All cluster summary info from all tomograms (like vesicle_results.csv)
-  - `results/visualizations/{tomogram_name}_combined_aunpclusters.png`: Combined overlay with all AuNPs colored by cluster assignment (noise in grey)
-  - `results/visualizations/{tomogram_name}_aunpclusters.png`: All AuNPs colored by cluster, best 2D projection (noise in grey)
-- **Combined results:**
-  - `results/analysis_results.json` — all results for all tomograms in a single JSON
-- **Visualizations:**
-  - **Per-tomogram images:**
-    - `best_alignment/STT_results/visualizations/` inside each tomogram directory:
-      - `{tomo_name}_vesicles_active_zones.png`: Vesicles and active zones
-      - `{tomo_name}_aunps.png`: Vesicles and AuNPs (filtered by aunp_active_zones)
-      - `{tomo_name}_combined.png`: All elements together
-      - `{tomo_name}_vesicles_signal.png`: Vesicles colored by average signal intensity (gradient fill)
-  - **Combined images:**
-    - `results/visualizations/` — copies of all per-tomogram images for easy access
 
 ---
