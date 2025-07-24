@@ -104,20 +104,7 @@ Each tomogram directory must contain the following files in the specified locati
 
 Tomograms are grouped by sets based on experimental conditions and marked for certain analyses in /data/tomograms.csv
 
-The cli.py must be updated with the root directories for each of the tomogram sets, in which each tomogram's data should be stored in a separate directory.
-
-### **Example:**
-```
-SET_ROOTS = {
-    "15F1": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1_tomograms/TOP_TOMOS"),
-    "5F11": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/5F11_tomograms/TOP_TOMOS"),
-    "15F1and5F11": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1and5F11_tomograms/TOP_TOMOS"),
-    "15F1and5F11dimer": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1and5F11dimer_tomograms/TOP_TOMOS"),
-    "11B8": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/11B8_tomograms/TOP_TOMOS"),
-    "unlabeled": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/unlabeled_tomograms/TOP_TOMOS"),
-    # Add more sets here if needed
-}
-```
+The cli.py must be updated with the root directories for each of the tomogram sets, in which each tomogram's data should be stored in a separate directory. Or, within the gui a main root directory can be designated that assumes a specific organizational structure and naming for the subdirectories.
 
 Within each tomogram subdirectory, a best_alignment/aunps subdirectory is expected that contains the pre- and postsynaptic membrane segmentations (presynapticmembranes_1.txt, postsynapticmembranes_1.txt, ...), vesicle segmentations (synapticvesicles_1.txt, synapticvesicles_2.txt, ...), and aunp picks saved in individual .star files per active zone (aunp_tm_BP_active_zone_0.star, aunp_tm_BP_active_zone_1.star, ...).
 
