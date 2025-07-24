@@ -256,10 +256,7 @@ You can also run the analysis pipeline using a graphical interface:
   ```bash
   python scripts/analysis_pipeline_gui.py
   ```  
-  
-  ```markdown
   ![SynapticTomoTools GUI](figures/gui_screenshot.png)
-  ```
   
 - The GUI provides:
   - A Home tab to select your tomogram CSV and root directory (with browse buttons)

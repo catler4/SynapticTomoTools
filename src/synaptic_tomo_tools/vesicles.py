@@ -91,8 +91,9 @@ def calculate_vesicle_signal(vesicle_data: Tuple[int, Dict[str, Any]],
     # Calculate distances from center to all points
     distances = np.sqrt((X - center[0])**2 + (Y - center[1])**2 + (Z - center[2])**2)
     
-    # Exclude the outer ~7 nm of the vesicle sphere
-    effective_radius = max(0, radius - 7.0)
+    # Use only the central 50% of the vesicle by volume
+    central_fraction = 0.5
+    effective_radius = radius * (central_fraction ** (1/3))
     mask = distances <= effective_radius
     
     if not np.any(mask):
