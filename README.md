@@ -267,6 +267,9 @@ You can also run the analysis pipeline using a graphical interface:
   - Buttons to generate and view the PDF summary directly from the GUI
 - The GUI uses the same CLI workflow under the hood, so all results and outputs are identical to running the CLI directly.
 
+  ![SynapticTomoTools GUI](figures/gui_screenshot_2.png)
+  ![SynapticTomoTools GUI](figures/gui_screenshot_3.png)
+
 ---
 
 ## Outputs
