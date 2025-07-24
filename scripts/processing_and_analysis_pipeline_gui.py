@@ -91,16 +91,72 @@ class AnalysisPipelineGUI(tk.Tk):
         notebook.add(home_tab, text="Home")
         self.tabs = {"Home": home_tab}
         self._build_home_tab_content(home_tab)
-        # Tabs for each analysis step
+        # FindingAMPA Processing tab as the second tab
+        findingampa_tab = ttk.Frame(notebook)
+        notebook.add(findingampa_tab, text="FindingAMPA Processing")
+        self.tabs["FindingAMPA Processing"] = findingampa_tab
+        # Initialize DDW flag variables before use
+        self.ddw_flag_var = tk.StringVar(value='k3')
+        self.ddw_flag_options = ['k3', 'falcon', 'falconczi']
+        # Move this label to the top
+        ttk.Label(findingampa_tab, text="Use FindingAMPA processing commands here.").pack(anchor=tk.W, pady=(10, 0), padx=20)
+        # --- Single tomogram mode UI ---
+        self.findingampa_single_mode = tk.BooleanVar(value=False)
+        self.findingampa_single_dir = tk.StringVar()
+        single_frame = ttk.Frame(findingampa_tab)
+        single_frame.pack(anchor=tk.W, fill=tk.X, padx=20, pady=(10, 0))
+        single_cb = ttk.Checkbutton(single_frame, text="Run on single tomogram only", variable=self.findingampa_single_mode, command=self._toggle_findingampa_single_dir)
+        single_cb.pack(side=tk.LEFT)
+        # Directory input widgets (initially hidden)
+        self.single_dir_label = ttk.Label(single_frame, text="Tomogram directory:")
+        self.single_dir_entry = ttk.Entry(single_frame, textvariable=self.findingampa_single_dir, width=20)
+        self.single_dir_browse = ttk.Button(single_frame, text="Browse...", command=self._browse_findingampa_single_dir)
+        # --- End single tomogram mode UI ---
+        # Add buttons for each FindingAMPA command
+        self.findingampa_commands = [
+            ("Create Tomograms (Etomo)", "create-tomograms"),
+            ("Denoise Tomograms (DeepDeWedge)", "ddw"),
+            ("Segment Membranes (membrain-seg)", "annotate-membranes"),
+            ("Match AuNPs", "match-aunps"),
+            ("Annotate Membranes (Blender plug-in)", "new-annotate-aunps"),
+            ("Render Active Zonograms", "render-active-zonograms"),
+            ("Select AuNP Picks", "select-aunp-picks"),
+        ]
+        self.findingampa_check_vars = []
+        self.findingampa_btns = []
+        for idx, (label, command) in enumerate(self.findingampa_commands):
+            row_frame = ttk.Frame(findingampa_tab)
+            row_frame.pack(anchor=tk.W, pady=2, padx=20, fill=tk.X)
+            var = tk.BooleanVar()
+            cb = ttk.Checkbutton(row_frame, variable=var)
+            cb.pack(side=tk.LEFT)
+            # Add DDW flag option menu next to DDW button
+            if command == "ddw":
+                btn = ttk.Button(row_frame, text=label, command=lambda c=command: self._run_findingampa_command(c))
+                btn.pack(side=tk.LEFT, padx=(5, 0))
+                ddw_flag_menu = ttk.OptionMenu(row_frame, self.ddw_flag_var, self.ddw_flag_var.get(), *self.ddw_flag_options)
+                ddw_flag_menu.pack(side=tk.LEFT, padx=(5, 0))
+                self.findingampa_check_vars.append(var)
+                self.findingampa_btns.append(btn)
+                continue
+            btn = ttk.Button(row_frame, text=label, command=lambda c=command: self._run_findingampa_command(c))
+            btn.pack(side=tk.LEFT, padx=(5, 0))
+            self.findingampa_check_vars.append(var)
+            self.findingampa_btns.append(btn)
+        # Add Run Checked button
+        run_checked_btn = ttk.Button(findingampa_tab, text="Run Checked", command=self._run_findingampa_checked)
+        run_checked_btn.pack(anchor=tk.W, pady=8, padx=20)
+        # Analysis tabs
         for step in ["Active Zone", "Vesicles", "AuNPs", "Visualization", "Full Pipeline"]:
             tab = ttk.Frame(notebook)
             notebook.add(tab, text=step)
             self.tabs[step] = tab
             self._build_tab_content(tab, step)
-        # Log output
+        # Log output area (revert to match analysis_pipeline_gui.py)
         self.log_frame = ttk.Frame(self)
         ttk.Label(self.log_frame, text="Log Output:").pack(anchor=tk.W)
-        self.log_text = scrolledtext.ScrolledText(self.log_frame, height=12, state=tk.NORMAL, font=("Courier", 10))
+        if self.log_text is None:
+            self.log_text = scrolledtext.ScrolledText(self.log_frame, height=12, state=tk.NORMAL, font=("Courier", 10))
         self.log_text.pack(fill=tk.BOTH, expand=True)
         # Show/hide log output based on tab
         def on_tab_change(event):
@@ -113,6 +169,83 @@ class AnalysisPipelineGUI(tk.Tk):
         # Initially hide log if Home is selected
         if notebook.tab(notebook.select(), "text") != "Home":
             self.log_frame.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+
+    # Placeholder methods for FindingAMPA commands
+    def _run_findingampa_create_tomograms(self):
+        self._run_findingampa_command("create-tomograms")
+    def _run_findingampa_ddw(self):
+        self._run_findingampa_command("ddw")
+    def _run_findingampa_annotate_membranes(self):
+        self._run_findingampa_command("annotate-membranes")
+    def _run_findingampa_match_aunps(self):
+        self._run_findingampa_command("match-aunps")
+    def _run_findingampa_new_annotate_aunps(self):
+        self._run_findingampa_command("new-annotate-aunps")
+    def _run_findingampa_render_active_zonograms(self):
+        self._run_findingampa_command("render-active-zonograms")
+    def _run_findingampa_select_aunp_picks(self):
+        self._run_findingampa_command("select-aunp-picks")
+
+    # Add this new method to toggle the directory input
+    def _toggle_findingampa_single_dir(self):
+        if self.findingampa_single_mode.get():
+            self.single_dir_label.pack(side=tk.LEFT, padx=(10, 0))
+            self.single_dir_entry.pack(side=tk.LEFT, padx=(5, 0))
+            self.single_dir_browse.pack(side=tk.LEFT, padx=5)
+        else:
+            self.single_dir_label.pack_forget()
+            self.single_dir_entry.pack_forget()
+            self.single_dir_browse.pack_forget()
+    # Add this new method to browse for a directory
+    def _browse_findingampa_single_dir(self):
+        path = filedialog.askdirectory(title="Select tomogram directory", initialdir=".")
+        if path:
+            self.findingampa_single_dir.set(path)
+    # Update _run_findingampa_command to use single mode if checked
+    def _run_findingampa_command(self, command):
+        # For DDW, require a model selection and pass as positional argument
+        extra_args = []
+        if command == "ddw":
+            model = self.ddw_flag_var.get()
+            if not model:
+                self._log("Please select a model (k3, falcon, or falconczi) for DDW.\n")
+                return
+            extra_args.append(model)
+        if self.findingampa_single_mode.get() and self.findingampa_single_dir.get():
+            # Run in the selected directory only
+            cli = ["finding_ampa", command] + extra_args
+            self._log(f"Running (single tomogram): {' '.join(cli)} in {self.findingampa_single_dir.get()}\n")
+            env = os.environ.copy()
+            threading.Thread(target=self._run_subprocess, args=(cli, env, self.findingampa_single_dir.get())).start()
+        else:
+            # Run for all tomograms in CSV, using best_alignment dir for each
+            csv_path = self.csv_path.get()
+            root_dir = self.root_dir.get()
+            if not csv_path or not root_dir:
+                self._log("CSV and root directory must be set to run for all tomograms.\n")
+                return
+            import csv as _csv, os as _os
+            with open(csv_path, newline='') as f:
+                reader = _csv.DictReader(f)
+                for row in reader:
+                    set_name = row.get('set')
+                    tomo_name = row.get('tomogram')
+                    if not set_name or not tomo_name:
+                        continue
+                    best_align_dir = _os.path.join(root_dir, set_name, "TOP_TOMOS", tomo_name, "best_alignment")
+                    if not _os.path.isdir(best_align_dir):
+                        self._log(f"Skipping missing directory: {best_align_dir}\n")
+                        continue
+                    cli = ["finding_ampa", command] + extra_args
+                    self._log(f"Running: {' '.join(cli)} in {best_align_dir}\n")
+                    env = os.environ.copy()
+                    threading.Thread(target=self._run_subprocess, args=(cli, env, best_align_dir)).start()
+
+    def _run_findingampa_checked(self):
+        # Run all checked commands in order from top to bottom
+        for (label, command), var in zip(self.findingampa_commands, self.findingampa_check_vars):
+            if var.get():
+                self._run_findingampa_command(command)
 
     def _build_tab_content(self, tab, step):
         # For all tabs after home, use a horizontal layout
@@ -212,8 +345,8 @@ class AnalysisPipelineGUI(tk.Tk):
             env["TOMO_ROOT_BASE"] = self.root_dir.get()
         threading.Thread(target=self._run_subprocess, args=(cli, env)).start()
 
-    def _run_subprocess(self, cli, env):
-        self._current_process = subprocess.Popen(cli, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    def _run_subprocess(self, cli, env, cwd=None):
+        self._current_process = subprocess.Popen(cli, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, cwd=cwd)
         try:
             for line in self._current_process.stdout:
                 self._log(line)

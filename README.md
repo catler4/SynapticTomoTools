@@ -5,8 +5,7 @@
 ╚═╗└┬┘│││├─┤├─┘ │ ││   ║ │ │││││ │ ║ │ ││ ││  └─┐
 ╚═╝ ┴ ┘└┘┴ ┴┴   ┴ ┴└─┘ ╩ └─┘┴ ┴└─┘ ╩ └─┘└─┘┴─┘└─┘
 ```
-A Python toolkit for running various analyses on cryo-electron tomography (cryo-ET) data,  
-with a focus on synaptic structures.
+A Python toolkit for running various analyses on cryo-electron tomography (cryo-ET) data, with a focus on synaptic structures.
 
 ---
 
@@ -25,7 +24,11 @@ with a focus on synaptic structures.
 
 ## ⏯️ Workflow
 
-Modules should be run in the following order for all analyses to be completed:
+Before running analysis modules, tilt series should first be processed using etomo within IMOD and then tomograms should be reconstructed and further processed using the findingampa preprocessing pipeline, which is installed as a python package within the SynapticTomoTools environment. Within the findingampa pipeline, tomogram reconstruction, denoising (using DeepDeWedge), membrane segmentation (using Membrain), membrane annotation (manual input using Blender), and AuNP picking (custom template matching approach constrained to active zones) will be carried out.
+
+Following findingampa pipeline processing, the following analysis modules can be run.
+
+Modules should be run in the following order:
 
 1. activezone
 2. vesicles
@@ -243,10 +246,11 @@ You can also run the analysis pipeline using a graphical interface:
   ```bash
   python scripts/analysis_pipeline_gui.py
   ```  
-  ![SynapticTomoTools GUI](figures/gui_screenshot.png)
+  ![SynapticTomoTools GUI](figures/gui_screenshot_1.png)
   
 - The GUI provides:
   - A Home tab to select your tomogram CSV and root directory (with browse buttons)
+  - A FindingAMPA tab to run commands from the FindingAMPA github repo (preprocessing for this workflow)
   - Tabs for each analysis step (Active Zone, Vesicles, AuNPs, Visualization, Full Pipeline)
   - Figure previews for each analysis step
   - Run controls and checkboxes for key CLI flags (rerun, delete-results, check-files)
@@ -256,6 +260,9 @@ You can also run the analysis pipeline using a graphical interface:
 
   ![SynapticTomoTools GUI](figures/gui_screenshot_2.png)
   ![SynapticTomoTools GUI](figures/gui_screenshot_3.png)
+  ![SynapticTomoTools GUI](figures/gui_screenshot_4.png)
+  ![SynapticTomoTools GUI](figures/gui_screenshot_5.png)
+  ![SynapticTomoTools GUI](figures/gui_screenshot_6.png)
 
 ---
 
