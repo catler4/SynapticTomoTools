@@ -52,7 +52,7 @@ pip install -r requirements.txt
 
 ## 🖥️ Graphical User Interface (GUI)
 
-You can also run the analysis pipeline using a graphical interface:
+You can run the analysis pipeline using a graphical interface:
 
 - Launch the GUI with:
   ```bash
@@ -79,6 +79,8 @@ You can also run the analysis pipeline using a graphical interface:
 ---
 
 ### Command Line Interface
+
+You can also run the analysis from the command line.
 
 Run from the project root:
 
