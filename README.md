@@ -193,6 +193,7 @@ python -m src.synaptic_tomo_tools.cli --analysis all
 | `--delete-results`          | **Delete all analysis results files before running analysis**                                    |
 | `--check-files`             | Check that all expected files for the tomograms listed in the CSV are present in the expected locations. No analysis is run. |
 | `--test`                    | Use local test data roots and default to `data/tomograms-test.csv` unless `--csv` is specified. All test set roots are set relative to the repo root. Supported test sets: 15F1, 5F11, 15F1and5F11, 15F1and5F11dimer, 11B8, unlabeled. |
+| `--generate-pdf-summary`   | Generate a PDF summary for all tomograms at the end of the analysis pipeline. This will run the PDF summary script automatically after all analyses and exports are complete. |
 
 ### Example: Active Zone Analysis
 
@@ -247,6 +248,30 @@ python -m src.synaptic_tomo_tools.cli --help
 
 ---
 
+## 🖥️ Graphical User Interface (GUI)
+
+You can also run the analysis pipeline using a graphical interface:
+
+- Launch the GUI with:
+  ```bash
+  python scripts/analysis_pipeline_gui.py
+  ```  
+  
+  ```markdown
+  ![SynapticTomoTools GUI](figures/gui_screenshot.png)
+  ```
+  
+- The GUI provides:
+  - A Home tab to select your tomogram CSV and root directory (with browse buttons)
+  - Tabs for each analysis step (Active Zone, Vesicles, AuNPs, Visualization, Full Pipeline)
+  - Figure previews for each analysis step
+  - Run controls and checkboxes for key CLI flags (rerun, delete-results, check-files)
+  - Live log output for all analysis steps
+  - Buttons to generate and view the PDF summary directly from the GUI
+- The GUI uses the same CLI workflow under the hood, so all results and outputs are identical to running the CLI directly.
+
+---
+
 ## Outputs
 
 - **Active zone results:**
@@ -278,5 +303,3 @@ python -m src.synaptic_tomo_tools.cli --help
     - `results/visualizations/` — copies of all per-tomogram images for easy access
 
 ---
-
-

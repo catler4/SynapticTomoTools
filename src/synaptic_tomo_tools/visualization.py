@@ -207,7 +207,7 @@ def load_postsynaptic_active_zone_coords(tomo_path):
     coords = [np.loadtxt(f) for f in files if f.exists()]
     return coords
 
-def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None):
+def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None, rerun=False):
     """Generate 2D overlay plot and save to file. Optionally filter AuNPs by active zone indices."""
     vesicles = load_vesicles(tomo_path)
     pre_mem = load_membrane_coords(tomo_path, 'presynatptic')
@@ -228,10 +228,13 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None)
     z_center = int(np.mean(azs_pre[0][:,2])) if azs_pre else None
     print(f"Using z_center: {z_center}")
     slice2d, zc = load_tomogram_slice(tomo_path, z_center)
-    
+
     if slice2d is None:
         print(f"Could not load tomogram slice for {tomo_path}")
         return
+
+    # Contrast adjustment: use 2nd and 98th percentiles for vmin/vmax
+    vmin, vmax = np.percentile(slice2d, [2, 98])
     
     # Filter objects for the slice
     z_thresh = 5  # Increased from 2 to 5 pixels
@@ -259,8 +262,12 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None)
     tomo_name = Path(tomo_path).name
     
     # Version 1: Vesicles and Active Zones
-    fig1, ax1 = plt.subplots(figsize=(12, 12))
-    ax1.imshow(slice2d, cmap='gray')
+    output_file1 = output_dir / f"{tomo_name}_vesicles_active_zones.png"
+    if output_file1.exists() and not rerun:
+        print(f"Skipping {output_file1}, already exists.")
+    else:
+        fig1, ax1 = plt.subplots(figsize=(12, 12))
+        ax1.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax)
     
     # Overlay vesicles with transparency
     for v in vesicles_in_slice:
@@ -301,15 +308,17 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None)
     ax1.set_xlabel('X (pixels)')
     ax1.set_ylabel('Y (pixels)')
     
-    # Save version 1
-    output_file1 = output_dir / f"{tomo_name}_vesicles_active_zones.png"
     plt.savefig(output_file1, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved vesicles and active zones: {output_file1}")
     
     # Version 2: Vesicles and AuNPs
-    fig2, ax2 = plt.subplots(figsize=(12, 12))
-    ax2.imshow(slice2d, cmap='gray')
+    output_file2 = output_dir / f"{tomo_name}_vesicles_aunps.png"
+    if output_file2.exists() and not rerun:
+        print(f"Skipping {output_file2}, already exists.")
+    else:
+        fig2, ax2 = plt.subplots(figsize=(12, 12))
+        ax2.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax)
     
     # Overlay vesicles with transparency
     for v in vesicles_in_slice:
@@ -388,15 +397,17 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None)
     ax2.set_xlabel('X (pixels)')
     ax2.set_ylabel('Y (pixels)')
     
-    # Save version 2
-    output_file2 = output_dir / f"{tomo_name}_vesicles_aunps.png"
     plt.savefig(output_file2, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved vesicles and AuNPs: {output_file2}")
     
     # Version 3: Combined - Vesicles, Active Zones, AuNPs, and Fusion Sites
-    fig3, ax3 = plt.subplots(figsize=(12, 12))
-    ax3.imshow(slice2d, cmap='gray')
+    output_file3 = output_dir / f"{tomo_name}_combined.png"
+    if output_file3.exists() and not rerun:
+        print(f"Skipping {output_file3}, already exists.")
+    else:
+        fig3, ax3 = plt.subplots(figsize=(12, 12))
+        ax3.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax)
     
     # Overlay vesicles with transparency
     for v in vesicles_in_slice:
@@ -487,62 +498,63 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None)
     ax3.set_xlabel('X (pixels)')
     ax3.set_ylabel('Y (pixels)')
     
-    # Save version 3
-    output_file3 = output_dir / f"{tomo_name}_combined.png"
     plt.savefig(output_file3, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved combined visualization: {output_file3}")
 
     # Version 4: Vesicles colored by average signal intensity
-    fig4, ax4 = plt.subplots(figsize=(12, 12))
-    ax4.imshow(slice2d, cmap='gray')
-    # Gather signal values for color mapping
-    vesicle_signals = [v.get('average_signal', 0.0) for v in vesicles_in_slice]
-    # Normalize signals per tomogram
-    if len(vesicle_signals) == 0 or np.all(np.array(vesicle_signals) == vesicle_signals[0]):
-        norm = plt.Normalize(vmin=0, vmax=1)
-        colors = ['gray'] * len(vesicles_in_slice)
-        vesicle_signals_norm = vesicle_signals
-    else:
-        min_signal = min(vesicle_signals)
-        max_signal = max(vesicle_signals)
-        if max_signal > min_signal:
-            vesicle_signals_norm = [(s - min_signal) / (max_signal - min_signal) for s in vesicle_signals]
-        else:
-            vesicle_signals_norm = [0.0 for s in vesicle_signals]
-        norm = plt.Normalize(vmin=0, vmax=1)
-        cmap = plt.get_cmap('plasma')
-        colors = [cmap(norm(s)) for s in vesicle_signals_norm]
-    # Draw filled vesicles
-    for v, color in zip(vesicles_in_slice, colors):
-        c = np.array(v['center'])
-        r = v['radius']
-        circ = Circle((c[0], c[1]), r, color=color, fill=True, lw=0, alpha=0.8)
-        ax4.add_patch(circ)
-    # Overlay vesicle outlines as in original
-    for v in vesicles_in_slice:
-        c = np.array(v['center'])
-        r = v['radius']
-        circ = Circle((c[0], c[1]), r, color='black', fill=False, lw=1, alpha=0.7)
-        ax4.add_patch(circ)
-    # Overlay presynaptic active zone with transparent red
-    for coords in azs_pre_in_slice:
-        ax4.scatter(coords[:,0], coords[:,1], color='red', s=3, alpha=0.1)
-    # Overlay postsynaptic active zone with transparent green
-    for coords in azs_post_in_slice:
-        ax4.scatter(coords[:,0], coords[:,1], color='green', s=3, alpha=0.1)
-    # Add colorbar
-    sm = plt.cm.ScalarMappable(cmap='plasma', norm=norm)
-    sm.set_array([])
-    cbar = plt.colorbar(sm, ax=ax4, fraction=0.046, pad=0.04)
-    cbar.set_label('Normalized Vesicle Signal Intensity (per tomogram)')
-    ax4.set_title(f'Vesicles Colored by Normalized Signal Intensity - {tomo_name}')
-    ax4.set_xlabel('X (pixels)')
-    ax4.set_ylabel('Y (pixels)')
     output_file4 = output_dir / f"{tomo_name}_vesicles_signal.png"
-    plt.savefig(output_file4, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved vesicles colored by signal: {output_file4}")
+    if output_file4.exists() and not rerun:
+        print(f"Skipping {output_file4}, already exists.")
+    else:
+        fig4, ax4 = plt.subplots(figsize=(12, 12))
+        ax4.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax)
+        # Gather signal values for color mapping
+        vesicle_signals = [v.get('average_signal', 0.0) for v in vesicles_in_slice]
+        # Normalize signals per tomogram
+        if len(vesicle_signals) == 0 or np.all(np.array(vesicle_signals) == vesicle_signals[0]):
+            norm = plt.Normalize(vmin=0, vmax=1)
+            colors = ['gray'] * len(vesicles_in_slice)
+            vesicle_signals_norm = vesicle_signals
+        else:
+            min_signal = min(vesicle_signals)
+            max_signal = max(vesicle_signals)
+            if max_signal > min_signal:
+                vesicle_signals_norm = [(s - min_signal) / (max_signal - min_signal) for s in vesicle_signals]
+            else:
+                vesicle_signals_norm = [0.0 for s in vesicle_signals]
+            norm = plt.Normalize(vmin=0, vmax=1)
+            cmap = plt.get_cmap('plasma')
+            colors = [cmap(norm(s)) for s in vesicle_signals_norm]
+        # Draw filled vesicles
+        for v, color in zip(vesicles_in_slice, colors):
+            c = np.array(v['center'])
+            r = v['radius']
+            circ = Circle((c[0], c[1]), r, color=color, fill=True, lw=0, alpha=0.8)
+            ax4.add_patch(circ)
+        # Overlay vesicle outlines as in original
+        for v in vesicles_in_slice:
+            c = np.array(v['center'])
+            r = v['radius']
+            circ = Circle((c[0], c[1]), r, color='black', fill=False, lw=1, alpha=0.7)
+            ax4.add_patch(circ)
+        # Overlay presynaptic active zone with transparent red
+        for coords in azs_pre_in_slice:
+            ax4.scatter(coords[:,0], coords[:,1], color='red', s=3, alpha=0.1)
+        # Overlay postsynaptic active zone with transparent green
+        for coords in azs_post_in_slice:
+            ax4.scatter(coords[:,0], coords[:,1], color='green', s=3, alpha=0.1)
+        # Add colorbar
+        sm = plt.cm.ScalarMappable(cmap='plasma', norm=norm)
+        sm.set_array([])
+        cbar = plt.colorbar(sm, ax=ax4, fraction=0.046, pad=0.04)
+        cbar.set_label('Normalized Vesicle Signal Intensity (per tomogram)')
+        ax4.set_title(f'Vesicles Colored by Normalized Signal Intensity - {tomo_name}')
+        ax4.set_xlabel('X (pixels)')
+        ax4.set_ylabel('Y (pixels)')
+        plt.savefig(output_file4, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"Saved vesicles colored by signal: {output_file4}")
 
     # --- AuNP Cluster Visualization ---
     # Try to load cluster assignments from aunp_clusters.star or aunp_nearest_neighbor_distances.csv
@@ -574,7 +586,7 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None)
         colors = [cluster_color_map.get(c, (0.5, 0.5, 0.5, 1.0)) for c in clusters]
         # 1. Overlay all AuNPs on the combined visualization, colored by cluster
         fig, ax = plt.subplots(figsize=(12, 12))
-        ax.imshow(slice2d, cmap='gray')
+        ax.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax)
         # Plot all AuNPs
         ax.scatter(aunp_clusters['faCoordinateX'], aunp_clusters['faCoordinateY'],
                    c=colors, s=40, edgecolor='k', linewidth=0.5, alpha=0.9, label='AuNPs (clustered)')
@@ -590,9 +602,12 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None)
         output_dir_viz = Path('results/visualizations')
         output_dir_viz.mkdir(parents=True, exist_ok=True)
         out_combined = output_dir_viz / f"{tomo_name}_combined_aunpclusters.png"
-        plt.savefig(out_combined, dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f"Saved combined AuNP cluster overlay: {out_combined}")
+        if out_combined.exists() and not rerun:
+            print(f"Skipping {out_combined}, already exists.")
+        else:
+            plt.savefig(out_combined, dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"Saved combined AuNP cluster overlay: {out_combined}")
         # 2. Save a separate image showing all AuNPs colored by cluster, best 2D projection
         coords = np.stack([aunp_clusters['faCoordinateX'],
                           aunp_clusters['faCoordinateY'],
@@ -610,9 +625,12 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None)
         ax.set_title(f"{tomo_name} - AuNP Clusters (Best 2D Projection)")
         ax.legend(handles=legend_elements, loc='best')
         out_clusters = output_dir_viz / f"{tomo_name}_aunpclusters.png"
-        plt.savefig(out_clusters, dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f"Saved AuNP cluster summary image: {out_clusters}")
+        if out_clusters.exists() and not rerun:
+            print(f"Skipping {out_clusters}, already exists.")
+        else:
+            plt.savefig(out_clusters, dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"Saved AuNP cluster summary image: {out_clusters}")
         # Save also to the tomogram's own visualization directory
         tomo_viz_dir = Path(tomo_path) / "best_alignment" / "STT_results" / "visualizations"
         tomo_viz_dir.mkdir(parents=True, exist_ok=True)
@@ -620,7 +638,7 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None)
         out_clusters_tomo = tomo_viz_dir / f"{tomo_name}_aunpclusters.png"
         # Save the same figures to the tomogram's visualization directory
         plt.figure(figsize=(12, 12))
-        plt.imshow(slice2d, cmap='gray')
+        plt.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax)
         plt.scatter(aunp_clusters['faCoordinateX'], aunp_clusters['faCoordinateY'],
                     c=colors, s=40, edgecolor='k', linewidth=0.5, alpha=0.9, label='AuNPs (clustered)')
         plt.title(f"{tomo_name} - Combined Overlay with AuNP Clusters")

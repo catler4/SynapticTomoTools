@@ -26,3 +26,6 @@ imageio>=2.9
 
 # Optional dependencies for analysis scripts
 seaborn>=0.11       # Used in analysis scripts for enhanced plotting
+reportlab
+pillow
+PyPDF2

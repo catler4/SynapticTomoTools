@@ -17,15 +17,23 @@ except ImportError:
     plot_tomogram_overlays = None
 
 # Map each tomogram set name to its specific root directory
-SET_ROOTS = {
-    "15F1": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1_tomograms/TOP_TOMOS"),
-    "5F11": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/5F11_tomograms/TOP_TOMOS"),
-    "15F1and5F11": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1and5F11_tomograms/TOP_TOMOS"),
-    "15F1and5F11dimer": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1and5F11dimer_tomograms/TOP_TOMOS"),
-    "11B8": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/11B8_tomograms/TOP_TOMOS"),
-    "unlabeled": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/unlabeled_tomograms/TOP_TOMOS"),
-    # Add more sets here if needed
-}
+TOMO_ROOT_BASE = os.environ.get("TOMO_ROOT_BASE")
+if TOMO_ROOT_BASE:
+    # Dynamically construct SET_ROOTS from TOMO_ROOT_BASE, with TOP_TOMOS subdir
+    SET_ROOTS = {}
+    SET_NAMES = ["15F1", "5F11", "15F1and5F11", "15F1and5F11dimer", "11B8", "unlabeled"]
+    for set_name in SET_NAMES:
+        SET_ROOTS[set_name] = Path(TOMO_ROOT_BASE) / set_name / "TOP_TOMOS"
+else:
+    SET_ROOTS = {
+        "15F1": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1_tomograms/TOP_TOMOS"),
+        "5F11": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/5F11_tomograms/TOP_TOMOS"),
+        "15F1and5F11": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1and5F11_tomograms/TOP_TOMOS"),
+        "15F1and5F11dimer": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1and5F11dimer_tomograms/TOP_TOMOS"),
+        "11B8": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/11B8_tomograms/TOP_TOMOS"),
+        "unlabeled": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/unlabeled_tomograms/TOP_TOMOS"),
+        # Add more sets here if needed
+    }
 
 def load_tomograms(csv_path, analysis_type, set_name=None):
     """
@@ -200,9 +208,10 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False):
 
         # Check if all expected visualization files exist and skip_completed is True
         expected_files = [
-            viz_output_dir / f"{tomogram_name}_activezone.png",
-            viz_output_dir / f"{tomogram_name}_aunps.png",
+            viz_output_dir / f"{tomogram_name}_vesicles_active_zones.png",
+            viz_output_dir / f"{tomogram_name}_vesicles_aunps.png",
             viz_output_dir / f"{tomogram_name}_combined.png",
+            viz_output_dir / f"{tomogram_name}_vesicles_signal.png",
         ]
         if all(f.exists() for f in expected_files) and not rerun:
             print(f"Skipping visualization for {tomogram_name} (already completed)")
@@ -219,7 +228,7 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False):
             else:
                 az_indices = [int(x) for x in az_str.split(",") if x.strip().isdigit()]
             # Generate the three visualization types in the tomogram's directory
-            plot_tomogram_overlays(tomo, viz_output_dir, az_indices)
+            plot_tomogram_overlays(tomo, viz_output_dir, az_indices, rerun=rerun)
             
             # Copy the generated files to the combined directory with tomogram name prefix
             for viz_file in viz_output_dir.glob(f"{tomogram_name}_*.png"):
@@ -371,6 +380,10 @@ def main():
         "--check-files", action="store_true",
         help="Only check that all expected files for the tomograms listed in the CSV are present in the expected locations."
     )
+    parser.add_argument(
+        "--generate-pdf-summary", action="store_true",
+        help="Generate PDF summary for all tomograms at the end of the analysis pipeline."
+    )
 
     args = parser.parse_args()
 
@@ -421,14 +434,15 @@ def main():
                 missing_files.append("presynaptic membrane files (presynapticmembranes_*.txt)")
             if not post_mem:
                 missing_files.append("postsynaptic membrane files (postsynapticmembranes_*.txt)")
-            # Check for active zone segmentations
-            az_dir = base.parent / "STT_results" / "active_zones"
-            az_pre = list(az_dir.glob("*_pre.txt"))
-            az_post = list(az_dir.glob("*_post.txt"))
-            if not az_pre:
-                missing_files.append("active zone pre files (*_pre.txt)")
-            if not az_post:
-                missing_files.append("active zone post files (*_post.txt)")
+            # Check for active zone segmentations only if not running activezone or all
+            if args.analysis not in ["activezone", "all"]:
+                az_dir = base.parent / "STT_results" / "active_zones"
+                az_pre = list(az_dir.glob("*_pre.txt"))
+                az_post = list(az_dir.glob("*_post.txt"))
+                if not az_pre:
+                    missing_files.append("active zone pre files (*_pre.txt)")
+                if not az_post:
+                    missing_files.append("active zone post files (*_post.txt)")
             # Check for MemBrain segmentation
             membrain_dir = base / "membrain"
             membrain_files = list(membrain_dir.glob("*.mrc"))
@@ -482,6 +496,17 @@ def main():
     # Always export summary CSVs at the end
     print("\nExporting all summary CSVs from stored results...")
     results_manager.export_to_csv()
+
+    # If requested, generate PDF summary at the end
+    if args.generate_pdf_summary:
+        import subprocess
+        print("\nGenerating PDF summary for all tomograms...")
+        subprocess.run([
+            sys.executable, "scripts/generate_tomogram_summary_pdf.py",
+            "--vis-dir", "results/visualizations",
+            "--data-dir", "data",
+            "--output-dir", "results/summary_pdfs"
+        ], check=True)
 
 if __name__ == "__main__":
     main()
