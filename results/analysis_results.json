@@ -186,5 +186,50 @@
       "version": "1.0",
       "set_name": "unlabeled"
     }
+  },
+  "20250228_AMmilled25-2_Position_1_7": {
+    "activezone": {
+      "results": {
+        "active_zone": {
+          "active_zone_count": 1,
+          "total_active_pre_points": 171241,
+          "total_active_post_points": 143285,
+          "avg_active_zone_area": 0.0757432095682616,
+          "distance_threshold": 40.0,
+          "active_zone_names": [
+            "active_zone_pre1_post1"
+          ],
+          "membrane_volumes": {
+            "avg_presynaptic_volume_um3": 0.020662323918600286,
+            "avg_postsynaptic_volume_um3": 0.014366161764739307,
+            "presynaptic_count": 1,
+            "postsynaptic_count": 1
+          },
+          "status": "completed"
+        },
+        "cleft_width": {
+          "average_cleft_width": 26.275301864438383,
+          "cleft_width_std": 4.397893597534324,
+          "min_cleft_width": 13.04562270610339,
+          "max_cleft_width": 39.99927514868238,
+          "active_zone_count": 1,
+          "total_measurements": 314526,
+          "individual_zone_results": {
+            "active_zone_pre1_post1": {
+              "average_cleft_width": 26.275301864438383,
+              "cleft_width_std": 4.397893597534324,
+              "min_cleft_width": 13.04562270610339,
+              "max_cleft_width": 39.99927514868238,
+              "measurement_count": 314526
+            }
+          },
+          "status": "completed"
+        }
+      },
+      "analysis_type": "activezone",
+      "timestamp": "2025-07-25T15:29:10.205384",
+      "version": "1.0",
+      "set_name": "unlabeled"
+    }
   }
 }

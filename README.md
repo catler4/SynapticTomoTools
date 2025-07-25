@@ -31,9 +31,9 @@ Following findingampa pipeline processing, the following analysis modules can be
 Modules should be run in the following order:
 
 1. activezone
-2. vesicles (signal calculation is optional, use `--calculate-vesicle-signals` flag)
+2. vesicles
 3. aunps
-4. visualization (optional)
+4. visualization
 
 ---
 
