@@ -16,6 +16,8 @@ except ImportError:
     print("Warning: Could not import visualization module. Visualizations will be skipped.")
     plot_tomogram_overlays = None
 
+from src.synaptic_tomo_tools.visualization import generate_summary_figures
+
 # Map each tomogram set name to its specific root directory
 TOMO_ROOT_BASE = os.environ.get("TOMO_ROOT_BASE")
 if TOMO_ROOT_BASE:
@@ -71,13 +73,16 @@ def load_tomograms(csv_path, analysis_type, set_name=None):
     paths = []
     for _, row in filtered.iterrows():
         row: pd.Series  # type hint for linter
-        root = SET_ROOTS.get(str(row["set"]))
+        set_name = str(row["set"])
+        root = SET_ROOTS.get(set_name)
         if root is None:
-            raise ValueError(f"No root path defined for set: {row['set']}")
+            print(f"Warning: No root path defined for set: {set_name}. Using default path.")
+            # Use a default path structure for missing sets
+            root = Path("data") / f"{set_name}_tomograms" / "TOP_TOMOS"
         full_path = root / row["tomoname"]
         # Get aunp_active_zones if present, else empty string
         aunp_active_zones = row.get("aunp_active_zones", "") if "aunp_active_zones" in row else ""
-        paths.append((full_path, row["set"], aunp_active_zones))
+        paths.append((full_path, set_name, aunp_active_zones))
 
     return paths
 
@@ -139,6 +144,8 @@ def print_aunps_ascii_art():
 """
     print(aunps_art)
 
+
+
 def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True):
     if print_ascii:
         print_synapse_ascii_art()
@@ -161,7 +168,7 @@ def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True):
         }
         results_manager.store_tomogram_results(tomogram_name, 'activezone', combined_results, overwrite=rerun, set_name=set_name)
 
-def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True):
+def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True, calculate_signals=False):
     if print_ascii:
         print_synapse_ascii_art()
         print_vesicle_ascii_art()
@@ -176,7 +183,7 @@ def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True):
             print(f"Skipping vesicle analysis for {tomogram_name} (already completed)")
             continue
         print(f"Running vesicle analysis on {tomogram_name}")
-        vesicle_results = detect_vesicles(tomo)
+        vesicle_results = detect_vesicles(tomo, set_name=set_name, calculate_signals=calculate_signals)
         distance_results = measure_distances_to_az(tomo)
         combined_results = {
             'vesicle_detection': vesicle_results,
@@ -184,8 +191,11 @@ def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True):
         }
         results_manager.store_tomogram_results(tomogram_name, 'vesicles', combined_results, overwrite=rerun, set_name=set_name)
 
-def generate_visualizations(tomo_paths, results_manager, rerun=False):
+def generate_visualizations(tomo_paths, results_manager, rerun=False, print_ascii=True):
     """Generate visualization images for each tomogram after analysis is complete."""
+    if print_ascii:
+        print_synapse_ascii_art()
+    
     if plot_tomogram_overlays is None:
         print("Skipping visualization generation (visualization module not available)")
         return
@@ -246,7 +256,12 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False):
     print(f"  Individual: {viz_output_dir}")
     print(f"  Combined: {combined_viz_dir}")
 
-def run_all_analyses(tomo_paths, results_manager, rerun=False):
+    # Generate summary figures for all sets/metrics
+    print("\nGenerating summary figures by set...")
+    generate_summary_figures()
+    print("Summary figures generated.")
+
+def run_all_analyses(tomo_paths, results_manager, rerun=False, calculate_signals=False):
     """Run all analyses in the correct order: activezone, vesicles, aunps, visualizations."""
     print_synapse_ascii_art()
     print("="*80)
@@ -267,7 +282,7 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False):
     print("STEP 2: VESICLE ANALYSIS")
     print("="*80)
     vesicles_paths = [(tomo, set_name) for (tomo, set_name, _) in tomo_paths]
-    run_vesicles(vesicles_paths, results_manager, rerun, print_ascii=False)
+    run_vesicles(vesicles_paths, results_manager, rerun, print_ascii=False, calculate_signals=calculate_signals)
     
     # Step 3: AuNP Analysis
     print("\n" + "="*80)
@@ -279,7 +294,7 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False):
     print("\n" + "="*80)
     print("STEP 4: VISUALIZATION GENERATION")
     print("="*80)
-    generate_visualizations(tomo_paths, results_manager, rerun)
+    generate_visualizations(tomo_paths, results_manager, rerun, print_ascii=False)
     
     print("\n" + "="*80)
     print("ALL ANALYSES COMPLETED!")
@@ -313,7 +328,7 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True):
         else:
             az_indices = [int(x) for x in az_str.split(",") if x.strip().isdigit()]
         # Run analyses and collect results
-        aunp_results = analyze_aunps(tomo, az_indices)
+        aunp_results = analyze_aunps(tomo, az_indices, set_name=set_name)
         
         # Store combined results
         combined_results = {
@@ -345,8 +360,8 @@ def main():
         description="Run SynapticTomoTools analysis on selected tomograms."
     )
     parser.add_argument(
-        "--analysis", required=True, choices=["activezone", "vesicles", "aunps", "all"],
-        help="Which analysis to run. Use 'all' to run activezone, vesicles, aunps, and visualizations in sequence."
+        "--analysis", required=True, choices=["activezone", "vesicles", "aunps", "visualizations", "all"],
+        help="Which analysis to run. Use 'all' to run activezone, vesicles, aunps, and visualizations in sequence. Use 'visualizations' to generate images from existing analysis results."
     )
     parser.add_argument(
         "--set", default=None,
@@ -368,10 +383,7 @@ def main():
         "--results-dir", default="results",
         help="Directory to store analysis results."
     )
-    parser.add_argument(
-        "--generate-visualizations", action="store_true",
-        help="Generate visualization images for each tomogram after analysis completion."
-    )
+
     parser.add_argument(
         "--delete-results", action="store_true",
         help="Delete all analysis results files before running analysis."
@@ -383,6 +395,10 @@ def main():
     parser.add_argument(
         "--generate-pdf-summary", action="store_true",
         help="Generate PDF summary for all tomograms at the end of the analysis pipeline."
+    )
+    parser.add_argument(
+        "--calculate-vesicle-signals", action="store_true",
+        help="Calculate vesicle signals (slower but provides signal intensity data)."
     )
 
     args = parser.parse_args()
@@ -483,15 +499,13 @@ def main():
         run_activezone(activezone_paths, results_manager, rerun=args.rerun)
     elif args.analysis == "vesicles":
         vesicles_paths = [(tomo, set_name) for (tomo, set_name, _) in tomos]
-        run_vesicles(vesicles_paths, results_manager, rerun=args.rerun)
+        run_vesicles(vesicles_paths, results_manager, rerun=args.rerun, calculate_signals=args.calculate_vesicle_signals)
     elif args.analysis == "aunps":
         run_aunps(tomos, results_manager, rerun=args.rerun)
+    elif args.analysis == "visualizations":
+        generate_visualizations(tomos, results_manager, rerun=args.rerun)
     elif args.analysis == "all":
-        run_all_analyses(tomos, results_manager, rerun=args.rerun)
-    else:
-        # Generate visualizations if requested (only for individual analyses)
-        if args.generate_visualizations:
-            generate_visualizations(tomos, results_manager, rerun=args.rerun)
+        run_all_analyses(tomos, results_manager, rerun=args.rerun, calculate_signals=args.calculate_vesicle_signals)
 
     # Always export summary CSVs at the end
     print("\nExporting all summary CSVs from stored results...")

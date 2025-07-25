@@ -14,103 +14,7 @@ import json
 from .vesicles import import_presynaptic_membranes_and_active_zones
 import re
 
-def save_aunp_results_to_csv(tomogram_path, aunp_df, csv_file=None, overwrite=True):
-    tomogram_path = Path(tomogram_path)
-    tomogram_name = tomogram_path.name
-    # Extract set name from tomogram path
-    path_parts = tomogram_path.parts
-    set_name = "unknown"
-    for i, part in enumerate(path_parts):
-        if part.endswith("_tomograms") and i > 0:
-            set_name = part.replace("_tomograms", "")
-            break
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    # Summary statistics
-    n_aunps = len(aunp_df)
-    def stats(col):
-        return {
-            f'{col}_mean': float(aunp_df[col].mean()) if n_aunps else 0.0,
-            f'{col}_std': float(aunp_df[col].std()) if n_aunps else 0.0,
-            f'{col}_min': float(aunp_df[col].min()) if n_aunps else 0.0,
-            f'{col}_max': float(aunp_df[col].max()) if n_aunps else 0.0,
-        }
-    row = {
-        'tomogram_name': tomogram_name,
-        'set_name': set_name,
-        'timestamp': timestamp,
-        'aunp_count': n_aunps,
-    }
-    for col in ['nearest_neighbor_distance', 'distance_to_presynaptic', 'distance_to_postsynaptic', 'distance_to_fusion_point']:
-        row.update(stats(col))
-    # Save to CSV
-    if csv_file is None:
-        csv_file = "results/aunp_results.csv"
-    csv_path = Path(csv_file)
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    if overwrite and csv_path.exists():
-        try:
-            df_existing = pd.read_csv(csv_path)
-            df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
-            df_new = pd.DataFrame([row])
-            df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-            df_combined.to_csv(csv_path, index=False)
-            print(f"Updated AuNP results in CSV: {csv_path}")
-        except Exception as e:
-            print(f"Error updating existing CSV, creating new file: {e}")
-            df_new = pd.DataFrame([row])
-            df_new.to_csv(csv_path, index=False)
-    else:
-        if csv_path.exists():
-            df_new = pd.DataFrame([row])
-            df_new.to_csv(csv_path, mode='a', header=False, index=False)
-        else:
-            df_new = pd.DataFrame([row])
-            df_new.to_csv(csv_path, index=False)
-    print(f"Saved AuNP results to CSV: {csv_path}")
-    return csv_path
-
-def save_all_aunp_distances_to_csv(aunp_df, tomogram_path, csv_file="results/all_aunp_distances.csv"):
-    tomogram_path = Path(tomogram_path)
-    tomogram_name = tomogram_path.name
-    # Extract set name from tomogram path
-    path_parts = tomogram_path.parts
-    set_name = "unknown"
-    for i, part in enumerate(path_parts):
-        if part.endswith("_tomograms") and i > 0:
-            set_name = part.replace("_tomograms", "")
-            break
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    # Add tomogram info columns
-    aunp_df = aunp_df.copy()
-    aunp_df['tomogram_name'] = tomogram_name
-    aunp_df['set_name'] = set_name
-    aunp_df['timestamp'] = timestamp
-    # Reorder columns
-    cols_out = [
-        'tomogram_name', 'set_name', 'timestamp',
-        'active_zone', 'faCoordinateX', 'faCoordinateY', 'faCoordinateZ',
-        'nearest_neighbor_distance', 'distance_to_presynaptic', 'distance_to_postsynaptic',
-        'distance_to_fusion_point'
-    ]
-    aunp_df = aunp_df[cols_out]
-    # Create or update CSV file
-    csv_path = Path(csv_file)
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    if csv_path.exists():
-        try:
-            df_existing = pd.read_csv(csv_path)
-            # Remove existing rows for this tomogram
-            df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
-            df_new = pd.concat([df_existing, aunp_df], ignore_index=True)
-            df_new.to_csv(csv_path, index=False)
-            print(f"Updated all AuNP distances CSV: {csv_path} (added {len(aunp_df)} AuNPs from {tomogram_name})")
-        except Exception as e:
-            print(f"Error updating existing CSV, creating new file: {e}")
-            aunp_df.to_csv(csv_path, index=False)
-    else:
-        aunp_df.to_csv(csv_path, index=False)
-        print(f"Created all AuNP distances CSV: {csv_path} (added {len(aunp_df)} AuNPs from {tomogram_name})")
-    return csv_path
+# CSV export functions removed - now handled by ResultsManager
 
 def compute_fusion_points(tomogram_path, vesicle_distance_threshold=10.0, fusion_point_threshold=10.0):
     """
@@ -156,7 +60,7 @@ def compute_fusion_points(tomogram_path, vesicle_distance_threshold=10.0, fusion
     else:
         return np.zeros((0, 3))
 
-def analyze_aunps(tomogram_path, active_zone_indices=None):
+def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
     """
     Performs analysis of gold nanoparticles (AuNPs) in the tomogram.
 
@@ -286,13 +190,14 @@ def analyze_aunps(tomogram_path, active_zone_indices=None):
         print(f"Saved AuNP cluster summary to {cluster_csv}")
         # --- Append to global results/aunp_cluster_results.csv ---
         tomogram_name = Path(tomogram_path).name
-        # Extract set name from tomogram path
-        path_parts = Path(tomogram_path).parts
-        set_name = "unknown"
-        for i, part in enumerate(path_parts):
-            if part.endswith("_tomograms") and i > 0:
-                set_name = part.replace("_tomograms", "")
-                break
+        # Use provided set_name or extract from tomogram path
+        if set_name is None or set_name == "unknown":
+            path_parts = Path(tomogram_path).parts
+            set_name = "unknown"
+            for i, part in enumerate(path_parts):
+                if part.endswith("_tomograms") and i > 0:
+                    set_name = part.replace("_tomograms", "")
+                    break
         cluster_df['tomogram_name'] = tomogram_name
         cluster_df['set_name'] = set_name
         global_csv = Path("results/aunp_cluster_results.csv")
@@ -375,8 +280,29 @@ def analyze_aunps(tomogram_path, active_zone_indices=None):
     ]
     df_valid.loc[:, cols_out].to_csv(output_file, index=False)
     print(f"Saved nearest neighbor, membrane, and fusion distances for AuNPs to {output_file}")
-    # Save summary results to results/aunp_results.csv
-    save_aunp_results_to_csv(tomogram_path, df_valid)
-    # Save all per-AuNP results to results/all_aunp_distances.csv
-    save_all_aunp_distances_to_csv(df_valid, tomogram_path)
-    return df_valid.loc[:, cols_out]
+    
+    # Prepare summary statistics for ResultsManager
+    n_aunps = len(df_valid)
+    summary_stats = {
+        'aunp_count': n_aunps,
+    }
+    
+    # Calculate statistics for each distance column
+    for col in ['nearest_neighbor_distance', 'distance_to_presynaptic', 'distance_to_postsynaptic', 'distance_to_fusion_point']:
+        if col in df_valid.columns and n_aunps > 0:
+            summary_stats[f'{col}_mean'] = float(df_valid[col].mean())
+            summary_stats[f'{col}_std'] = float(df_valid[col].std())
+            summary_stats[f'{col}_min'] = float(df_valid[col].min())
+            summary_stats[f'{col}_max'] = float(df_valid[col].max())
+        else:
+            summary_stats[f'{col}_mean'] = 0.0
+            summary_stats[f'{col}_std'] = 0.0
+            summary_stats[f'{col}_min'] = 0.0
+            summary_stats[f'{col}_max'] = 0.0
+    
+    # Add cluster information if available
+    if 'aunp_cluster' in df_valid.columns:
+        n_clusters = len(df_valid['aunp_cluster'].unique()) - (1 if -1 in df_valid['aunp_cluster'].values else 0)
+        summary_stats['aunp_cluster_count'] = n_clusters
+    
+    return summary_stats

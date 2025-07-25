@@ -31,7 +31,7 @@ Following findingampa pipeline processing, the following analysis modules can be
 Modules should be run in the following order:
 
 1. activezone
-2. vesicles
+2. vesicles (signal calculation is optional, use `--calculate-vesicle-signals` flag)
 3. aunps
 4. visualization (optional)
 
@@ -92,12 +92,12 @@ python -m src.synaptic_tomo_tools.cli --analysis all
 
 | Flag                        | Description                                                                                      |
 |-----------------------------|--------------------------------------------------------------------------------------------------|
-| `--analysis`                | **Required.** Which analysis to run. Choices: `activezone`, `vesicles`, `aunps`, `all`          |
+| `--analysis`                | **Required.** Which analysis to run. Choices: `activezone`, `vesicles`, `aunps`, `visualizations`, `all` |
 | `--set`                     | (Optional) Filter tomograms by experimental set name (e.g., 15F1, unlabeled)                    |
 | `--csv`                     | Path to CSV file listing tomograms and analysis flags (default: `data/tomograms.csv`)            |
 | `--rerun`                   | Rerun analysis on already completed steps and overwrite existing results                                 |
 | `--results-dir`             | Directory to store analysis results (default: `results`)                                         |
-| `--generate-visualizations` | Generate visualization images for each tomogram after analysis completion                        |
+| `--calculate-vesicle-signals` | Calculate vesicle signal intensity (slower but provides signal data)                           |
 | `--delete-results`          | **Delete all analysis results files before running analysis**                                    |
 | `--check-files`             | Check that all expected files for the tomograms listed in the CSV are present in the expected locations. No analysis is run. |
 | `--test`                    | Use local test data roots and default to `data/tomograms-test.csv` unless `--csv` is specified. All test set roots are set relative to the repo root. Supported test sets: 15F1, 5F11, 15F1and5F11, 15F1and5F11dimer, 11B8, unlabeled. |
@@ -118,7 +118,13 @@ python -m src.synaptic_tomo_tools.cli --analysis all --test
 ### Example: Full Pipeline with All Options
 
 ```bash
-python -m src.synaptic_tomo_tools.cli --analysis all --csv data/tomograms.csv --rerun --generate-visualizations --delete-results
+python -m src.synaptic_tomo_tools.cli --analysis all --csv data/tomograms.csv --rerun --calculate-vesicle-signals --delete-results
+```
+
+### Example: Vesicle Analysis with Signal Calculation
+
+```bash
+python -m src.synaptic_tomo_tools.cli --analysis vesicles --calculate-vesicle-signals
 ```
 
 ### Test Mode

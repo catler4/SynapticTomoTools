@@ -84,13 +84,21 @@ class AnalysisPipelineGUI(tk.Tk):
     def _build_tabs(self):
         for widget in self.winfo_children():
             widget.destroy()
-        notebook = ttk.Notebook(self)
-        notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
+        
+        # Create a PanedWindow to allow resizing between tabs and log
+        self.paned_window = ttk.PanedWindow(self, orient=tk.VERTICAL)
+        self.paned_window.pack(fill=tk.BOTH, expand=True)
+        
+        # Create the notebook for tabs
+        notebook = ttk.Notebook(self.paned_window)
+        self.paned_window.add(notebook, weight=2)  # Give more weight to tabs initially
+        
         # Home tab
         home_tab = ttk.Frame(notebook)
         notebook.add(home_tab, text="Home")
         self.tabs = {"Home": home_tab}
         self._build_home_tab_content(home_tab)
+        
         # FindingAMPA Processing tab as the second tab
         findingampa_tab = ttk.Frame(notebook)
         notebook.add(findingampa_tab, text="FindingAMPA Processing")
@@ -156,23 +164,36 @@ class AnalysisPipelineGUI(tk.Tk):
             notebook.add(tab, text=step)
             self.tabs[step] = tab
             self._build_tab_content(tab, step)
-        # Log output area (revert to match analysis_pipeline_gui.py)
-        self.log_frame = ttk.Frame(self)
+        
+        # Log output area with resizable splitter
+        self.log_frame = ttk.Frame(self.paned_window)
         ttk.Label(self.log_frame, text="Log Output:").pack(anchor=tk.W)
         if self.log_text is None:
             self.log_text = scrolledtext.ScrolledText(self.log_frame, height=12, state=tk.NORMAL, font=("Courier", 10))
         self.log_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Track if log frame is currently in the paned window
+        self.log_frame_visible = False
+        
         # Show/hide log output based on tab
         def on_tab_change(event):
             tab_text = notebook.tab(notebook.select(), "text")
             if tab_text == "Home":
-                self.log_frame.pack_forget()
+                # Hide the log frame from the paned window
+                if self.log_frame_visible:
+                    self.paned_window.forget(self.log_frame)
+                    self.log_frame_visible = False
             else:
-                self.log_frame.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+                # Show the log frame in the paned window if it's not already there
+                if not self.log_frame_visible:
+                    self.paned_window.add(self.log_frame, weight=1)
+                    self.log_frame_visible = True
         notebook.bind("<<NotebookTabChanged>>", on_tab_change)
-        # Initially hide log if Home is selected
+        
+        # Initially show log frame for non-Home tabs
         if notebook.tab(notebook.select(), "text") != "Home":
-            self.log_frame.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+            self.paned_window.add(self.log_frame, weight=1)
+            self.log_frame_visible = True
 
     # Placeholder methods for FindingAMPA commands
     def _run_findingampa_create_tomograms(self):
@@ -303,6 +324,23 @@ class AnalysisPipelineGUI(tk.Tk):
         ToolTip(checkfiles_cb, "Check that all expected files for the tomograms listed in the CSV are present in the expected locations. No analysis is run.")
         # Store flag variables in the tab for access in _run_analysis
         tab._flag_vars = (rerun_var, delres_var, checkfiles_var)
+        
+        # Add calculate signals checkbox for vesicles
+        if step == "Vesicles":
+            calculate_signals_var = tk.BooleanVar()
+            calculate_signals_cb = ttk.Checkbutton(controls_frame, text="Calculate vesicle signals (slower)", variable=calculate_signals_var)
+            calculate_signals_cb.pack(anchor=tk.W)
+            ToolTip(calculate_signals_cb, "Calculate vesicle signal intensity (slower but provides signal data).")
+            tab._calculate_signals_var = calculate_signals_var
+        
+        # Add calculate signals checkbox for full pipeline
+        if step == "Full Pipeline":
+            calculate_signals_var = tk.BooleanVar()
+            calculate_signals_cb = ttk.Checkbutton(controls_frame, text="Calculate vesicle signals (slower)", variable=calculate_signals_var)
+            calculate_signals_cb.pack(anchor=tk.W)
+            ToolTip(calculate_signals_cb, "Calculate vesicle signal intensity (slower but provides signal data).")
+            tab._calculate_signals_var = calculate_signals_var
+        
         pdf_frame = None
         if step in ["Visualization", "Full Pipeline"]:
             pdf_frame = ttk.Frame(controls_frame)
@@ -339,14 +377,18 @@ class AnalysisPipelineGUI(tk.Tk):
             cli += ["--analysis", "activezone"]
         elif step == "Vesicles":
             cli += ["--analysis", "vesicles"]
+            if hasattr(tab, '_calculate_signals_var') and tab._calculate_signals_var.get():
+                cli += ["--calculate-vesicle-signals"]
         elif step == "AuNPs":
             cli += ["--analysis", "aunps"]
         elif step == "Visualization":
-            cli += ["--analysis", "all", "--generate-visualizations"]
+            cli += ["--analysis", "visualizations"]
         elif step == "Full Pipeline":
             cli += ["--analysis", "all"]
             if generate_pdf:
                 cli += ["--generate-pdf-summary"]
+            if hasattr(tab, '_calculate_signals_var') and tab._calculate_signals_var.get():
+                cli += ["--calculate-vesicle-signals"]
         # Add flags from checkboxes
         rerun_var, delres_var, checkfiles_var = getattr(tab, '_flag_vars', (None, None, None))
         if rerun_var and rerun_var.get():

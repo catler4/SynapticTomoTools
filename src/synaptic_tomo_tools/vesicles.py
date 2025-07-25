@@ -689,230 +689,19 @@ def save_nearby_vesicles(vesicles: List[Dict[str, Any]], tomogram_path,
     return nearby_results
 
 
-def save_vesicle_results_to_csv(tomogram_path, vesicle_results: Dict[str, Any], 
-                               distance_results: Dict[str, Any], csv_file = None, 
-                               overwrite: bool = True):
-    """
-    Save vesicle analysis results to CSV file with specified columns.
-    
-    Args:
-        tomogram_path: Path to the tomogram directory
-        vesicle_results: Results from detect_vesicles function
-        distance_results: Results from measure_distances_to_az function
-        csv_file: Path to CSV file (optional, will create default if not provided)
-        overwrite: If True, overwrite existing results for this tomogram. If False, append.
-    """
-    tomogram_path = Path(tomogram_path)
-    tomogram_name = tomogram_path.name
-    
-    # Extract set name from tomogram path
-    # Assuming path structure: data/set_name_tomograms/TOP_TOMOS/tomogram_name/
-    path_parts = tomogram_path.parts
-    set_name = "unknown"
-    for i, part in enumerate(path_parts):
-        if part.endswith("_tomograms") and i > 0:
-            # Extract set name by removing "_tomograms" suffix
-            set_name = part.replace("_tomograms", "")
-            break
-    
-    # Get current timestamp
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    # Extract vesicle detection results
-    vesicle_count = vesicle_results.get('vesicle_count', 0)
-    vesicle_diameters = vesicle_results.get('vesicle_diameters', [])
-    average_diameter = vesicle_results.get('average_vesicle_diameter', 0.0)
-    vesicle_detection_status = vesicle_results.get('status', 'error')
-    nearby_vesicle_count = vesicle_results.get('nearby_vesicle_count', 0)
-    # Use scaled signal values instead of raw signal values
-    average_vesicle_signal = vesicle_results.get('average_scaled_signal', 0.0)
-    min_vesicle_signal = vesicle_results.get('min_scaled_signal', 0.0)
-    max_vesicle_signal = vesicle_results.get('max_scaled_signal', 0.0)
-    signal_std = vesicle_results.get('scaled_signal_std', 0.0)
-    
-    # Extract sphericity statistics
-    average_sphericity_volume = vesicle_results.get('average_sphericity_volume', 0.0)
-    sphericity_volume_std = vesicle_results.get('sphericity_volume_std', 0.0)
-    average_sphericity_fit_quality = vesicle_results.get('average_sphericity_fit_quality', 0.0)
-    sphericity_fit_quality_std = vesicle_results.get('sphericity_fit_quality_std', 0.0)
-    average_combined_sphericity = vesicle_results.get('average_combined_sphericity', 0.0)
-    combined_sphericity_std = vesicle_results.get('combined_sphericity_std', 0.0)
-    
-    # Calculate diameter standard deviation
-    diameter_std = 0.0
-    if vesicle_diameters:
-        diameter_std = float(np.std(vesicle_diameters))
-    
-    # Extract distance measurement results
-    average_distance_to_az = distance_results.get('average_distance_to_az', 0.0)
-    min_distance_to_az = distance_results.get('min_distance_to_az', 0.0)
-    max_distance_to_az = distance_results.get('max_distance_to_az', 0.0)
-    distance_std = distance_results.get('distance_std', 0.0)
-    distance_measurements_status = distance_results.get('status', 'error')
-    
-    # Create results row
-    results_row = {
-        'tomogram_name': tomogram_name,
-        'set_name': set_name,
-        'timestamp': timestamp,
-        'vesicle_detection_vesicle_count': vesicle_count,
-        'vesicles_within_10nm': nearby_vesicle_count,
-        'vesicle_detection_average_vesicle_diameter': average_diameter,
-        'vesicle_detection_diameter_std': diameter_std,
-        'vesicle_detection_average_signal': average_vesicle_signal,
-        'vesicle_detection_min_signal': min_vesicle_signal,
-        'vesicle_detection_max_signal': max_vesicle_signal,
-        'vesicle_detection_signal_std': signal_std,
-        'vesicle_detection_status': vesicle_detection_status,
-        'distance_measurements_average_distance_to_az': average_distance_to_az,
-        'distance_measurements_min_distance_to_az': min_distance_to_az,
-        'distance_measurements_max_distance_to_az': max_distance_to_az,
-        'distance_measurements_distance_std': distance_std,
-        'distance_measurements_status': distance_measurements_status,
-        'sphericity_average_volume': average_sphericity_volume,
-        'sphericity_volume_std': sphericity_volume_std,
-        'sphericity_average_fit_quality': average_sphericity_fit_quality,
-        'sphericity_fit_quality_std': sphericity_fit_quality_std,
-        'sphericity_average_combined': average_combined_sphericity,
-        'sphericity_combined_std': combined_sphericity_std
-    }
-    
-    # Create or append to CSV file
-    if csv_file is None:
-        csv_file = "results/vesicle_results.csv"
-    
-    csv_path = Path(csv_file)
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    if overwrite and csv_path.exists():
-        # Read existing CSV and remove any existing entry for this tomogram
-        try:
-            df_existing = pd.read_csv(csv_path)
-            # Remove existing rows for this tomogram
-            df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
-            # Add new results
-            df_new = pd.DataFrame([results_row])
-            df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-            df_combined.to_csv(csv_path, index=False)
-            print(f"Updated vesicle results in CSV: {csv_path}")
-        except Exception as e:
-            print(f"Error updating existing CSV, creating new file: {e}")
-            df_new = pd.DataFrame([results_row])
-            df_new.to_csv(csv_path, index=False)
-    else:
-        # Check if CSV file exists and has headers
-        if csv_path.exists():
-            # Append to existing file
-            df_new = pd.DataFrame([results_row])
-            df_new.to_csv(csv_path, mode='a', header=False, index=False)
-        else:
-            # Create new file with headers
-            df_new = pd.DataFrame([results_row])
-            df_new.to_csv(csv_path, index=False)
-    
-    print(f"Saved vesicle results to CSV: {csv_path}")
-    return csv_path
+# CSV export functions removed - now handled by ResultsManager
 
 
-def save_all_vesicle_distances_to_csv(vesicles: List[Dict[str, Any]], tomogram_path, 
-                                     csv_file: str = "results/all_vesicle_info.csv"):
-    """
-    Save all individual vesicle-to-active zone distances to a single CSV file.
-    This file gets updated as more tomograms are analyzed.
-    
-    Args:
-        vesicles: List of vesicle dictionaries with distance_to_az values
-        tomogram_path: Path to tomogram directory
-        csv_file: Path to CSV file to save/update
-    """
-    tomogram_path = Path(tomogram_path)
-    tomogram_name = tomogram_path.name
-    
-    # Extract set name from tomogram path
-    path_parts = tomogram_path.parts
-    set_name = "unknown"
-    for i, part in enumerate(path_parts):
-        if part.endswith("_tomograms") and i > 0:
-            set_name = part.replace("_tomograms", "")
-            break
-    
-    # Get current timestamp
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    # Prepare data for each vesicle
-    vesicle_rows = []
-    for i, vesicle in enumerate(vesicles):
-        vesicle_row = {
-            'tomogram_name': tomogram_name,
-            'set_name': set_name,
-            'timestamp': timestamp,
-            'vesicle_index': i,
-            'vesicle_file_name': vesicle.get('file_name', ''),
-            'vesicle_center_x': vesicle['center'][0],
-            'vesicle_center_y': vesicle['center'][1],
-            'vesicle_center_z': vesicle['center'][2],
-            'vesicle_radius_nm': vesicle['radius'],
-            'vesicle_diameter_nm': vesicle['diameter'],
-            'vesicle_volume_nm3': vesicle['volume'],
-            'vesicle_point_count': vesicle['point_count'],
-            'closest_presynaptic_membrane': vesicle.get('closest_membrane', 'unknown'),
-            'distance_to_active_zone_nm': vesicle.get('distance_to_az', 0.0),
-            'within_10nm': vesicle.get('distance_to_az', 0.0) <= 10.0,
-            'average_signal': vesicle.get('average_signal', 0.0),
-            'scaled_signal': vesicle.get('scaled_signal', 0.0),
-            'sphericity_volume': vesicle.get('sphericity_volume', 0.0),
-            'sphericity_fit_quality': vesicle.get('sphericity_fit_quality', 0.0),
-            'mean_distance_to_center': vesicle.get('mean_distance_to_center', 0.0),
-            'std_distance_to_center': vesicle.get('std_distance_to_center', 0.0),
-            'combined_sphericity': vesicle.get('combined_sphericity', 0.0)
-        }
-        vesicle_rows.append(vesicle_row)
-    
-    # Normalize average_signal per tomogram for this batch
-    avg_signals = [row['average_signal'] for row in vesicle_rows]
-    if avg_signals and (max(avg_signals) > min(avg_signals)):
-        min_signal = min(avg_signals)
-        max_signal = max(avg_signals)
-        norm_signals = [(s - min_signal) / (max_signal - min_signal) for s in avg_signals]
-    else:
-        norm_signals = [0.0 for s in avg_signals]
-    for row, norm in zip(vesicle_rows, norm_signals):
-        row['normalized_signal'] = norm
-    
-    # Create or update CSV file
-    csv_path = Path(csv_file)
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    if csv_path.exists():
-        # Read existing CSV and remove any existing entries for this tomogram
-        try:
-            df_existing = pd.read_csv(csv_path)
-            # Remove existing rows for this tomogram
-            df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
-            # Add new vesicle rows
-            df_new = pd.DataFrame(vesicle_rows)
-            df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-            df_combined.to_csv(csv_path, index=False)
-            print(f"Updated all vesicle info CSV: {csv_path} (added {len(vesicle_rows)} vesicles from {tomogram_name})")
-        except Exception as e:
-            print(f"Error updating existing CSV, creating new file: {e}")
-            df_new = pd.DataFrame(vesicle_rows)
-            df_new.to_csv(csv_path, index=False)
-    else:
-        # Create new file
-        df_new = pd.DataFrame(vesicle_rows)
-        df_new.to_csv(csv_path, index=False)
-        print(f"Created all vesicle info CSV: {csv_path} (added {len(vesicle_rows)} vesicles from {tomogram_name})")
-    
-    return csv_path
 
 
-def detect_vesicles(tomogram_path) -> Dict[str, Any]:
+def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Dict[str, Any]:
     """
     Detect synaptic vesicles in tomogram.
     
     Args:
         tomogram_path (str or Path): Path to the tomogram file.
+        set_name (str, optional): Name of the experimental set.
+        calculate_signals (bool): Whether to calculate vesicle signals (default: False).
     
     Returns:
         Dictionary containing vesicle detection results.
@@ -944,31 +733,38 @@ def detect_vesicles(tomogram_path) -> Dict[str, Any]:
                 vesicle['distance_to_az'] = 0.0
                 vesicle['closest_membrane'] = "unknown"
         
-        # Calculate average signals inside vesicles
-        print("Loading tomogram data for signal calculation...")
-        tomogram_data = load_tomogram_data(tomogram_path)
-        
-        if tomogram_data is not None:
-            # Calculate average signals for all vesicles
-            vesicle_signals = calculate_vesicle_signals(vesicles, tomogram_data)
+        # Calculate average signals inside vesicles (only if requested)
+        if calculate_signals:
+            print("Loading tomogram data for signal calculation...")
+            tomogram_data = load_tomogram_data(tomogram_path)
             
-            # Scale signals relative to overall average
-            scaled_signals = scale_vesicle_signals(vesicle_signals)
-            
-            # Assign signals to vesicles
-            for i, vesicle in enumerate(vesicles):
-                vesicle['average_signal'] = vesicle_signals[i]
-                vesicle['scaled_signal'] = scaled_signals[i]
-            
-            print(f"Calculated signals for {len(vesicles)} vesicles")
-            print(f"Signal range: {min(vesicle_signals):.2f} to {max(vesicle_signals):.2f}")
-            print(f"Scaled signal range: {min(scaled_signals):.2f} to {max(scaled_signals):.2f}")
+            if tomogram_data is not None:
+                # Calculate average signals for all vesicles
+                vesicle_signals = calculate_vesicle_signals(vesicles, tomogram_data)
+                
+                # Scale signals relative to overall average
+                scaled_signals = scale_vesicle_signals(vesicle_signals)
+                
+                # Assign signals to vesicles
+                for i, vesicle in enumerate(vesicles):
+                    vesicle['average_signal'] = vesicle_signals[i]
+                    vesicle['scaled_signal'] = scaled_signals[i]
+                
+                print(f"Calculated signals for {len(vesicles)} vesicles")
+                print(f"Signal range: {min(vesicle_signals):.2f} to {max(vesicle_signals):.2f}")
+                print(f"Scaled signal range: {min(scaled_signals):.2f} to {max(scaled_signals):.2f}")
+            else:
+                # No tomogram data available
+                for vesicle in vesicles:
+                    vesicle['average_signal'] = 0.0
+                    vesicle['scaled_signal'] = 0.0
+                print("No tomogram data available for signal calculation")
         else:
-            # No tomogram data available
+            # Skip signal calculation for speed
             for vesicle in vesicles:
                 vesicle['average_signal'] = 0.0
                 vesicle['scaled_signal'] = 0.0
-            print("No tomogram data available for signal calculation")
+            print("Skipping signal calculation (use --calculate-signals to enable)")
         
         # Calculate sphericity for all vesicles
         print("Calculating vesicle sphericity...")
@@ -1077,19 +873,7 @@ def detect_vesicles(tomogram_path) -> Dict[str, Any]:
         # Save nearby vesicles (after overlap removal and distance calculation)
         save_nearby_vesicles(vesicles, tomogram_path, distance_threshold=10.0)
         
-        # Save to CSV with complete results
-        distance_results = {
-            'average_distance_to_az': results.get('average_distance_to_az', 0.0),
-            'min_distance_to_az': results.get('min_distance_to_az', 0.0),
-            'max_distance_to_az': results.get('max_distance_to_az', 0.0),
-            'distance_std': results.get('distance_std', 0.0),
-            'status': 'completed'
-        }
-        save_vesicle_results_to_csv(tomogram_path, results, distance_results)
-        
-        # Save all individual vesicle distances to CSV
-        save_all_vesicle_distances_to_csv(vesicles, tomogram_path)
-        
+        # CSV export now handled by ResultsManager
         return results
         
     except Exception as e:

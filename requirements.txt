@@ -9,6 +9,7 @@ mrcfile>=1.4
 
 # Plotting and visualization
 matplotlib>=3.4
+aquarel
 
 # Progress bars and CLI tools
 tqdm>=4.62

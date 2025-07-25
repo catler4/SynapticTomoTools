@@ -659,6 +659,113 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
         print(f"Also saved cluster visualizations to {tomo_viz_dir}")
     # --- End AuNP Cluster Visualization ---
 
+def generate_summary_figures():
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import os
+    # Use seaborn-v0_8-whitegrid style if available, else fallback to ggplot
+    try:
+        plt.style.use('seaborn-v0_8-whitegrid')
+    except Exception:
+        try:
+            plt.style.use('ggplot')
+            print("Warning: 'seaborn-v0_8-whitegrid' style not found. Using 'ggplot' instead.")
+        except Exception:
+            print("Warning: Could not set preferred matplotlib style. Using default.")
+    summary_dir = os.path.join('results', 'summary_pdfs')
+    os.makedirs(summary_dir, exist_ok=True)
+
+    # --- AuNP Results ---
+    aunp_path = os.path.join('results', 'aunp_results.csv')
+    if os.path.exists(aunp_path):
+        df_aunp = pd.read_csv(aunp_path)
+        if 'set_name' in df_aunp.columns:
+            for metric in ['aunp_count', 'nearest_neighbor_distance_mean']:
+                plt.figure(figsize=(8, 5))
+                df_aunp.boxplot(column=metric, by='set_name')
+                plt.title(f'{metric.replace("_", " ").title()} by Set')
+                plt.suptitle('')
+                plt.xlabel('Set')
+                plt.ylabel(metric.replace('_', ' ').title())
+                plt.tight_layout()
+                plt.savefig(os.path.join(summary_dir, f'aunp_{metric}_by_set.png'))
+                plt.close()
+            # New: AuNP density and avg distance to AZ center
+            for metric in ['aunp_density', 'distance_to_active_zone_center_mean']:
+                if metric in df_aunp.columns:
+                    plt.figure(figsize=(8, 5))
+                    df_aunp.boxplot(column=metric, by='set_name')
+                    plt.title(f'{metric.replace("_", " ").title()} by Set')
+                    plt.suptitle('')
+                    plt.xlabel('Set')
+                    plt.ylabel(metric.replace('_', ' ').title())
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(summary_dir, f'aunp_{metric}_by_set.png'))
+                    plt.close()
+
+    # --- AuNP Cluster Results ---
+    cluster_path = os.path.join('results', 'aunp_cluster_results.csv')
+    if os.path.exists(cluster_path):
+        df_cluster = pd.read_csv(cluster_path)
+        if 'set_name' in df_cluster.columns:
+            for metric in ['n_aunps', 'cluster_area', 'cluster_density']:
+                if metric in df_cluster.columns:
+                    plt.figure(figsize=(8, 5))
+                    df_cluster.boxplot(column=metric, by='set_name')
+                    plt.title(f'{metric.replace("_", " ").title()} by Set')
+                    plt.suptitle('')
+                    plt.xlabel('Set')
+                    plt.ylabel(metric.replace('_', ' ').title())
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(summary_dir, f'aunp_cluster_{metric}_by_set.png'))
+                    plt.close()
+            # Also plot number of clusters per tomogram by set
+            if 'tomogram_name' in df_cluster.columns:
+                cluster_counts = df_cluster.groupby(['set_name', 'tomogram_name']).size().reset_index(name='n_clusters')
+                plt.figure(figsize=(8, 5))
+                cluster_counts.boxplot(column='n_clusters', by='set_name')
+                plt.title('Number of AuNP Clusters per Tomogram by Set')
+                plt.suptitle('')
+                plt.xlabel('Set')
+                plt.ylabel('Number of Clusters')
+                plt.tight_layout()
+                plt.savefig(os.path.join(summary_dir, 'aunp_cluster_count_by_set.png'))
+                plt.close()
+
+    # --- Vesicle Results ---
+    vesicle_path = os.path.join('results', 'vesicle_results.csv')
+    if os.path.exists(vesicle_path):
+        df_ves = pd.read_csv(vesicle_path)
+        if 'set_name' in df_ves.columns:
+            for metric in ['vesicle_detection_vesicle_count', 'vesicles_within_10nm', 'vesicle_detection_average_vesicle_diameter']:
+                plt.figure(figsize=(8, 5))
+                df_ves.boxplot(column=metric, by='set_name')
+                plt.title(f'{metric.replace("_", " ").title()} by Set')
+                plt.suptitle('')
+                plt.xlabel('Set')
+                plt.ylabel(metric.replace('_', ' ').title())
+                plt.tight_layout()
+                plt.savefig(os.path.join(summary_dir, f'vesicle_{metric}_by_set.png'))
+                plt.close()
+
+    # --- Active Zone Results ---
+    az_path = os.path.join('results', 'activezone_results.csv')
+    if os.path.exists(az_path):
+        df_az = pd.read_csv(az_path)
+        if 'set_name' in df_az.columns:
+            for metric in ['active_zone_count', 'avg_active_zone_area', 'average_cleft_width']:
+                plt.figure(figsize=(8, 5))
+                df_az.boxplot(column=metric, by='set_name')
+                plt.title(f'{metric.replace("_", " ").title()} by Set')
+                plt.suptitle('')
+                plt.xlabel('Set')
+                plt.ylabel(metric.replace('_', ' ').title())
+                plt.tight_layout()
+                plt.savefig(os.path.join(summary_dir, f'activezone_{metric}_by_set.png'))
+                plt.close()
+
+    print(f"Summary figures saved to {summary_dir}")
+
 def main():
     """Main function to process all tomograms and generate visualizations."""
     parser = argparse.ArgumentParser(description='Generate synaptic tomogram visualizations')
@@ -701,6 +808,9 @@ def main():
             continue
     
     print(f"\nVisualization complete! Figures saved to: {output_dir.absolute()}")
+
+    # Generate summary figures for all sets/metrics
+    generate_summary_figures()
 
 if __name__ == "__main__":
     main() 

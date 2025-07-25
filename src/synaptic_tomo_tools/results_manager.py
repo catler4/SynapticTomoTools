@@ -190,9 +190,6 @@ class ResultsManager:
         # Export each analysis type to its own CSV file
         exported_files = []
         for analysis_type, rows in analysis_groups.items():
-            # Suppress CSV output for 'vesicles' and 'aunps'
-            if analysis_type in ['vesicles', 'aunps']:
-                continue
             if rows:
                 df = pd.DataFrame(rows)
                 csv_filename = f"{analysis_type}_results.csv"
