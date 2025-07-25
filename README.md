@@ -166,9 +166,11 @@ python -m src.synaptic_tomo_tools.cli --help
 
 - **Active zone results:**
   - `results/activezone_results.csv` — summary statistics for all tomograms
+  - `results/all_cleft_distances.csv` — all individual cleft width measurements for all tomograms
   - Per-tomogram results in each tomogram's `best_alignment/STT_results/active_zones/`
 - **Vesicle results:**
   - `results/vesicle_results.csv` — summary statistics for all tomograms
+  - `results/all_vesicle_data.csv` — all individual vesicle data for all tomograms
   - Per-tomogram results in each tomogram's `best_alignment/STT_results/vesicles/` (e.g., `vesicle_results.json`)
 - **AuNP results:**
   - `results/aunp_results.csv` — summary statistics for all tomograms
@@ -182,6 +184,15 @@ python -m src.synaptic_tomo_tools.cli --help
   - `results/visualizations/{tomogram_name}_aunpclusters.png`: All AuNPs colored by cluster, best 2D projection (noise in grey)
 - **Combined results:**
   - `results/analysis_results.json` — all results for all tomograms in a single JSON
+- **Summary figures and PDFs:**
+  - `results/summary_pdfs/` — summary plots by analysis type and set:
+    - `aunp_aunp_count_by_set.png` — AuNP counts by experimental set
+    - `aunp_nearest_neighbor_distance_mean_by_set.png` — Average nearest neighbor distances by set
+    - `vesicle_vesicle_detection_average_vesicle_diameter_by_set.png` — Average vesicle diameters by set
+    - `vesicle_vesicle_detection_vesicle_count_by_set.png` — Vesicle counts by set
+    - `vesicle_vesicles_within_10nm_by_set.png` — Vesicles within 10nm of active zone by set
+    - Additional AuNP metrics: density, distance to AZ center, cluster metrics
+  - `results/summary_pdfs/all_tomograms_summary.pdf` — comprehensive PDF summary of all analyses
 - **Visualizations:**
   - **Per-tomogram images:**
     - `best_alignment/STT_results/visualizations/` inside each tomogram directory:

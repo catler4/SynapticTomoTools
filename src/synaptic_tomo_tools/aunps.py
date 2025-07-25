@@ -281,6 +281,38 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
     df_valid.loc[:, cols_out].to_csv(output_file, index=False)
     print(f"Saved nearest neighbor, membrane, and fusion distances for AuNPs to {output_file}")
     
+    # --- Append to global results/all_aunp_distances.csv ---
+    tomogram_name = Path(tomogram_path).name
+    # Use provided set_name or extract from tomogram path
+    if set_name is None or set_name == "unknown":
+        path_parts = Path(tomogram_path).parts
+        set_name = "unknown"
+        for i, part in enumerate(path_parts):
+            if part.endswith("_tomograms") and i > 0:
+                set_name = part.replace("_tomograms", "")
+                break
+    
+    # Add tomogram and set info to the dataframe
+    df_valid['tomogram_name'] = tomogram_name
+    df_valid['set_name'] = set_name
+    
+    global_csv = Path("results/all_aunp_distances.csv")
+    global_csv.parent.mkdir(parents=True, exist_ok=True)
+    if global_csv.exists():
+        try:
+            df_existing = pd.read_csv(global_csv)
+            # Remove existing data for this tomogram
+            df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
+            df_combined = pd.concat([df_existing, df_valid], ignore_index=True)
+            df_combined.to_csv(global_csv, index=False)
+        except Exception as e:
+            print(f"Error updating global all_aunp_distances.csv: {e}")
+            df_valid.to_csv(global_csv, index=False)
+    else:
+        df_valid.to_csv(global_csv, index=False)
+    print(f"Appended AuNP distances to {global_csv}")
+    # --- End global results ---
+    
     # Prepare summary statistics for ResultsManager
     n_aunps = len(df_valid)
     summary_stats = {

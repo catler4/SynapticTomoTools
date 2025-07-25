@@ -795,6 +795,59 @@ def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Di
                     nearby_vesicles.append(vesicle)
             nearby_vesicle_count = len(nearby_vesicles)
             
+            # --- Append to global results/all_vesicle_data.csv ---
+            tomogram_name = Path(tomogram_path).name
+            # Use provided set_name or extract from tomogram path
+            if set_name is None or set_name == "unknown":
+                path_parts = Path(tomogram_path).parts
+                set_name = "unknown"
+                for i, part in enumerate(path_parts):
+                    if part.endswith("_tomograms") and i > 0:
+                        set_name = part.replace("_tomograms", "")
+                        break
+            
+            # Prepare individual vesicle data for CSV
+            vesicle_rows = []
+            for i, vesicle in enumerate(vesicles):
+                row = {
+                    'tomogram_name': tomogram_name,
+                    'set_name': set_name,
+                    'vesicle_id': i,
+                    'center_x': vesicle['center'][0],
+                    'center_y': vesicle['center'][1],
+                    'center_z': vesicle['center'][2],
+                    'radius': vesicle['radius'],
+                    'diameter': vesicle['diameter'],
+                    'volume': vesicle['volume'],
+                    'distance_to_az': vesicle.get('distance_to_az', 0.0),
+                    'closest_membrane': vesicle.get('closest_membrane', 'unknown'),
+                    'average_signal': vesicle.get('average_signal', 0.0),
+                    'scaled_signal': vesicle.get('scaled_signal', 0.0),
+                    'sphericity_volume': sphericities[i]['sphericity_volume'],
+                    'sphericity_fit_quality': sphericities[i]['sphericity_fit_quality'],
+                    'combined_sphericity': sphericities[i]['combined_sphericity']
+                }
+                vesicle_rows.append(row)
+            
+            # Save to global CSV
+            df_vesicles = pd.DataFrame(vesicle_rows)
+            global_csv = Path("results/all_vesicle_data.csv")
+            global_csv.parent.mkdir(parents=True, exist_ok=True)
+            if global_csv.exists():
+                try:
+                    df_existing = pd.read_csv(global_csv)
+                    # Remove existing data for this tomogram
+                    df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
+                    df_combined = pd.concat([df_existing, df_vesicles], ignore_index=True)
+                    df_combined.to_csv(global_csv, index=False)
+                except Exception as e:
+                    print(f"Error updating global all_vesicle_data.csv: {e}")
+                    df_vesicles.to_csv(global_csv, index=False)
+            else:
+                df_vesicles.to_csv(global_csv, index=False)
+            print(f"Appended {len(vesicle_rows)} vesicles to {global_csv}")
+            # --- End global results ---
+            
             # Print sphericity statistics
             print(f"Sphericity statistics:")
             print(f"  Volume-based: {np.mean(sphericity_volume):.3f} ± {np.std(sphericity_volume):.3f}")

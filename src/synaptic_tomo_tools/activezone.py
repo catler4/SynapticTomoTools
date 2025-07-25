@@ -590,6 +590,46 @@ def calculate_cleft_width(tomogram_path) -> Dict[str, Any]:
                 'individual_zone_results': cleft_results,
                 'status': 'completed'
             }
+            
+            # --- Append to global results/all_cleft_distances.csv ---
+            tomogram_name = Path(tomogram_path).name
+            # Extract set_name from tomogram path
+            path_parts = Path(tomogram_path).parts
+            set_name = "unknown"
+            for i, part in enumerate(path_parts):
+                if part.endswith("_tomograms") and i > 0:
+                    set_name = part.replace("_tomograms", "")
+                    break
+            
+            # Prepare individual cleft distance data for CSV
+            import pandas as pd
+            cleft_rows = []
+            for distance in all_distances:
+                row = {
+                    'tomogram_name': tomogram_name,
+                    'set_name': set_name,
+                    'cleft_width': distance
+                }
+                cleft_rows.append(row)
+            
+            # Save to global CSV
+            df_cleft = pd.DataFrame(cleft_rows)
+            global_csv = Path("results/all_cleft_distances.csv")
+            global_csv.parent.mkdir(parents=True, exist_ok=True)
+            if global_csv.exists():
+                try:
+                    df_existing = pd.read_csv(global_csv)
+                    # Remove existing data for this tomogram
+                    df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
+                    df_combined = pd.concat([df_existing, df_cleft], ignore_index=True)
+                    df_combined.to_csv(global_csv, index=False)
+                except Exception as e:
+                    print(f"Error updating global all_cleft_distances.csv: {e}")
+                    df_cleft.to_csv(global_csv, index=False)
+            else:
+                df_cleft.to_csv(global_csv, index=False)
+            print(f"Appended {len(cleft_rows)} cleft measurements to {global_csv}")
+            # --- End global results ---
         else:
             overall_stats = {
                 'average_cleft_width': 0.0,
