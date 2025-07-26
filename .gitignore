@@ -6,6 +6,17 @@ STT_results/
 **/STT_results/
 **/STT_results/*
 
+# Ignore results directory and its contents
+results/
+**/results/
+
+# Ignore Python compiled files
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
 # Ignore all PDF output files
 *.pdf
 results/summary_pdfs/*.pdf

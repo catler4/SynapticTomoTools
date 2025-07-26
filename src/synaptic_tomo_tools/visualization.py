@@ -389,8 +389,8 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
     legend_elements = [
         Line2D([0], [0], color='pink', lw=1.5, label='Vesicles (intersecting slice)'),
         Line2D([0], [0], color='aqua', lw=2, label='Vesicles <10 nm from AZ'),
-        plt.scatter([], [], color='gold', s=30, label='AuNPs (within ±10 nm of slice)'),
-        plt.scatter([], [], color='orange', s=100, marker='*', label='Fusion Sites (for vesicles <10 nm from AZ, within ±10 nm of slice)')
+        plt.scatter([], [], color='gold', s=30, label='AuNPs'),
+        plt.scatter([], [], color='orange', s=100, marker='*', label='Fusion Sites')
     ]
     ax2.legend(handles=legend_elements)
     ax2.set_title(f'Vesicles and AuNPs - {tomo_name}')
@@ -490,8 +490,8 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
         Line2D([0], [0], color='aqua', lw=2, label='Vesicles <10 nm from AZ'),
         Line2D([0], [0], color='red', lw=1.5, label='Presynaptic Active Zone'),
         Line2D([0], [0], color='green', lw=1.5, label='Postsynaptic Active Zone'),
-        plt.scatter([], [], color='gold', s=30, label='AuNPs (within ±10 nm of slice)'),
-        plt.scatter([], [], color='orange', s=100, marker='*', label='Fusion Sites (for vesicles <10 nm from AZ, within ±10 nm of slice)')
+        plt.scatter([], [], color='gold', s=30, label='AuNPs'),
+        plt.scatter([], [], color='orange', s=100, marker='*', label='Fusion Sites')
     ]
     ax3.legend(handles=legend_elements)
     ax3.set_title(f'Combined - Vesicles, Active Zones, AuNPs, and Fusion Sites - {tomo_name}')
@@ -662,6 +662,7 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
 def generate_summary_figures():
     import pandas as pd
     import matplotlib.pyplot as plt
+    import numpy as np
     import os
     # Use seaborn-v0_8-whitegrid style if available, else fallback to ggplot
     try:
@@ -675,33 +676,68 @@ def generate_summary_figures():
     summary_dir = os.path.join('results', 'summary_pdfs')
     os.makedirs(summary_dir, exist_ok=True)
 
+    # Define colors for different sets
+    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F']
+    
+    def create_colored_boxplot(df, column, by_column, title, ylabel, filename):
+        """Create a box plot with colored, transparent boxes for each set."""
+        plt.figure(figsize=(10, 6))
+        
+        # Get unique sets and their data
+        sets = df[by_column].unique()
+        data_by_set = [df[df[by_column] == set_name][column].dropna() for set_name in sets]
+        
+        # Convert to Angstroms if this is a distance metric
+        if 'nearest_neighbor_distance' in column or 'distance' in column:
+            data_by_set = [data * 10 for data in data_by_set]  # Convert nm to Angstroms
+            ylabel += ' (Å)'
+        
+        # Create box plot with custom colors
+        bp = plt.boxplot(data_by_set, labels=sets, patch_artist=True)
+        
+        # Color the boxes with transparency
+        for i, patch in enumerate(bp['boxes']):
+            color = colors[i % len(colors)]
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)  # Transparency
+            patch.set_edgecolor('black')
+            patch.set_linewidth(1.5)
+        
+        # Style the other elements
+        for element in ['whiskers', 'caps', 'medians']:
+            plt.setp(bp[element], color='black', linewidth=1.5)
+        
+        for flier in bp['fliers']:
+            flier.set(marker='o', markerfacecolor='red', markersize=4, alpha=0.7)
+        
+        plt.title(title, fontsize=14, fontweight='bold')
+        plt.xlabel('Set', fontsize=12)
+        plt.ylabel(ylabel, fontsize=12)
+        plt.xticks(rotation=45)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(summary_dir, filename), dpi=300, bbox_inches='tight')
+        plt.close()
+
     # --- AuNP Results ---
-    aunp_path = os.path.join('results', 'aunp_results.csv')
+    aunp_path = os.path.join('results', 'aunps_results.csv')
     if os.path.exists(aunp_path):
         df_aunp = pd.read_csv(aunp_path)
         if 'set_name' in df_aunp.columns:
-            for metric in ['aunp_count', 'nearest_neighbor_distance_mean']:
-                plt.figure(figsize=(8, 5))
-                df_aunp.boxplot(column=metric, by='set_name')
-                plt.title(f'{metric.replace("_", " ").title()} by Set')
-                plt.suptitle('')
-                plt.xlabel('Set')
-                plt.ylabel(metric.replace('_', ' ').title())
-                plt.tight_layout()
-                plt.savefig(os.path.join(summary_dir, f'aunp_{metric}_by_set.png'))
-                plt.close()
+            for metric in ['aunp_analysis_aunp_count', 'aunp_analysis_nearest_neighbor_distance_mean']:
+                if metric in df_aunp.columns:
+                    title = f'{metric.replace("aunp_analysis_", "").replace("_", " ").title()} by Set'
+                    ylabel = metric.replace('aunp_analysis_', '').replace('_', ' ').title()
+                    filename = f'aunp_{metric.replace("aunp_analysis_", "")}_by_set.png'
+                    create_colored_boxplot(df_aunp, metric, 'set_name', title, ylabel, filename)
+            
             # New: AuNP density and avg distance to AZ center
             for metric in ['aunp_density', 'distance_to_active_zone_center_mean']:
                 if metric in df_aunp.columns:
-                    plt.figure(figsize=(8, 5))
-                    df_aunp.boxplot(column=metric, by='set_name')
-                    plt.title(f'{metric.replace("_", " ").title()} by Set')
-                    plt.suptitle('')
-                    plt.xlabel('Set')
-                    plt.ylabel(metric.replace('_', ' ').title())
-                    plt.tight_layout()
-                    plt.savefig(os.path.join(summary_dir, f'aunp_{metric}_by_set.png'))
-                    plt.close()
+                    title = f'{metric.replace("_", " ").title()} by Set'
+                    ylabel = metric.replace('_', ' ').title()
+                    filename = f'aunp_{metric}_by_set.png'
+                    create_colored_boxplot(df_aunp, metric, 'set_name', title, ylabel, filename)
 
     # --- AuNP Cluster Results ---
     cluster_path = os.path.join('results', 'aunp_cluster_results.csv')
@@ -710,43 +746,30 @@ def generate_summary_figures():
         if 'set_name' in df_cluster.columns:
             for metric in ['n_aunps', 'cluster_area', 'cluster_density']:
                 if metric in df_cluster.columns:
-                    plt.figure(figsize=(8, 5))
-                    df_cluster.boxplot(column=metric, by='set_name')
-                    plt.title(f'{metric.replace("_", " ").title()} by Set')
-                    plt.suptitle('')
-                    plt.xlabel('Set')
-                    plt.ylabel(metric.replace('_', ' ').title())
-                    plt.tight_layout()
-                    plt.savefig(os.path.join(summary_dir, f'aunp_cluster_{metric}_by_set.png'))
-                    plt.close()
+                    title = f'{metric.replace("_", " ").title()} by Set'
+                    ylabel = metric.replace('_', ' ').title()
+                    filename = f'aunp_cluster_{metric}_by_set.png'
+                    create_colored_boxplot(df_cluster, metric, 'set_name', title, ylabel, filename)
+            
             # Also plot number of clusters per tomogram by set
             if 'tomogram_name' in df_cluster.columns:
                 cluster_counts = df_cluster.groupby(['set_name', 'tomogram_name']).size().reset_index(name='n_clusters')
-                plt.figure(figsize=(8, 5))
-                cluster_counts.boxplot(column='n_clusters', by='set_name')
-                plt.title('Number of AuNP Clusters per Tomogram by Set')
-                plt.suptitle('')
-                plt.xlabel('Set')
-                plt.ylabel('Number of Clusters')
-                plt.tight_layout()
-                plt.savefig(os.path.join(summary_dir, 'aunp_cluster_count_by_set.png'))
-                plt.close()
+                title = 'Number of AuNP Clusters per Tomogram by Set'
+                ylabel = 'Number of Clusters'
+                filename = 'aunp_cluster_count_by_set.png'
+                create_colored_boxplot(cluster_counts, 'n_clusters', 'set_name', title, ylabel, filename)
 
     # --- Vesicle Results ---
-    vesicle_path = os.path.join('results', 'vesicle_results.csv')
+    vesicle_path = os.path.join('results', 'vesicles_results.csv')
     if os.path.exists(vesicle_path):
         df_ves = pd.read_csv(vesicle_path)
         if 'set_name' in df_ves.columns:
-            for metric in ['vesicle_detection_vesicle_count', 'vesicles_within_10nm', 'vesicle_detection_average_vesicle_diameter']:
-                plt.figure(figsize=(8, 5))
-                df_ves.boxplot(column=metric, by='set_name')
-                plt.title(f'{metric.replace("_", " ").title()} by Set')
-                plt.suptitle('')
-                plt.xlabel('Set')
-                plt.ylabel(metric.replace('_', ' ').title())
-                plt.tight_layout()
-                plt.savefig(os.path.join(summary_dir, f'vesicle_{metric}_by_set.png'))
-                plt.close()
+            for metric in ['vesicle_detection_vesicle_count', 'vesicle_detection_nearby_vesicle_count', 'vesicle_detection_average_vesicle_diameter']:
+                if metric in df_ves.columns:
+                    title = f'{metric.replace("_", " ").title()} by Set'
+                    ylabel = metric.replace('_', ' ').title()
+                    filename = f'vesicle_{metric}_by_set.png'
+                    create_colored_boxplot(df_ves, metric, 'set_name', title, ylabel, filename)
 
     # --- Active Zone Results ---
     az_path = os.path.join('results', 'activezone_results.csv')
@@ -754,15 +777,10 @@ def generate_summary_figures():
         df_az = pd.read_csv(az_path)
         if 'set_name' in df_az.columns:
             for metric in ['active_zone_count', 'avg_active_zone_area', 'average_cleft_width']:
-                plt.figure(figsize=(8, 5))
-                df_az.boxplot(column=metric, by='set_name')
-                plt.title(f'{metric.replace("_", " ").title()} by Set')
-                plt.suptitle('')
-                plt.xlabel('Set')
-                plt.ylabel(metric.replace('_', ' ').title())
-                plt.tight_layout()
-                plt.savefig(os.path.join(summary_dir, f'activezone_{metric}_by_set.png'))
-                plt.close()
+                title = f'{metric.replace("_", " ").title()} by Set'
+                ylabel = metric.replace('_', ' ').title()
+                filename = f'activezone_{metric}_by_set.png'
+                create_colored_boxplot(df_az, metric, 'set_name', title, ylabel, filename)
 
     print(f"Summary figures saved to {summary_dir}")
 

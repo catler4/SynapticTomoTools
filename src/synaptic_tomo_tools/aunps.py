@@ -337,4 +337,22 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         n_clusters = len(df_valid['aunp_cluster'].unique()) - (1 if -1 in df_valid['aunp_cluster'].values else 0)
         summary_stats['aunp_cluster_count'] = n_clusters
     
+    # Add AuNP density (AuNPs per unit volume - approximate using bounding box)
+    if n_aunps > 0:
+        # Calculate bounding box volume for density estimation
+        coords_array = np.array(coords)
+        x_range = coords_array[:, 0].max() - coords_array[:, 0].min()
+        y_range = coords_array[:, 1].max() - coords_array[:, 1].min()
+        z_range = coords_array[:, 2].max() - coords_array[:, 2].min()
+        volume = x_range * y_range * z_range
+        summary_stats['aunp_density'] = float(n_aunps / volume) if volume > 0 else 0.0
+    else:
+        summary_stats['aunp_density'] = 0.0
+    
+    # Add distance to active zone center mean
+    if 'distance_to_active_zone_center' in df_valid.columns and n_aunps > 0:
+        summary_stats['distance_to_active_zone_center_mean'] = float(df_valid['distance_to_active_zone_center'].mean())
+    else:
+        summary_stats['distance_to_active_zone_center_mean'] = 0.0
+    
     return summary_stats

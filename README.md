@@ -191,7 +191,13 @@ python -m src.synaptic_tomo_tools.cli --help
     - `vesicle_vesicle_detection_average_vesicle_diameter_by_set.png` — Average vesicle diameters by set
     - `vesicle_vesicle_detection_vesicle_count_by_set.png` — Vesicle counts by set
     - `vesicle_vesicles_within_10nm_by_set.png` — Vesicles within 10nm of active zone by set
-    - Additional AuNP metrics: density, distance to AZ center, cluster metrics
+    - Additional AuNP metrics: 
+      - `aunp_density_by_set.png` — AuNP density (AuNPs per unit volume) by set
+      - `aunp_distance_to_active_zone_center_mean_by_set.png` — Average distance to active zone center by set
+      - `aunp_cluster_n_aunps_by_set.png` — Number of AuNPs per cluster by set
+      - `aunp_cluster_cluster_area_by_set.png` — Cluster area by set
+      - `aunp_cluster_cluster_density_by_set.png` — Cluster density by set
+      - `aunp_cluster_count_by_set.png` — Number of clusters per tomogram by set
   - `results/summary_pdfs/all_tomograms_summary.pdf` — comprehensive PDF summary of all analyses
 - **Visualizations:**
   - **Per-tomogram images:**
