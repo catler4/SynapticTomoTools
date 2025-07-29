@@ -6,6 +6,7 @@ tomoname,set,activezone,vesicles,aunps,aunp_active_zones
 20231017_HippAu_132,15F1,True,True,True
 20231017_HippAu_141,15F1,True,True,True,"0,2"
 20231017_HippAu_150,15F1,True,True,True
+20231017_HippAu_159,15F1,True,True,True
 20231026_HippAu_14,15F1,True,True,True
 20231026_HippAu_26,15F1,True,True,True
 20231026_HippAu_30,15F1,True,True,True
@@ -44,15 +45,14 @@ tomoname,set,activezone,vesicles,aunps,aunp_active_zones
 20240624_HippWaffle_83,15F1,True,True,True,"1"
 20240624_HippWaffle_86,15F1,True,True,True
 20240624_HippWaffle_88,15F1,True,True,True
+20240901_AMmilled13-1_29,15F1,True,True,True
+20240901_AMmilled13-1_43,15F1,True,True,True
 20241030_AMmilled12-1_15,15F1,True,True,True
 20241030_AMmilled12-2_30,15F1,True,True,True
 20241030_AMmilled12-2_41,15F1,True,True,True
 20241030_AMmilled12-2_53,15F1,True,True,True
 20241030_AMmilled12-2_62,15F1,True,True,True
 20241030_AMmilled12-2_78,15F1,True,True,True
-20241031_AMmilled13-1_19,15F1,True,True,True
-20241031_AMmilled13-1_21,15F1,True,True,True
-20241208_AMmilled20-1_40,15F1,True,True,True
 20240822_HippWaffle_118,5F11,True,True,True
 20240822_HippWaffle_119,5F11,True,True,True
 20240822_HippWaffle_125,5F11,True,True,True
