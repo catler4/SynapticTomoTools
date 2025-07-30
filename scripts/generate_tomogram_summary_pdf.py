@@ -379,10 +379,24 @@ def main():
                 pdf_paths.append(str(pdf_path))
         else:
             print(f"Skipping {tomo_name} - no combined image found")
+    
+    # For the final combined PDF, we need to include all tomograms from the original CSV
+    # So we need to check for existing PDFs for all tomograms, not just the ones we just generated
+    all_pdf_paths = []
+    print(f"\nCollecting all available PDFs for combined document...")
+    for tomo_name in csv_tomograms:
+        pdf_path = output_dir / f"{tomo_name}_summary.pdf"
+        if pdf_path.exists():
+            all_pdf_paths.append(str(pdf_path))
+            print(f"  ✓ Found PDF for {tomo_name}")
+        else:
+            print(f"  ✗ No PDF found for {tomo_name} - will be skipped in combined PDF")
+    
+    print(f"\nFound {len(all_pdf_paths)} PDFs to combine")
     # Combine all PDFs into a single document
-    if pdf_paths:
+    if all_pdf_paths:
         merger = PdfMerger()
-        for pdf in sorted(pdf_paths):
+        for pdf in sorted(all_pdf_paths):
             merger.append(pdf)
         # Add summary figures at the end
         from reportlab.lib.pagesizes import letter
@@ -426,6 +440,7 @@ def main():
         merged_pdf_path = output_dir / "all_tomograms_summary.pdf"
         merger.write(str(merged_pdf_path))
         merger.close()
-        print(f"Combined all PDFs into: {merged_pdf_path}")
+        print(f"Combined {len(all_pdf_paths)} PDFs into: {merged_pdf_path}")
+        print(f"Note: Combined PDF includes all available tomogram summaries from the original CSV")
 if __name__ == "__main__":
     main() 
