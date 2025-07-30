@@ -45,8 +45,8 @@ def load_tomograms(csv_path, analysis_type, set_name=None):
     """
     df = pd.read_csv(csv_path)
 
-    # Handle 'all' analysis type - include tomograms that have any analysis enabled
-    if analysis_type == 'all':
+    # Handle 'all' and 'visualizations' analysis types - include tomograms that have any analysis enabled
+    if analysis_type in ['all', 'visualizations']:
         # Include tomograms that have at least one analysis enabled
         analysis_columns = ['activezone', 'vesicles', 'aunps']
         available_columns = [col for col in analysis_columns if col in df.columns]
