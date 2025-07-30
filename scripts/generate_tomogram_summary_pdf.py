@@ -20,6 +20,34 @@ def get_tomo_name_from_image(image_path):
     # Assumes image name format: <tomo_name>_combined.png, etc.
     return '_'.join(Path(image_path).name.split('_')[:-1])
 
+def check_file_corruption(file_path):
+    """Check if a file appears to be corrupted by examining its first few bytes."""
+    try:
+        with open(file_path, 'rb') as f:
+            # Read first 100 bytes to check for common corruption indicators
+            header = f.read(100)
+            
+            # Check for gzip magic number
+            if header.startswith(b'\x1f\x8b'):
+                return "File appears to be gzipped (compressed)"
+            
+            # Check for common binary file indicators
+            if b'\x00' in header[:20]:
+                return "File contains null bytes (may be binary)"
+            
+            # Check for UTF-8 BOM
+            if header.startswith(b'\xef\xbb\xbf'):
+                return "File has UTF-8 BOM"
+            
+            # Check for other compression formats
+            if header.startswith(b'PK'):
+                return "File appears to be a ZIP archive"
+            
+            return "File appears to be text-based"
+            
+    except Exception as e:
+        return f"Error reading file: {e}"
+
 def get_stats(tomo_name, base_data_dir):
     # Find vesicle_results.json and aunp_clusters.csv for this tomogram
     vesicle_json = list(Path(base_data_dir).glob(f"**/{tomo_name}/best_alignment/STT_results/vesicles/vesicle_results.json"))
@@ -32,29 +60,51 @@ def get_stats(tomo_name, base_data_dir):
     }
     # Vesicle stats
     if vesicle_json:
-        with open(vesicle_json[0], 'r') as f:
-            data = json.load(f)
-            stats['total_vesicles'] = data.get('summary', {}).get('total_vesicles', 'N/A')
-            # Count vesicles with distance_to_az <= 10
-            az_adj = 0
-            for v in data.get('vesicles', []):
-                if 'distance_to_az' in v and v['distance_to_az'] <= 10:
-                    az_adj += 1
-            stats['az_adjacent_vesicles'] = az_adj
+        try:
+            with open(vesicle_json[0], 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                stats['total_vesicles'] = data.get('summary', {}).get('total_vesicles', 'N/A')
+                # Count vesicles with distance_to_az <= 10
+                az_adj = 0
+                for v in data.get('vesicles', []):
+                    if 'distance_to_az' in v and v['distance_to_az'] <= 10:
+                        az_adj += 1
+                stats['az_adjacent_vesicles'] = az_adj
+        except UnicodeDecodeError as e:
+            print(f"Warning: Unicode decode error reading vesicle results for {tomo_name}: {e}")
+            print(f"File: {vesicle_json[0]}")
+            print(f"File analysis: {check_file_corruption(vesicle_json[0])}")
+        except json.JSONDecodeError as e:
+            print(f"Warning: JSON decode error reading vesicle results for {tomo_name}: {e}")
+            print(f"File: {vesicle_json[0]}")
+            print(f"File analysis: {check_file_corruption(vesicle_json[0])}")
+        except Exception as e:
+            print(f"Warning: Error reading vesicle results for {tomo_name}: {e}")
+            print(f"File: {vesicle_json[0]}")
+            print(f"File analysis: {check_file_corruption(vesicle_json[0])}")
     # AuNP stats
     if aunp_csv:
-        with open(aunp_csv[0], 'r') as f:
-            reader = csv.DictReader(f)
-            total_aunps = 0
-            clusters = 0
-            for row in reader:
-                clusters += 1
-                try:
-                    total_aunps += int(float(row['n_aunps']))
-                except Exception:
-                    pass
-            stats['total_aunps'] = total_aunps
-            stats['aunp_clusters'] = clusters
+        try:
+            with open(aunp_csv[0], 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                total_aunps = 0
+                clusters = 0
+                for row in reader:
+                    clusters += 1
+                    try:
+                        total_aunps += int(float(row['n_aunps']))
+                    except Exception:
+                        pass
+                stats['total_aunps'] = total_aunps
+                stats['aunp_clusters'] = clusters
+        except UnicodeDecodeError as e:
+            print(f"Warning: Unicode decode error reading AuNP results for {tomo_name}: {e}")
+            print(f"File: {aunp_csv[0]}")
+            print(f"File analysis: {check_file_corruption(aunp_csv[0])}")
+        except Exception as e:
+            print(f"Warning: Error reading AuNP results for {tomo_name}: {e}")
+            print(f"File: {aunp_csv[0]}")
+            print(f"File analysis: {check_file_corruption(aunp_csv[0])}")
     return stats
 
 def get_active_zonogram_images(tomo_name, base_data_dir):
