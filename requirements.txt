@@ -25,6 +25,9 @@ segment-anything>=1.0
 # Video and animation
 imageio>=2.9
 
+# System monitoring and memory management
+psutil>=5.8
+
 # Optional dependencies for analysis scripts
 seaborn>=0.11       # Used in analysis scripts for enhanced plotting
 reportlab

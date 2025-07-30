@@ -27,12 +27,37 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 import sys
+import gc
+import time
+
+# Try to import psutil for memory monitoring, fallback if not available
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    print("Warning: psutil not available. Memory monitoring will be disabled.")
+    PSUTIL_AVAILABLE = False
 
 # Add the src directory to the Python path
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
 from synaptic_tomo_tools.vesicles import import_presynaptic_membranes_and_active_zones
 warnings.filterwarnings('ignore')
+
+def monitor_memory():
+    """Monitor current memory usage."""
+    if not PSUTIL_AVAILABLE:
+        return 0 # Return 0 if psutil is not available
+    process = psutil.Process(os.getpid())
+    memory_info = process.memory_info()
+    memory_mb = memory_info.rss / 1024 / 1024
+    print(f"Current memory usage: {memory_mb:.1f} MB")
+    return memory_mb
+
+def cleanup_memory():
+    """Force garbage collection to free memory."""
+    gc.collect()
+    time.sleep(0.1)  # Small delay to allow memory to be freed
 
 def load_tomogram_data(tomogram_path):
     """Load tomogram data from the best alignment directory."""
@@ -49,8 +74,15 @@ def load_tomogram_data(tomogram_path):
     print(f"Loading tomogram: {ddw_file}")
     
     try:
+        # Monitor memory before loading
+        memory_before = monitor_memory()
+        
         with mrcfile.open(ddw_file) as mrc:
-            data = mrc.data
+            data = mrc.data.copy()  # Make a copy to ensure the file is closed
+        
+        memory_after = monitor_memory()
+        print(f"Tomogram loaded: {data.shape}, memory increase: {memory_after - memory_before:.1f} MB")
+        
         return data
     except Exception as e:
         print(f"Error loading tomogram {ddw_file}: {e}")
@@ -547,6 +579,9 @@ def process_tomogram(tomogram_path, output_dir):
     tomogram_name = Path(tomogram_path).name
     print(f"\nProcessing tomogram: {tomogram_name}")
     
+    # Monitor memory at start
+    memory_start = monitor_memory()
+    
     # Load data
     tomogram_data = load_tomogram_data(tomogram_path)
     if tomogram_data is None:
@@ -555,12 +590,18 @@ def process_tomogram(tomogram_path, output_dir):
     vesicles = load_vesicle_data(tomogram_path)
     if not vesicles:
         print("No vesicles found")
+        # Clean up tomogram data
+        del tomogram_data
+        cleanup_memory()
         return 0
     
     # Load membrane_active_zone_pairs for fusion point calculation
     membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path)
     if not membrane_active_zone_pairs:
         print("No membrane-active zone pairs found")
+        # Clean up data
+        del tomogram_data
+        cleanup_memory()
         return 0
     
     # Create output directory for this tomogram
@@ -622,6 +663,10 @@ def process_tomogram(tomogram_path, output_dir):
                     'note': 'Rotated slice (fusion point direction down)'
                 }
                 save_slice_as_png(rotated_slice, output_path, vesicle_info)
+                
+                # Clean up intermediate arrays
+                del rotated_slice
+                del large_slice
             
             # Also create rotated MinIP slice
             large_minip = extract_minip_for_rotation(tomogram_data, vesicle_center)
@@ -639,6 +684,10 @@ def process_tomogram(tomogram_path, output_dir):
                     'note': 'Rotated MinIP slice (fusion point direction down)'
                 }
                 save_slice_as_png(rotated_minip, minip_output_path, minip_vesicle_info)
+                
+                # Clean up intermediate arrays
+                del rotated_minip
+                del large_minip
             
             # Also create rotated thick slice (20 nm)
             large_thick = extract_thick_slice_for_rotation(tomogram_data, vesicle_center)
@@ -656,16 +705,31 @@ def process_tomogram(tomogram_path, output_dir):
                     'note': 'Rotated thick slice (20 nm, fusion point direction down)'
                 }
                 save_slice_as_png(rotated_thick, thick_output_path, thick_vesicle_info)
+                
+                # Clean up intermediate arrays
+                del rotated_thick
+                del large_thick
             
 
             
             extracted_count += 1
             print(f"  Extracted slice for vesicle {i} (distance: {distance_to_az:.1f} nm)")
             
+            # Periodic memory cleanup every 10 vesicles
+            if extracted_count % 10 == 0:
+                cleanup_memory()
+            
         except Exception as e:
             print(f"  Error extracting slice for vesicle {i}: {e}")
     
+    # Clean up large data structures
+    del tomogram_data
+    del membrane_active_zone_pairs
+    cleanup_memory()
+    
+    memory_end = monitor_memory()
     print(f"Extracted {extracted_count} vesicle slices for {tomogram_name}")
+    print(f"Memory change: {memory_end - memory_start:.1f} MB")
     return extracted_count
 
 def create_vesicle_summary_pdf(output_dir):
@@ -1032,7 +1096,12 @@ def main():
     parser.add_argument('--data-dir', default='data', help='Base data directory')
     parser.add_argument('--set', help='Filter by set name')
     parser.add_argument('--start-from', help='Start from specific tomogram')
+    parser.add_argument('--max-tomograms', type=int, help='Maximum number of tomograms to process (for testing)')
     args = parser.parse_args()
+    
+    # Monitor initial memory
+    print("Starting vesicle slice extraction...")
+    monitor_memory()
     
     # Load tomogram information
     df = pd.read_csv(args.csv)
@@ -1048,15 +1117,24 @@ def main():
             df = df.iloc[start_idx[0]:]
             print(f"Starting from tomogram: {args.start_from}")
     
+    # Limit number of tomograms if specified
+    if args.max_tomograms:
+        df = df.head(args.max_tomograms)
+        print(f"Limited to {args.max_tomograms} tomograms for testing")
+    
     # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Process each tomogram
     total_extracted = 0
-    for _, row in df.iterrows():
+    for i, (_, row) in enumerate(df.iterrows()):
         tomogram_name = row['tomoname']
         set_name = row['set']
+        
+        print(f"\n{'='*60}")
+        print(f"Processing tomogram {i+1}/{len(df)}: {tomogram_name}")
+        print(f"{'='*60}")
         
         # Construct tomogram path
         if args.data_dir:
@@ -1064,14 +1142,34 @@ def main():
         else:
             tomogram_path = Path("data") / set_name / "TOP_TOMOS" / tomogram_name
         
-        if tomogram_path.exists():
+        if not tomogram_path.exists():
+            print(f"Tomogram path does not exist: {tomogram_path}")
+            continue
+        
+        try:
+            # Process the tomogram
             extracted = process_tomogram(tomogram_path, output_dir)
             total_extracted += extracted
-        else:
-            print(f"Tomogram path not found: {tomogram_path}")
+            
+            # Memory cleanup after each tomogram
+            cleanup_memory()
+            
+            # Check memory usage
+            memory_usage = monitor_memory()
+            if memory_usage > 8000:  # Warning if over 8GB
+                print(f"WARNING: High memory usage ({memory_usage:.1f} MB). Consider processing fewer tomograms at once.")
+            
+        except Exception as e:
+            print(f"Error processing tomogram {tomogram_name}: {e}")
+            # Force memory cleanup on error
+            cleanup_memory()
+            continue
     
-    print(f"\nTotal vesicle slices extracted: {total_extracted}")
-    print(f"Output directory: {output_dir.absolute()}")
+    print(f"\n{'='*60}")
+    print(f"Processing complete!")
+    print(f"Total vesicles extracted: {total_extracted}")
+    print(f"Final memory usage: {monitor_memory():.1f} MB")
+    print(f"{'='*60}")
     
     # Create PDF summary
     print("\nCreating vesicle slices summary PDF...")
