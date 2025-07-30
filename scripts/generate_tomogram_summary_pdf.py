@@ -296,16 +296,28 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     # Load tomogram set and active zone mapping
     tomo_set_map, tomo_az_map = load_tomo_set_map(args.tomocsv)
+    
+    # Get tomograms in CSV order
+    csv_tomograms = list(tomo_set_map.keys())
+    
     # Find all combined images as tomogram anchors
     allowed_tomos = set(tomo_set_map.keys())
     combined_imgs = [img for img in vis_dir.glob('*_combined.png') if img.name.replace('_combined.png', '') in allowed_tomos]
+    
+    # Create a mapping from tomogram name to image path
+    tomo_to_img = {img.name.replace('_combined.png', ''): img for img in combined_imgs}
+    
     pdf_paths = []
-    for img_path in combined_imgs:
-        tomo_name = img_path.name.replace('_combined.png', '')
-        generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tomo_set_map, tomo_az_map)
-        pdf_path = output_dir / f"{tomo_name}_summary.pdf"
-        if pdf_path.exists():
-            pdf_paths.append(str(pdf_path))
+    # Process tomograms in CSV order
+    for tomo_name in csv_tomograms:
+        if tomo_name in tomo_to_img:
+            print(f"Generating PDF for {tomo_name} (CSV order)")
+            generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tomo_set_map, tomo_az_map)
+            pdf_path = output_dir / f"{tomo_name}_summary.pdf"
+            if pdf_path.exists():
+                pdf_paths.append(str(pdf_path))
+        else:
+            print(f"Skipping {tomo_name} - no combined image found")
     # Combine all PDFs into a single document
     if pdf_paths:
         merger = PdfMerger()
