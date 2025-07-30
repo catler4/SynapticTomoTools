@@ -159,6 +159,7 @@ class AnalysisPipelineGUI(tk.Tk):
             ("Render Active Zonograms", "render-active-zonograms"),
             ("Select AuNP Picks", "select-aunp-picks"),
         ]
+        
         self.findingampa_check_vars = []
         self.findingampa_btns = []
         for idx, (label, command) in enumerate(self.findingampa_commands):
@@ -189,6 +190,12 @@ class AnalysisPipelineGUI(tk.Tk):
             notebook.add(tab, text=step)
             self.tabs[step] = tab
             self._build_tab_content(tab, step)
+        
+        # Post-Analysis Tools tab (moved to the far right)
+        post_analysis_tab = ttk.Frame(notebook)
+        notebook.add(post_analysis_tab, text="Post-Analysis Tools")
+        self.tabs["Post-Analysis Tools"] = post_analysis_tab
+        self._build_post_analysis_tab_content(post_analysis_tab)
         
         # Log output area with resizable splitter
         self.log_frame = ttk.Frame(self.paned_window)
@@ -598,6 +605,112 @@ class AnalysisPipelineGUI(tk.Tk):
             messagebox.showerror("PDF Not Found", f"{pdf_path} does not exist. Please generate the PDF summary first.")
             return
         webbrowser.open(f"file://{pdf_path}")
+    
+    def _build_post_analysis_tab_content(self, tab):
+        """Build the content for the post-analysis tools tab."""
+        frame = ttk.Frame(tab)
+        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        # Title
+        title_label = ttk.Label(frame, text="Post-Analysis Tools", font=("Helvetica", 16, "bold"))
+        title_label.pack(pady=(0, 20))
+        
+        # Vesicle Slice Extraction section
+        vesicle_frame = ttk.LabelFrame(frame, text="Vesicle Slice Extraction", padding=10)
+        vesicle_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Description
+        desc_label = ttk.Label(vesicle_frame, text="Extract 120x120 pixel slices from vesicles within 10nm of active zone membrane.\nGenerates three slice types: regular slice, thick slice (20nm), and MinIP (20nm).\nSlices are oriented with the closest active zone point pointing down.\nCreates both individual PNG files and a comprehensive PDF summary.")
+        desc_label.pack(pady=(0, 10))
+        
+        # Output directory
+        self.vesicle_output_dir = tk.StringVar(value="results/vesicle_slices")
+        ttk.Label(vesicle_frame, text="Output directory:").pack(anchor=tk.W)
+        output_entry = ttk.Entry(vesicle_frame, textvariable=self.vesicle_output_dir, width=50)
+        output_entry.pack(fill=tk.X, pady=(0, 10))
+        
+        # Run button
+        vesicle_btn = ttk.Button(vesicle_frame, text="Extract Vesicle Slices", command=self._run_vesicle_extraction)
+        vesicle_btn.pack(pady=(0, 10))
+        
+        # Add tooltip
+        ToolTip(vesicle_btn, "Extract vesicle slices from tomograms with MinIP projection for dark signal visualization. Requires vesicle analysis to be completed first. Creates PNG files and PDF summary.")
+        
+        # View PDF button
+        view_pdf_btn = ttk.Button(vesicle_frame, text="View Vesicle Slices PDF", command=self._view_vesicle_pdf)
+        view_pdf_btn.pack(pady=(0, 10))
+        
+        # Add tooltip for PDF button
+        ToolTip(view_pdf_btn, "Open the vesicle slices summary PDF in your default PDF viewer.")
+        
+        # View Close Vesicles PDF button
+        view_close_pdf_btn = ttk.Button(vesicle_frame, text="View Close Vesicles PDF", command=self._view_close_vesicle_pdf)
+        view_close_pdf_btn.pack(pady=(0, 10))
+        
+        # Add tooltip for close vesicles PDF button
+        ToolTip(view_close_pdf_btn, "Open the close vesicles summary PDF (≤4nm from active zone) in your default PDF viewer.")
+    
+    def _run_vesicle_extraction(self):
+        """Run the vesicle slice extraction script."""
+        if not self.csv_path.get():
+            messagebox.showerror("Error", "Please select a CSV file first.")
+            return
+        
+        # Build command
+        cli = ["python", "-u", "scripts/extract_vesicle_slices.py"]
+        cli += ["--csv", self.csv_path.get()]
+        cli += ["--output-dir", self.vesicle_output_dir.get()]
+        
+        if self.root_dir.get():
+            cli += ["--data-dir", self.root_dir.get()]
+        
+        # Add processing mode and starting tomogram if specified
+        processing_mode = self.processing_mode.get()
+        selected_tomogram = self.start_tomogram.get()
+        
+        if processing_mode in ["Single tomogram", "Start from"] and selected_tomogram:
+            cli += ["--start-from", selected_tomogram]
+            self._log(f"Vesicle extraction will start from tomogram: {selected_tomogram}\n")
+        
+        self._log(f"Running vesicle slice extraction: {' '.join(cli)}\n")
+        self._log("Note: This will generate individual PNG files and create a comprehensive PDF summary.\n")
+        threading.Thread(target=self._run_subprocess, args=(cli, os.environ.copy())).start()
+
+    def _view_vesicle_pdf(self):
+        """Open the vesicle slices summary PDF."""
+        # Check if vesicle output directory exists
+        vesicle_output_dir = self.vesicle_output_dir.get() if hasattr(self, 'vesicle_output_dir') else "results/vesicle_slices"
+        pdf_path = os.path.abspath(f"{vesicle_output_dir}/vesicle_slices_summary.pdf")
+        
+        if not os.path.exists(pdf_path):
+            messagebox.showerror("PDF Not Found", 
+                               f"Vesicle slices summary PDF not found at:\n{pdf_path}\n\n"
+                               "Please run the vesicle slice extraction first.")
+            return
+        
+        try:
+            webbrowser.open(f"file://{pdf_path}")
+            self._log(f"Opening vesicle slices PDF: {pdf_path}\n")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open PDF: {e}")
+
+    def _view_close_vesicle_pdf(self):
+        """Open the close vesicles summary PDF."""
+        # Check if vesicle output directory exists
+        vesicle_output_dir = self.vesicle_output_dir.get() if hasattr(self, 'vesicle_output_dir') else "results/vesicle_slices"
+        pdf_path = os.path.abspath(f"{vesicle_output_dir}/close_vesicles_summary.pdf")
+        
+        if not os.path.exists(pdf_path):
+            messagebox.showerror("PDF Not Found", 
+                               f"Close vesicles summary PDF not found at:\n{pdf_path}\n\n"
+                               "Please run the vesicle slice extraction first.")
+            return
+        
+        try:
+            webbrowser.open(f"file://{pdf_path}")
+            self._log(f"Opening close vesicles PDF: {pdf_path}\n")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open PDF: {e}")
 
 if __name__ == "__main__":
     app = AnalysisPipelineGUI()
