@@ -339,6 +339,7 @@ def main():
     parser.add_argument('--data-dir', default='data', help='Base data directory for tomogram stats')
     parser.add_argument('--output-dir', default='results/summary_pdfs', help='Output directory for PDFs')
     parser.add_argument('--tomocsv', default='data/tomograms.csv', help='CSV file mapping tomogram names to sets')
+    parser.add_argument('--start-from', default=None, help='Start PDF generation from this tomogram (still includes all tomograms in final PDF)')
     args = parser.parse_args()
     vis_dir = Path(args.vis_dir)
     base_data_dir = Path(args.data_dir)
@@ -358,10 +359,20 @@ def main():
     tomo_to_img = {img.name.replace('_combined.png', ''): img for img in combined_imgs}
     
     pdf_paths = []
-    # Process tomograms in CSV order
-    for tomo_name in csv_tomograms:
+    # Process tomograms in CSV order, starting from specified tomogram if given
+    start_index = 0
+    if args.start_from:
+        try:
+            start_index = csv_tomograms.index(args.start_from)
+            print(f"Starting PDF generation from tomogram: {args.start_from} (index {start_index})")
+        except ValueError:
+            print(f"Warning: Starting tomogram '{args.start_from}' not found in CSV, starting from beginning")
+            start_index = 0
+    
+    # Process tomograms starting from the specified index
+    for i, tomo_name in enumerate(csv_tomograms[start_index:], start=start_index):
         if tomo_name in tomo_to_img:
-            print(f"Generating PDF for {tomo_name} (CSV order)")
+            print(f"Generating PDF for {tomo_name} (CSV order, position {i+1}/{len(csv_tomograms)})")
             generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tomo_set_map, tomo_az_map)
             pdf_path = output_dir / f"{tomo_name}_summary.pdf"
             if pdf_path.exists():

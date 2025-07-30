@@ -577,7 +577,18 @@ class AnalysisPipelineGUI(tk.Tk):
         if self.csv_path.get():
             # Always use the original CSV for PDF generation to include all tomograms
             cli += ["--tomocsv", self.csv_path.get()]
-            self._log("Note: PDF generation will include all tomograms from the original CSV file\n")
+            
+            # Add starting tomogram if specified
+            processing_mode = self.processing_mode.get()
+            selected_tomogram = self.start_tomogram.get()
+            
+            if processing_mode in ["Single tomogram", "Start from"] and selected_tomogram:
+                cli += ["--start-from", selected_tomogram]
+                self._log(f"PDF generation will start from tomogram: {selected_tomogram}\n")
+                self._log("Note: Final PDF will still include all tomograms from the original CSV file\n")
+            else:
+                self._log("Note: PDF generation will include all tomograms from the original CSV file\n")
+                
         self._log(f"Running: {' '.join(cli)}\n")
         threading.Thread(target=self._run_subprocess, args=(cli, os.environ.copy())).start()
 
