@@ -5,6 +5,8 @@ import subprocess
 import threading
 import os
 import webbrowser
+import pandas as pd
+from pathlib import Path
 
 FIG_HOME = "figures/synaptictomotools_fig_gui_home-01.png"
 FIG_AZ = "figures/synaptictomotools_fig_gui_AZ-01.png"
@@ -44,6 +46,7 @@ class AnalysisPipelineGUI(tk.Tk):
         self.geometry("800x700")
         self.csv_path = tk.StringVar()
         self.root_dir = tk.StringVar()
+        self.start_tomogram = tk.StringVar()
         self.log_text = None
         self._img_refs = []  # Keep references to PhotoImage objects
         self._current_process = None  # Track running process for stopping
@@ -68,6 +71,28 @@ class AnalysisPipelineGUI(tk.Tk):
         root_entry = ttk.Entry(frame, textvariable=self.root_dir, width=40)
         root_entry.grid(row=2, column=1, sticky=tk.W)
         ttk.Button(frame, text="Browse...", command=self._browse_root).grid(row=2, column=2, padx=5)
+        
+        # Starting tomogram selection
+        ttk.Label(frame, text="Processing mode:").grid(row=3, column=0, sticky=tk.W)
+        self.processing_mode = tk.StringVar(value="All tomograms")
+        self.processing_mode_combo = ttk.Combobox(frame, textvariable=self.processing_mode, width=37, state="readonly")
+        self.processing_mode_combo.grid(row=3, column=1, sticky=tk.W)
+        ttk.Button(frame, text="Load CSV", command=self._load_tomograms_from_csv).grid(row=3, column=2, padx=5)
+        
+        # Starting tomogram selection (initially hidden)
+        self.start_tomogram_label = ttk.Label(frame, text="Start from tomogram:")
+        self.start_tomogram_combo = ttk.Combobox(frame, textvariable=self.start_tomogram, width=37, state="readonly")
+        
+        # Add tooltip for the dropdown
+        ToolTip(self.processing_mode_combo, "Select processing mode: 'All tomograms' for entire CSV, 'Single tomogram' for one specific tomogram, or 'Start from' to process from a specific tomogram onwards")
+        ToolTip(frame.grid_slaves(row=3, column=2)[0], "Load tomogram names from the selected CSV file into the dropdown")
+        
+        # Bind the mode combo to show/hide the starting tomogram selection
+        self.processing_mode_combo.bind('<<ComboboxSelected>>', self._on_processing_mode_change)
+        
+        # Add a separator at a fixed position
+        separator = ttk.Separator(frame, orient='horizontal')
+        separator.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
 
     def _load_and_display_image(self, path, parent, max_width=400, max_height=180):
         try:
@@ -365,6 +390,52 @@ class AnalysisPipelineGUI(tk.Tk):
         path = filedialog.askdirectory(title="Select root directory for tomogram sets", initialdir=".")
         if path:
             self.root_dir.set(path)
+    
+    def _load_tomograms_from_csv(self):
+        """Load tomogram names from the selected CSV file and populate the dropdown."""
+        csv_path = self.csv_path.get()
+        if not csv_path:
+            messagebox.showerror("Error", "Please select a CSV file first.")
+            return
+        
+        try:
+            df = pd.read_csv(csv_path)
+            if 'tomoname' not in df.columns:
+                messagebox.showerror("Error", "CSV file must contain a 'tomoname' column.")
+                return
+            
+            # Store the full dataframe for later use
+            self.csv_data = df
+            
+            # Get tomogram names in the order they appear in the CSV
+            tomogram_names = df['tomoname'].tolist()
+            
+            # Update the processing mode combo
+            mode_values = ["All tomograms", "Single tomogram", "Start from"]
+            self.processing_mode_combo['values'] = mode_values
+            
+            # Update the tomogram combo
+            self.start_tomogram_combo['values'] = tomogram_names
+            self.start_tomogram.set(tomogram_names[0] if tomogram_names else "All tomograms")  # Default to first tomogram
+            
+            self._log(f"Loaded {len(tomogram_names)} tomograms from CSV")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load CSV file: {e}")
+            self._log(f"Error loading CSV: {e}")
+    
+    def _on_processing_mode_change(self, event=None):
+        """Handle processing mode change to show/hide starting tomogram selection."""
+        mode = self.processing_mode.get()
+        
+        if mode in ["Single tomogram", "Start from"]:
+            # Show the starting tomogram selection
+            self.start_tomogram_label.grid(row=4, column=0, sticky=tk.W)
+            self.start_tomogram_combo.grid(row=4, column=1, sticky=tk.W)
+        else:
+            # Hide the starting tomogram selection
+            self.start_tomogram_label.grid_remove()
+            self.start_tomogram_combo.grid_remove()
 
     def _run_analysis(self, step, tab, generate_pdf=False):
         # Build CLI command
@@ -372,6 +443,66 @@ class AnalysisPipelineGUI(tk.Tk):
         # CSV
         if self.csv_path.get():
             cli += ["--csv", self.csv_path.get()]
+        
+        # Handle processing mode and starting tomogram selection
+        processing_mode = self.processing_mode.get()
+        selected_tomogram = self.start_tomogram.get()
+        
+        if processing_mode == "Single tomogram" and selected_tomogram:
+            # Create a temporary CSV with only the selected tomogram
+            try:
+                df = pd.read_csv(self.csv_path.get())
+                tomogram_row = df[df['tomoname'] == selected_tomogram]
+                if not tomogram_row.empty:
+                    # Create temporary CSV with only this tomogram
+                    import tempfile
+                    temp_csv = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+                    tomogram_row.to_csv(temp_csv.name, index=False)
+                    temp_csv.close()
+                    
+                    # Use the temporary CSV instead of the original
+                    cli += ["--csv", temp_csv.name]
+                    self._log(f"Processing single tomogram: {selected_tomogram}\n")
+                    
+                    # Store the temp file path to clean up later
+                    if not hasattr(self, '_temp_csv_files'):
+                        self._temp_csv_files = []
+                    self._temp_csv_files.append(temp_csv.name)
+                else:
+                    self._log(f"Warning: Tomogram {selected_tomogram} not found in CSV\n")
+            except Exception as e:
+                self._log(f"Error creating temporary CSV for tomogram {selected_tomogram}: {e}\n")
+        
+        elif processing_mode == "Start from" and selected_tomogram:
+            # Create a temporary CSV with the selected tomogram and all tomograms after it
+            try:
+                df = pd.read_csv(self.csv_path.get())
+                # Find the index of the selected tomogram
+                tomogram_indices = df[df['tomoname'] == selected_tomogram].index
+                if len(tomogram_indices) > 0:
+                    start_index = tomogram_indices[0]
+                    # Get all tomograms from the selected one onwards
+                    subset_df = df.iloc[start_index:]
+                    
+                    # Create temporary CSV with this subset
+                    import tempfile
+                    temp_csv = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+                    subset_df.to_csv(temp_csv.name, index=False)
+                    temp_csv.close()
+                    
+                    # Use the temporary CSV instead of the original
+                    cli += ["--csv", temp_csv.name]
+                    self._log(f"Processing from tomogram {selected_tomogram} onwards ({len(subset_df)} tomograms)\n")
+                    
+                    # Store the temp file path to clean up later
+                    if not hasattr(self, '_temp_csv_files'):
+                        self._temp_csv_files = []
+                    self._temp_csv_files.append(temp_csv.name)
+                else:
+                    self._log(f"Warning: Tomogram {selected_tomogram} not found in CSV\n")
+            except Exception as e:
+                self._log(f"Error creating temporary CSV for starting from {selected_tomogram}: {e}\n")
+        
         # Analysis step
         if step == "Active Zone":
             cli += ["--analysis", "activezone"]
@@ -413,6 +544,18 @@ class AnalysisPipelineGUI(tk.Tk):
             self._log(f"\n[Process exited with code {self._current_process.returncode}]\n\n")
         finally:
             self._current_process = None
+            # Clean up temporary CSV files
+            self._cleanup_temp_csv_files()
+    
+    def _cleanup_temp_csv_files(self):
+        """Clean up temporary CSV files created for single tomogram analysis."""
+        if hasattr(self, '_temp_csv_files'):
+            for temp_file in self._temp_csv_files:
+                try:
+                    os.unlink(temp_file)
+                except Exception as e:
+                    self._log(f"Warning: Could not delete temporary file {temp_file}: {e}\n")
+            self._temp_csv_files = []
 
     def _stop_current_process(self):
         if self._current_process and self._current_process.poll() is None:
@@ -432,7 +575,9 @@ class AnalysisPipelineGUI(tk.Tk):
         if self.root_dir.get():
             cli += ["--data-dir", self.root_dir.get()]
         if self.csv_path.get():
+            # Always use the original CSV for PDF generation to include all tomograms
             cli += ["--tomocsv", self.csv_path.get()]
+            self._log("Note: PDF generation will include all tomograms from the original CSV file\n")
         self._log(f"Running: {' '.join(cli)}\n")
         threading.Thread(target=self._run_subprocess, args=(cli, os.environ.copy())).start()
 
