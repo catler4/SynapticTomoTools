@@ -99,15 +99,27 @@ def load_tomo_set_map(tomocsv_path):
     return tomo_set_map, tomo_az_map
 
 def add_image(c, img_path, x, y, max_width, max_height):
-    img = Image.open(img_path)
-    iw, ih = img.size
-    width = min(iw, max_width)
-    height = min(ih, max_height)
-    scale = min(width / iw, height / ih)
-    nw, nh = int(iw * scale), int(ih * scale)
-    img_io = ImageReader(img)
-    c.drawImage(img_io, x, y + (max_height - nh), width=nw, height=nh)
-    return nh  # Return the actual height used
+    if img_path is None:
+        print(f"Warning: Attempted to add None image path")
+        return 0
+    
+    if not img_path.exists():
+        print(f"Warning: Image file does not exist: {img_path}")
+        return 0
+    
+    try:
+        img = Image.open(img_path)
+        iw, ih = img.size
+        width = min(iw, max_width)
+        height = min(ih, max_height)
+        scale = min(width / iw, height / ih)
+        nw, nh = int(iw * scale), int(ih * scale)
+        img_io = ImageReader(img)
+        c.drawImage(img_io, x, y + (max_height - nh), width=nw, height=nh)
+        return nh  # Return the actual height used
+    except Exception as e:
+        print(f"Error opening image {img_path}: {e}")
+        return 0
 
 def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tomo_set_map=None, tomo_az_map=None):
     c = canvas.Canvas(str(output_dir / f"{tomo_name}_summary.pdf"), pagesize=letter)
@@ -178,12 +190,17 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
         y -= used_height1
         y -= gap
         # Position image 2
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(margin, y, f"Active Zonogram 0 - Selected AuNPs")
-        y -= 6
-        used_height2 = add_image(c, sel_img, margin, y-img_height, img_width, img_height)
-        y -= used_height2
-        y -= 12
+        if sel_img:
+            c.setFont("Helvetica-Bold", 14)
+            c.drawString(margin, y, f"Active Zonogram 0 - Selected AuNPs")
+            y -= 6
+            used_height2 = add_image(c, sel_img, margin, y-img_height, img_width, img_height)
+            y -= used_height2
+            y -= 12
+        else:
+            c.setFont("Helvetica", 12)
+            c.drawString(margin, y, "[Selected AuNPs image not found]")
+            y -= 20
         # Remove the first pair from az_pairs
         az_pairs = az_pairs[1:]
     # The rest as before
