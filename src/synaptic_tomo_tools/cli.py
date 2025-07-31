@@ -88,9 +88,9 @@ def load_tomograms(csv_path, analysis_type, set_name=None):
 
 def print_synapse_ascii_art():
     synapse_art = r"""
-╔═╗┬ ┬┌┐┌┌─┐┌─┐┌┬┐┬┌─┐╔╦╗┌─┐┌┬┐┌─┐╔╦╗┌─┐┌─┐┬  ┌─┐
-╚═╗└┬┘│││├─┤├─┘ │ ││   ║ │ │││││ │ ║ │ ││ ││  └─┐
-╚═╝ ┴ ┘└┘┴ ┴┴   ┴ ┴└─┘ ╩ └─┘┴ ┴└─┘ ╩ └─┘└─┘┴─┘└─┘
+================================================================================
+SYNAPTIC TOMO TOOLS
+================================================================================
 
                                     .:::::..             .......                                    
                                 .:::.     ..::.      .....     .....                                
@@ -114,42 +114,12 @@ def print_synapse_ascii_art():
                              .:::            .:.    ...           .....                             
                                  :::..   ..:::       .....    .....                                 
                                      .....                .....                                     
-    """
+"""
     print(synapse_art)
-
-def print_vesicle_ascii_art():
-    vesicle_art = r"""
-                                  
-\  /_ _. _| _   /\  _  _ |   _. _ 
- \/(-_)|(_|(-  /--\| )(_||\/_)|_) 
-                          /       
-"""
-    print(vesicle_art)
-
-def print_activezone_ascii_art():
-    activezone_art = r"""
-               ___                             
- /\  _|_.   _   _/ _  _  _   /\  _  _ |   _. _ 
-/--\(_|_|\/(-  /__(_)| )(-  /--\| )(_||\/_)|_) 
-                                       /       
-"""
-    print(activezone_art)
-
-def print_aunps_ascii_art():
-    aunps_art = r"""
-            __                      
- /\    |\ ||__)   /\  _  _ |   _. _ 
-/--\|_|| \||     /--\| )(_||\/_)|_) 
-                            /       
-"""
-    print(aunps_art)
-
-
 
 def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True):
     if print_ascii:
         print_synapse_ascii_art()
-        print_activezone_ascii_art()
     for i, (tomo, set_name) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
         print(f"\n{'='*33} TOMOGRAM {i+1}/{len(tomo_paths)} {'='*33}")
@@ -194,7 +164,6 @@ def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True):
 def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True, calculate_signals=False):
     if print_ascii:
         print_synapse_ascii_art()
-        print_vesicle_ascii_art()
     for i, (tomo, set_name) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
         if i > 0:
@@ -351,7 +320,6 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, calculate_signals
 def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True):
     if print_ascii:
         print_synapse_ascii_art()
-        print_aunps_ascii_art()
     for i, (tomo, set_name, aunp_active_zones) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
         
