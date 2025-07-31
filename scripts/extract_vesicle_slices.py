@@ -77,6 +77,24 @@ def load_tomogram_data(tomogram_path):
         # Monitor memory before loading
         memory_before = monitor_memory()
         
+        # Check file size to estimate memory requirements
+        file_size_mb = ddw_file.stat().st_size / (1024 * 1024)
+        print(f"Tomogram file size: {file_size_mb:.1f} MB")
+        
+        # Estimate memory needed (typically 4x file size for MRC data)
+        estimated_memory_mb = file_size_mb * 4
+        print(f"Estimated memory needed: {estimated_memory_mb:.1f} MB")
+        
+        # Check if we have enough memory available
+        if PSUTIL_AVAILABLE:
+            available_memory = psutil.virtual_memory().available / (1024 * 1024)
+            print(f"Available system memory: {available_memory:.1f} MB")
+            
+            if estimated_memory_mb > available_memory * 0.8:  # Use 80% of available memory as limit
+                print(f"WARNING: Estimated memory needed ({estimated_memory_mb:.1f} MB) exceeds available memory ({available_memory:.1f} MB)")
+                print("Consider processing smaller tomograms or freeing up memory")
+                return None
+        
         with mrcfile.open(ddw_file) as mrc:
             data = mrc.data.copy()  # Make a copy to ensure the file is closed
         
@@ -1089,6 +1107,74 @@ def calculate_fusion_point_for_vesicle(vesicle, membrane_active_zone_pairs, fusi
     
     return None
 
+def process_tomograms_in_chunks(df, output_dir, args):
+    """Process tomograms in chunks to prevent memory overload."""
+    total_extracted = 0
+    chunk_size = min(args.batch_size, 10)  # Process in smaller chunks
+    
+    for chunk_start in range(0, len(df), chunk_size):
+        chunk_end = min(chunk_start + chunk_size, len(df))
+        chunk_df = df.iloc[chunk_start:chunk_end]
+        
+        print(f"\n{'='*80}")
+        print(f"Processing chunk {chunk_start//chunk_size + 1}/{(len(df) + chunk_size - 1)//chunk_size}")
+        print(f"Tomograms {chunk_start + 1}-{chunk_end} of {len(df)}")
+        print(f"{'='*80}")
+        
+        # Force memory cleanup before starting new chunk
+        cleanup_memory()
+        time.sleep(1)
+        
+        chunk_extracted = 0
+        for i, (_, row) in enumerate(chunk_df.iterrows()):
+            tomogram_name = row['tomoname']
+            set_name = row['set']
+            
+            print(f"\nProcessing tomogram {chunk_start + i + 1}/{len(df)}: {tomogram_name}")
+            
+            # Construct tomogram path
+            if args.data_dir:
+                tomogram_path = Path(args.data_dir) / set_name / "TOP_TOMOS" / tomogram_name
+            else:
+                tomogram_path = Path("data") / set_name / "TOP_TOMOS" / tomogram_name
+            
+            if not tomogram_path.exists():
+                print(f"Tomogram path does not exist: {tomogram_path}")
+                continue
+            
+            try:
+                # Check memory before processing
+                memory_before = monitor_memory()
+                if memory_before > args.memory_limit:
+                    print(f"WARNING: High memory usage ({memory_before:.1f} MB). Forcing cleanup...")
+                    cleanup_memory()
+                    time.sleep(1)
+                
+                # Process the tomogram
+                extracted = process_tomogram(tomogram_path, output_dir)
+                chunk_extracted += extracted
+                
+                # Memory cleanup after each tomogram
+                cleanup_memory()
+                
+            except Exception as e:
+                print(f"Error processing tomogram {tomogram_name}: {e}")
+                cleanup_memory()
+                continue
+        
+        total_extracted += chunk_extracted
+        print(f"\nChunk complete. Extracted {chunk_extracted} vesicles in this chunk.")
+        
+        # Aggressive cleanup between chunks
+        print("Performing aggressive memory cleanup between chunks...")
+        gc.collect()
+        time.sleep(3)
+        
+        memory_after = monitor_memory()
+        print(f"Memory after chunk cleanup: {memory_after:.1f} MB")
+    
+    return total_extracted
+
 def main():
     parser = argparse.ArgumentParser(description='Extract vesicle slices from tomograms')
     parser.add_argument('--csv', default='data/tomograms.csv', help='CSV file with tomogram information')
@@ -1097,6 +1183,9 @@ def main():
     parser.add_argument('--set', help='Filter by set name')
     parser.add_argument('--start-from', help='Start from specific tomogram')
     parser.add_argument('--max-tomograms', type=int, help='Maximum number of tomograms to process (for testing)')
+    parser.add_argument('--batch-size', type=int, default=5, help='Number of tomograms to process before forcing memory cleanup')
+    parser.add_argument('--memory-limit', type=int, default=6000, help='Memory limit in MB before forcing cleanup')
+    parser.add_argument('--use-chunks', action='store_true', help='Process tomograms in chunks to prevent memory overload')
     args = parser.parse_args()
     
     # Monitor initial memory
@@ -1126,44 +1215,69 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Process each tomogram
-    total_extracted = 0
-    for i, (_, row) in enumerate(df.iterrows()):
-        tomogram_name = row['tomoname']
-        set_name = row['set']
+    # Choose processing method based on dataset size and user preference
+    if args.use_chunks or len(df) > 50:
+        print(f"Using chunked processing for {len(df)} tomograms")
+        total_extracted = process_tomograms_in_chunks(df, output_dir, args)
+    else:
+        print(f"Using standard processing for {len(df)} tomograms")
+        # Process each tomogram with batch memory management
+        total_extracted = 0
+        batch_count = 0
         
-        print(f"\n{'='*60}")
-        print(f"Processing tomogram {i+1}/{len(df)}: {tomogram_name}")
-        print(f"{'='*60}")
-        
-        # Construct tomogram path
-        if args.data_dir:
-            tomogram_path = Path(args.data_dir) / set_name / "TOP_TOMOS" / tomogram_name
-        else:
-            tomogram_path = Path("data") / set_name / "TOP_TOMOS" / tomogram_name
-        
-        if not tomogram_path.exists():
-            print(f"Tomogram path does not exist: {tomogram_path}")
-            continue
-        
-        try:
-            # Process the tomogram
-            extracted = process_tomogram(tomogram_path, output_dir)
-            total_extracted += extracted
+        for i, (_, row) in enumerate(df.iterrows()):
+            tomogram_name = row['tomoname']
+            set_name = row['set']
             
-            # Memory cleanup after each tomogram
-            cleanup_memory()
+            print(f"\n{'='*60}")
+            print(f"Processing tomogram {i+1}/{len(df)}: {tomogram_name}")
+            print(f"{'='*60}")
             
-            # Check memory usage
-            memory_usage = monitor_memory()
-            if memory_usage > 8000:  # Warning if over 8GB
-                print(f"WARNING: High memory usage ({memory_usage:.1f} MB). Consider processing fewer tomograms at once.")
+            # Construct tomogram path
+            if args.data_dir:
+                tomogram_path = Path(args.data_dir) / set_name / "TOP_TOMOS" / tomogram_name
+            else:
+                tomogram_path = Path("data") / set_name / "TOP_TOMOS" / tomogram_name
             
-        except Exception as e:
-            print(f"Error processing tomogram {tomogram_name}: {e}")
-            # Force memory cleanup on error
-            cleanup_memory()
-            continue
+            if not tomogram_path.exists():
+                print(f"Tomogram path does not exist: {tomogram_path}")
+                continue
+            
+            try:
+                # Check memory before processing
+                memory_before = monitor_memory()
+                if memory_before > args.memory_limit:
+                    print(f"WARNING: High memory usage ({memory_before:.1f} MB). Forcing cleanup...")
+                    cleanup_memory()
+                    time.sleep(1)  # Give system time to free memory
+                
+                # Process the tomogram
+                extracted = process_tomogram(tomogram_path, output_dir)
+                total_extracted += extracted
+                
+                # Memory cleanup after each tomogram
+                cleanup_memory()
+                batch_count += 1
+                
+                # Force more aggressive cleanup every batch_size tomograms
+                if batch_count >= args.batch_size:
+                    print(f"\n--- Batch complete ({args.batch_size} tomograms). Forcing memory cleanup ---")
+                    gc.collect()
+                    time.sleep(2)  # Longer delay for batch cleanup
+                    batch_count = 0
+                    
+                    # Check memory after batch cleanup
+                    memory_after = monitor_memory()
+                    if memory_after > args.memory_limit:
+                        print(f"WARNING: Memory still high after cleanup ({memory_after:.1f} MB)")
+                        print("Consider reducing batch size or processing fewer tomograms at once.")
+                
+            except Exception as e:
+                print(f"Error processing tomogram {tomogram_name}: {e}")
+                # Force memory cleanup on error
+                cleanup_memory()
+                batch_count = 0
+                continue
     
     print(f"\n{'='*60}")
     print(f"Processing complete!")
