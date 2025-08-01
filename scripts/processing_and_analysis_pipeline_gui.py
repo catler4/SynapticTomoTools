@@ -160,6 +160,17 @@ class AnalysisPipelineGUI(tk.Tk):
             ("Select AuNP Picks", "select-aunp-picks"),
         ]
         
+        # Tooltips for each FindingAmPA command
+        self.findingampa_tooltips = {
+            "create-tomograms": "Create tomogram reconstructions using Etomo. The default setting uses weighted backprojection without any filtering to reconstruct tomograms.",
+            "ddw": "Apply DeepDeWedge denoising to tomograms. This uses previously trained models to denoise tomograms defined in findingampa pipeline (choose model from dropdown on right).",
+            "annotate-membranes": "Segment presynaptic and postsynaptic membranes using MemBrain-seg. This runs on both weighted backprojection and DDW denoised tomograms.",
+            "match-aunps": "Run template-matching to identify AuNPs within tomogram.",
+            "new-annotate-aunps": "Annotate membranes using the Blender plug-in. This step allows manual cleaning of membrane segmentations and assignment of pre/postsynaptic membranes and presynaptic vesicles.",
+            "render-active-zonograms": "Generate active zonogram visualizations. This creates 2D projections showing active zone regions with AuNP distributions.",
+            "select-aunp-picks": "Select and refine AuNP picks for analysis. This step runs an automated selection of AuNPs confined to each active zone for further processing."
+        }
+        
         self.findingampa_check_vars = []
         self.findingampa_btns = []
         for idx, (label, command) in enumerate(self.findingampa_commands):
@@ -176,14 +187,21 @@ class AnalysisPipelineGUI(tk.Tk):
                 ddw_flag_menu.pack(side=tk.LEFT, padx=(5, 0))
                 self.findingampa_check_vars.append(var)
                 self.findingampa_btns.append(btn)
+                # Add tooltip for DDW button
+                ToolTip(btn, self.findingampa_tooltips.get(command, "No description available"))
                 continue
             btn = ttk.Button(row_frame, text=label, command=lambda c=command: self._run_findingampa_command(c))
             btn.pack(side=tk.LEFT, padx=(5, 0))
             self.findingampa_check_vars.append(var)
             self.findingampa_btns.append(btn)
+            # Add tooltip for each button
+            ToolTip(btn, self.findingampa_tooltips.get(command, "No description available"))
+        
         # Add Run Checked button
         run_checked_btn = ttk.Button(findingampa_tab, text="Run Checked", command=self._run_findingampa_checked)
         run_checked_btn.pack(anchor=tk.W, pady=8, padx=20)
+        # Add tooltip for Run Checked button
+        ToolTip(run_checked_btn, "Run all checked FindingAmPA processing steps in order from top to bottom. This executes the selected workflow steps sequentially.")
         # Analysis tabs
         for step in ["Active Zone", "Vesicles", "AuNPs", "Visualization", "Full Pipeline"]:
             tab = ttk.Frame(notebook)
