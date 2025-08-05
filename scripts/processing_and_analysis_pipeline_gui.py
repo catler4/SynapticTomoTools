@@ -155,7 +155,7 @@ class AnalysisPipelineGUI(tk.Tk):
             ("Denoise Tomograms (DeepDeWedge)", "ddw"),
             ("Segment Membranes (membrain-seg)", "annotate-membranes"),
             ("Match AuNPs", "match-aunps"),
-            ("Annotate Membranes (Blender plug-in)", "new-annotate-aunps"),
+            ("Annotate Membranes (Blender plug-in)", "new-annotate-aunps --reset"),
             ("Render Active Zonograms", "render-active-zonograms"),
             ("Select AuNP Picks", "select-aunp-picks"),
         ]
