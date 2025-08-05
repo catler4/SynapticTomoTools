@@ -310,65 +310,11 @@ class AnalysisPipelineGUI(tk.Tk):
         
         def run_command_with_completion():
             try:
-                # Set FindingAMPA assets path environment variable
-                env = os.environ.copy()
-                # Try to find FindingAMPA installation - look for it in the specific path
-                findingampa_paths = [
-                    Path("/goliath/processing/Gouaux/CJS/GitHub/findingampa"),  # Specific path on other machine
-                ]
-                
-                findingampa_found = False
-                for path in findingampa_paths:
-                    self._log(f"Checking for FindingAMPA at: {path}\n")
-                    if path.exists():
-                        env["FINDINGAMPA_PATH"] = str(path.absolute())
-                        self._log(f"Found FindingAMPA at: {path.absolute()}\n")
-                        
-                        # Check if assets directory exists
-                        assets_path = path / "assets"
-                        if assets_path.exists():
-                            self._log(f"Assets directory found at: {assets_path}\n")
-                            
-                            # Check for blender directory
-                            blender_path = assets_path / "blender"
-                            if blender_path.exists():
-                                self._log(f"Blender directory found at: {blender_path}\n")
-                                
-                                # Check for version directory
-                                version_path = blender_path / "4_3"
-                                if version_path.exists():
-                                    self._log(f"Blender 4.3 directory found at: {version_path}\n")
-                                    
-                                    # Check for blender executable
-                                    blender_exec = version_path / "blender"
-                                    if blender_exec.exists():
-                                        self._log(f"Blender executable found at: {blender_exec}\n")
-                                    else:
-                                        self._log(f"Blender executable NOT found at: {blender_exec}\n")
-                                else:
-                                    self._log(f"Blender 4.3 directory NOT found at: {version_path}\n")
-                                    # List what's in the blender directory
-                                    if blender_path.exists():
-                                        self._log(f"Contents of blender directory: {list(blender_path.iterdir())}\n")
-                            else:
-                                self._log(f"Blender directory NOT found at: {blender_path}\n")
-                                # List what's in the assets directory
-                                self._log(f"Contents of assets directory: {list(assets_path.iterdir())}\n")
-                        else:
-                            self._log(f"Assets directory NOT found at: {assets_path}\n")
-                        
-                        findingampa_found = True
-                        break
-                    else:
-                        self._log(f"Path does not exist: {path}\n")
-                
-                if not findingampa_found:
-                    self._log("Warning: Could not find FindingAMPA installation. Blender may not be found.\n")
-                
                 if self.findingampa_single_mode.get() and self.findingampa_single_dir.get():
                     # Run in the selected directory only
                     cli = ["finding_ampa", base_command] + command_args + extra_args
                     self._log(f"Running (single tomogram): {' '.join(cli)} in {self.findingampa_single_dir.get()}\n")
+                    env = os.environ.copy()
                     self._run_subprocess(cli, env, self.findingampa_single_dir.get())
                 elif self.findingampa_all_mode.get() or not self.findingampa_single_mode.get():
                     # Run for all tomograms in CSV, using best_alignment dir for each
@@ -391,6 +337,7 @@ class AnalysisPipelineGUI(tk.Tk):
                                 continue
                             cli = ["finding_ampa", base_command] + command_args + extra_args
                             self._log(f"Running: {' '.join(cli)} in {best_align_dir}\n")
+                            env = os.environ.copy()
                             self._run_subprocess(cli, env, best_align_dir)
             finally:
                 completion_event.set()
