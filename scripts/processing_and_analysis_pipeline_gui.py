@@ -338,7 +338,9 @@ class AnalysisPipelineGUI(tk.Tk):
                             cli = ["finding_ampa", base_command] + command_args + extra_args
                             self._log(f"Running: {' '.join(cli)} in {best_align_dir}\n")
                             env = os.environ.copy()
+                            # Run subprocess and wait for completion before moving to next tomogram
                             self._run_subprocess(cli, env, best_align_dir)
+                            self._log(f"Completed processing for tomogram: {tomo_name}\n")
             finally:
                 completion_event.set()
         
