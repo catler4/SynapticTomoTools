@@ -580,7 +580,31 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
         clusters = aunp_clusters['aunp_cluster'].values
         unique_clusters = np.unique(clusters)
         n_clusters = len(unique_clusters[unique_clusters != -1])
-        cmap = cm.get_cmap('tab20', n_clusters)
+        
+        # Use a colormap that can handle more clusters and ensure distinct colors
+        if n_clusters <= 20:
+            cmap = cm.get_cmap('tab20', n_clusters)
+        else:
+            # For more than 20 clusters, use a different approach
+            # Create a custom colormap that cycles through distinct colors
+            import matplotlib.colors as mcolors
+            base_colors = plt.cm.tab20(np.linspace(0, 1, 20))
+            # Add more distinct colors by mixing and varying saturation
+            additional_colors = []
+            for i in range(n_clusters - 20):
+                # Create variations of existing colors
+                base_idx = i % 20
+                base_color = base_colors[base_idx]
+                # Vary saturation and lightness
+                hsv = mcolors.rgb_to_hsv(base_color[:3])
+                hsv[1] = min(1.0, hsv[1] * (0.7 + 0.3 * (i // 20)))  # Vary saturation
+                hsv[2] = min(1.0, hsv[2] * (0.8 + 0.2 * (i % 3)))     # Vary lightness
+                new_color = mcolors.hsv_to_rgb(hsv)
+                additional_colors.append(np.append(new_color, 1.0))
+            
+            all_colors = np.vstack([base_colors, additional_colors])
+            cmap = mcolors.ListedColormap(all_colors[:n_clusters])
+        
         cluster_color_map = {c: cmap(i) for i, c in enumerate(unique_clusters) if c != -1}
         cluster_color_map[-1] = (0.5, 0.5, 0.5, 1.0)  # grey for noise
         colors = [cluster_color_map.get(c, (0.5, 0.5, 0.5, 1.0)) for c in clusters]
