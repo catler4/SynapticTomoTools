@@ -190,7 +190,11 @@ class AnalysisPipelineGUI(tk.Tk):
                 # Add tooltip for DDW button
                 ToolTip(btn, self.findingampa_tooltips.get(command, "No description available"))
                 continue
-            btn = ttk.Button(row_frame, text=label, command=lambda c=command: self._run_findingampa_command(c))
+            # Use specific method for new-annotate-aunps to show popup
+            if command == "new-annotate-aunps --reset":
+                btn = ttk.Button(row_frame, text=label, command=self._run_findingampa_new_annotate_aunps)
+            else:
+                btn = ttk.Button(row_frame, text=label, command=lambda c=command: self._run_findingampa_command(c))
             btn.pack(side=tk.LEFT, padx=(5, 0))
             self.findingampa_check_vars.append(var)
             self.findingampa_btns.append(btn)
@@ -375,10 +379,35 @@ Do you want to continue?"""
             for (label, command), var in zip(self.findingampa_commands, self.findingampa_check_vars):
                 if var.get():
                     self._log(f"\nStarting command: {label}\n")
-                    # Run command and wait for completion
-                    completion_event = self._run_findingampa_command(command, wait_for_completion=False)
-                    if completion_event:
-                        completion_event.wait()  # Wait for this command to complete
+                    # Special handling for new-annotate-aunps to show popup
+                    if command == "new-annotate-aunps --reset":
+                        # Show popup and wait for user confirmation
+                        instructions = """Annotate Membranes (Blender plug-in) Instructions:
+
+1. Blender will open with the tomogram and membrane segmentations (both from WBP and DDW)loaded
+2. Choose between WBP and DDW membrane segmentations (hide other)
+3. Use the Blender interface to:
+   - Clean up membrane segmentations (erase connections and/or adjust tresholding if necessary)
+   - Assign pre/postsynaptic membranes (move to relevant group)
+   - Assign presynaptic vesicles (move to relevant group)
+4. Save your work when complete (Save as new_aunp_template_CJS_ddw.blend)
+5. Close Blender to finish the annotation process
+
+Do you want to continue?"""
+                        
+                        result = messagebox.askyesno("Blender Annotation Instructions", instructions)
+                        if result:
+                            completion_event = self._run_findingampa_command(command, wait_for_completion=False)
+                            if completion_event:
+                                completion_event.wait()  # Wait for this command to complete
+                        else:
+                            self._log("Skipping new-annotate-aunps command (user cancelled)\n")
+                            continue
+                    else:
+                        # Run command and wait for completion
+                        completion_event = self._run_findingampa_command(command, wait_for_completion=False)
+                        if completion_event:
+                            completion_event.wait()  # Wait for this command to complete
                     self._log(f"Completed command: {label}\n")
         
         # Run the entire sequence in a background thread
