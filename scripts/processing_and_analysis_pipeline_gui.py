@@ -319,11 +319,48 @@ class AnalysisPipelineGUI(tk.Tk):
                 
                 findingampa_found = False
                 for path in findingampa_paths:
+                    self._log(f"Checking for FindingAMPA at: {path}\n")
                     if path.exists():
                         env["FINDINGAMPA_PATH"] = str(path.absolute())
                         self._log(f"Found FindingAMPA at: {path.absolute()}\n")
+                        
+                        # Check if assets directory exists
+                        assets_path = path / "assets"
+                        if assets_path.exists():
+                            self._log(f"Assets directory found at: {assets_path}\n")
+                            
+                            # Check for blender directory
+                            blender_path = assets_path / "blender"
+                            if blender_path.exists():
+                                self._log(f"Blender directory found at: {blender_path}\n")
+                                
+                                # Check for version directory
+                                version_path = blender_path / "4_3"
+                                if version_path.exists():
+                                    self._log(f"Blender 4.3 directory found at: {version_path}\n")
+                                    
+                                    # Check for blender executable
+                                    blender_exec = version_path / "blender"
+                                    if blender_exec.exists():
+                                        self._log(f"Blender executable found at: {blender_exec}\n")
+                                    else:
+                                        self._log(f"Blender executable NOT found at: {blender_exec}\n")
+                                else:
+                                    self._log(f"Blender 4.3 directory NOT found at: {version_path}\n")
+                                    # List what's in the blender directory
+                                    if blender_path.exists():
+                                        self._log(f"Contents of blender directory: {list(blender_path.iterdir())}\n")
+                            else:
+                                self._log(f"Blender directory NOT found at: {blender_path}\n")
+                                # List what's in the assets directory
+                                self._log(f"Contents of assets directory: {list(assets_path.iterdir())}\n")
+                        else:
+                            self._log(f"Assets directory NOT found at: {assets_path}\n")
+                        
                         findingampa_found = True
                         break
+                    else:
+                        self._log(f"Path does not exist: {path}\n")
                 
                 if not findingampa_found:
                     self._log("Warning: Could not find FindingAMPA installation. Blender may not be found.\n")
