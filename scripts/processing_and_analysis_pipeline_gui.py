@@ -255,7 +255,23 @@ class AnalysisPipelineGUI(tk.Tk):
     def _run_findingampa_match_aunps(self):
         self._run_findingampa_command("match-aunps")
     def _run_findingampa_new_annotate_aunps(self):
-        self._run_findingampa_command("new-annotate-aunps --reset")
+        # Show instructions popup before running
+        instructions = """Annotate Membranes (Blender plug-in) Instructions:
+
+1. Blender will open with the tomogram and membrane segmentations (both from WBP and DDW)loaded
+2. Choose between WBP and DDW membrane segmentations (hide other)
+3. Use the Blender interface to:
+   - Clean up membrane segmentations (erase connections and/or adjust tresholding if necessary)
+   - Assign pre/postsynaptic membranes (move to relevant group)
+   - Assign presynaptic vesicles (move to relevant group)
+4. Save your work when complete (Save as new_aunp_template_CJS_ddw.blend)
+5. Close Blender to finish the annotation process
+
+Do you want to continue?"""
+        
+        result = messagebox.askyesno("Blender Annotation Instructions", instructions)
+        if result:
+            self._run_findingampa_command("new-annotate-aunps --reset")
     def _run_findingampa_render_active_zonograms(self):
         self._run_findingampa_command("render-active-zonograms")
     def _run_findingampa_select_aunp_picks(self):
