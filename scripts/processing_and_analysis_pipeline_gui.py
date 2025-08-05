@@ -310,11 +310,28 @@ class AnalysisPipelineGUI(tk.Tk):
         
         def run_command_with_completion():
             try:
+                # Set FindingAMPA assets path environment variable
+                env = os.environ.copy()
+                # Try to find FindingAMPA installation - look for it in the specific path
+                findingampa_paths = [
+                    Path("/goliath/processing/Gouaux/CJS/GitHub/findingampa"),  # Specific path on other machine
+                ]
+                
+                findingampa_found = False
+                for path in findingampa_paths:
+                    if path.exists():
+                        env["FINDINGAMPA_PATH"] = str(path.absolute())
+                        self._log(f"Found FindingAMPA at: {path.absolute()}\n")
+                        findingampa_found = True
+                        break
+                
+                if not findingampa_found:
+                    self._log("Warning: Could not find FindingAMPA installation. Blender may not be found.\n")
+                
                 if self.findingampa_single_mode.get() and self.findingampa_single_dir.get():
                     # Run in the selected directory only
                     cli = ["finding_ampa", base_command] + command_args + extra_args
                     self._log(f"Running (single tomogram): {' '.join(cli)} in {self.findingampa_single_dir.get()}\n")
-                    env = os.environ.copy()
                     self._run_subprocess(cli, env, self.findingampa_single_dir.get())
                 elif self.findingampa_all_mode.get() or not self.findingampa_single_mode.get():
                     # Run for all tomograms in CSV, using best_alignment dir for each
@@ -337,7 +354,6 @@ class AnalysisPipelineGUI(tk.Tk):
                                 continue
                             cli = ["finding_ampa", base_command] + command_args + extra_args
                             self._log(f"Running: {' '.join(cli)} in {best_align_dir}\n")
-                            env = os.environ.copy()
                             self._run_subprocess(cli, env, best_align_dir)
             finally:
                 completion_event.set()
