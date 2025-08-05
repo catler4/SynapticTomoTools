@@ -201,7 +201,7 @@ class AnalysisPipelineGUI(tk.Tk):
         run_checked_btn = ttk.Button(findingampa_tab, text="Run Checked", command=self._run_findingampa_checked)
         run_checked_btn.pack(anchor=tk.W, pady=8, padx=20)
         # Add tooltip for Run Checked button
-        ToolTip(run_checked_btn, "Run all checked FindingAmPA processing steps in order from top to bottom. This executes the selected workflow steps sequentially.")
+        ToolTip(run_checked_btn, "Run all checked FindingAmPA processing steps in order from top to bottom. This executes the selected workflow steps sequentially, waiting for each command to complete before starting the next one.")
         # Analysis tabs
         for step in ["Active Zone", "Vesicles", "AuNPs", "Visualization", "Full Pipeline"]:
             tab = ttk.Frame(notebook)
@@ -290,50 +290,69 @@ class AnalysisPipelineGUI(tk.Tk):
         if path:
             self.findingampa_single_dir.set(path)
     # Update _run_findingampa_command to use single mode if checked
-    def _run_findingampa_command(self, command):
+    def _run_findingampa_command(self, command, wait_for_completion=False):
         # For DDW, require a model selection and pass as positional argument
         extra_args = []
         if command == "ddw":
             model = self.ddw_flag_var.get()
             if not model:
                 self._log("Please select a model (k3, falcon, or falconczi) for DDW.\n")
-                return
+                return None
             extra_args.append(model)
-        if self.findingampa_single_mode.get() and self.findingampa_single_dir.get():
-            # Run in the selected directory only
-            cli = ["finding_ampa", command] + extra_args
-            self._log(f"Running (single tomogram): {' '.join(cli)} in {self.findingampa_single_dir.get()}\n")
-            env = os.environ.copy()
-            threading.Thread(target=self._run_subprocess, args=(cli, env, self.findingampa_single_dir.get())).start()
-        elif self.findingampa_all_mode.get() or not self.findingampa_single_mode.get():
-            # Run for all tomograms in CSV, using best_alignment dir for each
-            csv_path = self.csv_path.get()
-            root_dir = self.root_dir.get()
-            if not csv_path or not root_dir:
-                self._log("CSV and root directory must be set to run for all tomograms.\n")
-                return
-            import csv as _csv, os as _os
-            with open(csv_path, newline='') as f:
-                reader = _csv.DictReader(f)
-                for row in reader:
-                    set_name = row.get('set')
-                    tomo_name = row.get('tomogram')
-                    if not set_name or not tomo_name:
-                        continue
-                    best_align_dir = _os.path.join(root_dir, set_name, "TOP_TOMOS", tomo_name, "best_alignment")
-                    if not _os.path.isdir(best_align_dir):
-                        self._log(f"Skipping missing directory: {best_align_dir}\n")
-                        continue
+        
+        # Create a threading event to track completion
+        completion_event = threading.Event()
+        
+        def run_command_with_completion():
+            try:
+                if self.findingampa_single_mode.get() and self.findingampa_single_dir.get():
+                    # Run in the selected directory only
                     cli = ["finding_ampa", command] + extra_args
-                    self._log(f"Running: {' '.join(cli)} in {best_align_dir}\n")
+                    self._log(f"Running (single tomogram): {' '.join(cli)} in {self.findingampa_single_dir.get()}\n")
                     env = os.environ.copy()
-                    threading.Thread(target=self._run_subprocess, args=(cli, env, best_align_dir)).start()
+                    self._run_subprocess(cli, env, self.findingampa_single_dir.get())
+                elif self.findingampa_all_mode.get() or not self.findingampa_single_mode.get():
+                    # Run for all tomograms in CSV, using best_alignment dir for each
+                    csv_path = self.csv_path.get()
+                    root_dir = self.root_dir.get()
+                    if not csv_path or not root_dir:
+                        self._log("CSV and root directory must be set to run for all tomograms.\n")
+                        return
+                    import csv as _csv, os as _os
+                    with open(csv_path, newline='') as f:
+                        reader = _csv.DictReader(f)
+                        for row in reader:
+                            set_name = row.get('set')
+                            tomo_name = row.get('tomogram')
+                            if not set_name or not tomo_name:
+                                continue
+                            best_align_dir = _os.path.join(root_dir, set_name, "TOP_TOMOS", tomo_name, "best_alignment")
+                            if not _os.path.isdir(best_align_dir):
+                                self._log(f"Skipping missing directory: {best_align_dir}\n")
+                                continue
+                            cli = ["finding_ampa", command] + extra_args
+                            self._log(f"Running: {' '.join(cli)} in {best_align_dir}\n")
+                            env = os.environ.copy()
+                            self._run_subprocess(cli, env, best_align_dir)
+            finally:
+                completion_event.set()
+        
+        if wait_for_completion:
+            # Run in current thread and wait for completion
+            run_command_with_completion()
+            return None
+        else:
+            # Run in background thread
+            threading.Thread(target=run_command_with_completion).start()
+            return completion_event
 
     def _run_findingampa_checked(self):
-        # Run all checked commands in order from top to bottom
+        # Run all checked commands in order from top to bottom, waiting for each to complete
         for (label, command), var in zip(self.findingampa_commands, self.findingampa_check_vars):
             if var.get():
-                self._run_findingampa_command(command)
+                self._log(f"\nStarting command: {label}\n")
+                self._run_findingampa_command(command, wait_for_completion=True)
+                self._log(f"Completed command: {label}\n")
 
     def _build_tab_content(self, tab, step):
         # For all tabs after home, use a horizontal layout
