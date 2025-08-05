@@ -255,7 +255,7 @@ class AnalysisPipelineGUI(tk.Tk):
     def _run_findingampa_match_aunps(self):
         self._run_findingampa_command("match-aunps")
     def _run_findingampa_new_annotate_aunps(self):
-        self._run_findingampa_command("new-annotate-aunps")
+        self._run_findingampa_command("new-annotate-aunps --reset")
     def _run_findingampa_render_active_zonograms(self):
         self._run_findingampa_command("render-active-zonograms")
     def _run_findingampa_select_aunp_picks(self):
@@ -291,9 +291,14 @@ class AnalysisPipelineGUI(tk.Tk):
             self.findingampa_single_dir.set(path)
     # Update _run_findingampa_command to use single mode if checked
     def _run_findingampa_command(self, command, wait_for_completion=False):
+        # Split command into base command and arguments
+        command_parts = command.split()
+        base_command = command_parts[0]
+        command_args = command_parts[1:] if len(command_parts) > 1 else []
+        
         # For DDW, require a model selection and pass as positional argument
         extra_args = []
-        if command == "ddw":
+        if base_command == "ddw":
             model = self.ddw_flag_var.get()
             if not model:
                 self._log("Please select a model (k3, falcon, or falconczi) for DDW.\n")
@@ -307,7 +312,7 @@ class AnalysisPipelineGUI(tk.Tk):
             try:
                 if self.findingampa_single_mode.get() and self.findingampa_single_dir.get():
                     # Run in the selected directory only
-                    cli = ["finding_ampa", command] + extra_args
+                    cli = ["finding_ampa", base_command] + command_args + extra_args
                     self._log(f"Running (single tomogram): {' '.join(cli)} in {self.findingampa_single_dir.get()}\n")
                     env = os.environ.copy()
                     self._run_subprocess(cli, env, self.findingampa_single_dir.get())
@@ -330,7 +335,7 @@ class AnalysisPipelineGUI(tk.Tk):
                             if not _os.path.isdir(best_align_dir):
                                 self._log(f"Skipping missing directory: {best_align_dir}\n")
                                 continue
-                            cli = ["finding_ampa", command] + extra_args
+                            cli = ["finding_ampa", base_command] + command_args + extra_args
                             self._log(f"Running: {' '.join(cli)} in {best_align_dir}\n")
                             env = os.environ.copy()
                             self._run_subprocess(cli, env, best_align_dir)
