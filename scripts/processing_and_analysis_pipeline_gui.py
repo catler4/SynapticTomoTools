@@ -353,11 +353,18 @@ class AnalysisPipelineGUI(tk.Tk):
 
     def _run_findingampa_checked(self):
         # Run all checked commands in order from top to bottom, waiting for each to complete
-        for (label, command), var in zip(self.findingampa_commands, self.findingampa_check_vars):
-            if var.get():
-                self._log(f"\nStarting command: {label}\n")
-                self._run_findingampa_command(command, wait_for_completion=True)
-                self._log(f"Completed command: {label}\n")
+        def run_checked_commands():
+            for (label, command), var in zip(self.findingampa_commands, self.findingampa_check_vars):
+                if var.get():
+                    self._log(f"\nStarting command: {label}\n")
+                    # Run command and wait for completion
+                    completion_event = self._run_findingampa_command(command, wait_for_completion=False)
+                    if completion_event:
+                        completion_event.wait()  # Wait for this command to complete
+                    self._log(f"Completed command: {label}\n")
+        
+        # Run the entire sequence in a background thread
+        threading.Thread(target=run_checked_commands).start()
 
     def _build_tab_content(self, tab, step):
         # For all tabs after home, use a horizontal layout
