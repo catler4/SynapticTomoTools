@@ -49,9 +49,10 @@ def check_file_corruption(file_path):
         return f"Error reading file: {e}"
 
 def get_stats(tomo_name, base_data_dir):
-    # Find vesicle_results.json and aunp_clusters.csv for this tomogram
+    # Find vesicle_results.json and aunp data for this tomogram
     vesicle_json = list(Path(base_data_dir).glob(f"**/{tomo_name}/best_alignment/STT_results/vesicles/vesicle_results.json"))
     aunp_csv = list(Path(base_data_dir).glob(f"**/{tomo_name}/best_alignment/STT_results/aunps/aunp_clusters.csv"))
+    aunp_star_files = list(Path(base_data_dir).glob(f"**/{tomo_name}/best_alignment/aunps/aunp_tm_BP_active_zone_*.star"))
     stats = {
         'total_vesicles': 'N/A',
         'az_adjacent_vesicles': 'N/A',
@@ -82,27 +83,43 @@ def get_stats(tomo_name, base_data_dir):
             print(f"Warning: Error reading vesicle results for {tomo_name}: {e}")
             print(f"File: {vesicle_json[0]}")
             print(f"File analysis: {check_file_corruption(vesicle_json[0])}")
-    # AuNP stats
+    
+    # AuNP stats - count total AuNPs from original star files
+    total_aunps = 0
+    if aunp_star_files:
+        try:
+            import starfile
+            for star_file in aunp_star_files:
+                # Skip the _all.star file if it exists
+                if '_all.star' in str(star_file):
+                    continue
+                try:
+                    star_data = starfile.read(star_file)
+                    if 'particles' in star_data:
+                        total_aunps += len(star_data['particles'])
+                    elif 'data' in star_data:
+                        total_aunps += len(star_data['data'])
+                except Exception as e:
+                    print(f"Warning: Error reading star file {star_file}: {e}")
+            stats['total_aunps'] = total_aunps
+        except Exception as e:
+            print(f"Warning: Error processing AuNP star files for {tomo_name}: {e}")
+    
+    # AuNP cluster stats
     if aunp_csv:
         try:
             with open(aunp_csv[0], 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
-                total_aunps = 0
                 clusters = 0
                 for row in reader:
                     clusters += 1
-                    try:
-                        total_aunps += int(float(row['n_aunps']))
-                    except Exception:
-                        pass
-                stats['total_aunps'] = total_aunps
                 stats['aunp_clusters'] = clusters
         except UnicodeDecodeError as e:
-            print(f"Warning: Unicode decode error reading AuNP results for {tomo_name}: {e}")
+            print(f"Warning: Unicode decode error reading AuNP cluster results for {tomo_name}: {e}")
             print(f"File: {aunp_csv[0]}")
             print(f"File analysis: {check_file_corruption(aunp_csv[0])}")
         except Exception as e:
-            print(f"Warning: Error reading AuNP results for {tomo_name}: {e}")
+            print(f"Warning: Error reading AuNP cluster results for {tomo_name}: {e}")
             print(f"File: {aunp_csv[0]}")
             print(f"File analysis: {check_file_corruption(aunp_csv[0])}")
     return stats
@@ -396,7 +413,7 @@ def main():
     # Combine all PDFs into a single document
     if all_pdf_paths:
         merger = PdfMerger()
-        for pdf in sorted(all_pdf_paths):
+        for pdf in all_pdf_paths:  # Use CSV order, not alphabetical order
             merger.append(pdf)
         # Add summary figures at the end
         from reportlab.lib.pagesizes import letter
