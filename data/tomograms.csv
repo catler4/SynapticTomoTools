@@ -19,7 +19,7 @@ tomoname,set,activezone,vesicles,aunps,aunp_active_zones
 20240111_WaffleHipp_133,15F1,True,True,True
 20240111_WaffleHipp_134,15F1,True,True,True
 20240111_WaffleHipp_135,15F1,True,True,True
-20240111_WaffleHipp_138,15F1,True,True,True,"0,1,2"
+20240111_WaffleHipp_138,15F1,True,True,True
 20240111_WaffleHipp_150,15F1,True,True,True
 20240111_WaffleHipp_154,15F1,True,True,True
 20240111_WaffleHipp_179,15F1,True,True,True
@@ -33,7 +33,7 @@ tomoname,set,activezone,vesicles,aunps,aunp_active_zones
 20240209_waffleHip_35,15F1,True,True,True
 20240209_waffleHip_71,15F1,True,True,True
 20240209_waffleHip_78,15F1,True,True,True
-20240307_AMmilled6_217,15F1,True,True,True,"0,1"
+20240307_AMmilled6_217,15F1,True,True,True
 20240307_AMmilled6_252,15F1,True,True,True
 20240523_HippWaffle_168,15F1,True,True,True
 20240523_HippWaffle_197,15F1,True,True,True,"0,1"
@@ -47,9 +47,9 @@ tomoname,set,activezone,vesicles,aunps,aunp_active_zones
 20240624_HippWaffle_88,15F1,True,True,True
 20240901_AMmilled13-1_29,15F1,True,True,True
 20240901_AMmilled13-1_43,15F1,True,True,True
-20241030_AMmilled12-1_15,15F1,True,True,True
+20241030_AMmilled12-1_15,15F1,True,True,True,"0"
 20241030_AMmilled12-2_30,15F1,True,True,True
-20241030_AMmilled12-2_41,15F1,True,True,True
+20241030_AMmilled12-2_41,15F1,True,True,True,"1"
 20241030_AMmilled12-2_53,15F1,True,True,True
 20241030_AMmilled12-2_62,15F1,True,True,True
 20241030_AMmilled12-2_78,15F1,True,True,True
@@ -99,7 +99,7 @@ tomoname,set,activezone,vesicles,aunps,aunp_active_zones
 20241206_AMmilled24-3_58,15F1and5F11dimer,True,True,False
 20241206_AMmilled24-3_92,15F1and5F11dimer,True,True,False
 20241208_AMmilled24-1_120,15F1and5F11dimer,True,True,False
-20241208_AMmilled24-1_138,15F1and5F11dimer,True,True,False
+20241208_AMmilled24-1_138,15F1and5F11dimer,True,True,False,"1"
 20241208_AMmilled24-1_64,15F1and5F11dimer,True,True,False
 20241208_AMmilled24-1_65,15F1and5F11dimer,True,True,False
 20241211_HippWaffle_49,15F1and5F11dimer,True,True,False
@@ -112,7 +112,7 @@ tomoname,set,activezone,vesicles,aunps,aunp_active_zones
 20250418_AMmilled29-2_Position_86,15F1and5F11dimer,True,True,False
 20250418_AMmilled29-2_Position_87,15F1and5F11dimer,True,True,False
 20250418_AMmilled29-2_Position_88,15F1and5F11dimer,True,True,False
-20250206_AMmilled27-2_100,11B8,True,True,True
+20250206_AMmilled27-2_100,11B8,True,True,True,"0,2"
 20250206_AMmilled27-2_101,11B8,True,True,True
 20250206_AMmilled27-2_112,11B8,True,True,True
 20250206_AMmilled27-2_140,11B8,True,True,True
@@ -120,7 +120,7 @@ tomoname,set,activezone,vesicles,aunps,aunp_active_zones
 20250206_AMmilled27-2_274,11B8,True,True,True
 20250206_AMmilled27-2_280,11B8,True,True,True
 20250206_AMmilled27-2_287,11B8,True,True,True
-20250206_AMmilled27-2_289,11B8,True,True,True
+20250206_AMmilled27-2_289,11B8,True,True,True,"1"
 20250206_AMmilled27-2_90,11B8,True,True,True
 20250226_CZmilledH-1_Position_1,unlabeled,True,True,False
 20250226_CZmilledH-1_Position_2_2,unlabeled,True,True,False
