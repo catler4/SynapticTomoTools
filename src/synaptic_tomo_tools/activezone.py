@@ -195,6 +195,42 @@ def import_membrane_segmentations(tomogram_path) -> Dict[str, List[np.ndarray]]:
     
     return membranes
 
+def import_membrane_segmentations_from_glb(tomogram_path) -> Dict[str, List[Dict[str, np.ndarray]]]:
+    """
+    Import presynaptic and postsynaptic membrane segmentations from a GLB file.
+    
+    Args:
+        tomogram_path: Path to the tomogram directory (str or Path)
+        
+    Returns:
+        Dictionary containing lists of coordinate arrays, faces, and normals for each membrane type
+    """
+    import trimesh
+
+    tomogram_path = Path(tomogram_path)
+    aunps_dir = tomogram_path / "best_alignment" / "aunps"
+    
+    if not aunps_dir.exists():
+        raise FileNotFoundError(f"AuNPs directory not found: {aunps_dir}")
+    
+    # Initialize results
+    membranes = {
+        'presynaptic': [],
+        'postsynaptic': []
+    }
+
+    presyn_glb = aunps_dir / "presynapticmembranes.glb"
+    with open(presyn_glb, "rb") as f:
+        presyn = trimesh.exchange.gltf.load_glb(f)
+    postsyn_glb = aunps_dir / "postsynapticmembranes.glb"
+    with open(postsyn_glb, "rb") as f:
+        postsyn = trimesh.exchange.gltf.load_glb(f)
+
+    membranes['presynaptic'] = [{'vertices': mesh['vertices'][:, [0, 2, 1]] * np.array([10, -10, 10]),'faces':mesh['faces'],'normals':mesh['vertex_normals'][:, [0, 2, 1]] * np.array([10, -10, 10])} for mesh in presyn["geometry"].values()]
+    membranes['postsynaptic'] = [{'vertices': mesh['vertices'][:, [0, 2, 1]] * np.array([10, -10, 10]),'faces':mesh['faces'],'normals':mesh['vertex_normals'][:, [0, 2, 1]] * np.array([10, -10, 10])} for mesh in postsyn["geometry"].values()]
+
+    return membranes
+
 
 def find_active_zones(membranes: Dict[str, List[np.ndarray]], distance_threshold: float = 40.0) -> Dict[str, Any]:
     """
@@ -275,6 +311,110 @@ def find_active_zones(membranes: Dict[str, List[np.ndarray]], distance_threshold
             else:
                 print(f"No active zone found between presynaptic {pre_idx+1} and postsynaptic {post_idx+1}")
     
+    return {
+        'active_zones': active_zones,
+        'total_active_zones': active_zone_count,
+        'distance_threshold': distance_threshold
+    }
+
+def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]], distance_threshold: float = 40.0) -> Dict[str, Any]:
+    """
+    Find active zones by identifying presynaptic points within distance_threshold of postsynaptic points.
+    Uses KD-tree for efficient spatial queries. Only vertices with normals pointing towards the other side are considered.
+    
+    Args:
+        membranes: Dictionary containing membrane coordinate arrays from GLB
+        distance_threshold: Distance threshold in nm (default: 40.0)
+        
+    Returns:
+        Dictionary containing active zone information and segmentations
+    """
+    import trimesh 
+
+    active_zones = {}
+    active_zone_count = 0
+    presyn_membranes = membranes['presynaptic']
+    postsyn_membranes = membranes['postsynaptic']
+    for pre_idx, presyn_data in enumerate(presyn_membranes):
+        presyn_coords = presyn_data['vertices']
+        presyn_normals = presyn_data['normals']
+        
+        for post_idx, postsyn_data in enumerate(postsyn_membranes):
+            postsyn_coords = postsyn_data['vertices']
+            postsyn_normals = postsyn_data['normals']
+            
+            # Filter presynaptic points with normals pointing towards postsynaptic points               
+            # Build KD-tree for postsynaptic points
+            post_tree = KDTree(postsyn_coords)
+            
+            # Find presynaptic points within threshold of any postsynaptic point
+            distances_pre, indices_pre = post_tree.query(presyn_coords, distance_upper_bound=distance_threshold)
+            
+            # Get active presynaptic points (those within threshold)
+            active_pre_mask = distances_pre <= distance_threshold
+            # Filter presynaptic points based on normals pointing towards postsynaptic points
+            active_pre_mask[active_pre_mask] = (np.sum(presyn_normals[active_pre_mask] * postsyn_normals[indices_pre[active_pre_mask]], axis=1) < 0)
+
+            active_pre_indices = np.where(active_pre_mask)[0]
+            active_pre_coords = presyn_coords[active_pre_indices] if len(active_pre_indices) > 0 else np.array([])
+            
+            # Find postsynaptic points within threshold of active presynaptic points
+            active_post_indices = np.array([])
+            if len(active_pre_coords) > 0:
+                # Build KD-tree for active presynaptic points
+                pre_tree = KDTree(active_pre_coords)
+                
+                # Find postsynaptic points within threshold of active presynaptic points
+                distances_post, indices_post = pre_tree.query(postsyn_coords, distance_upper_bound=distance_threshold)
+                
+                # Get active postsynaptic points
+                active_post_mask = distances_post <= distance_threshold
+                # Filter postsynaptic points based on normals pointing towards presynaptic points
+                active_post_mask[active_post_mask] = (np.sum(postsyn_normals[active_post_mask] * presyn_normals[active_pre_mask][indices_post[active_post_mask]], axis=1) < 0)
+                active_post_indices = np.where(active_post_mask)[0]
+            
+            # If we found an active zone
+            if len(active_pre_indices) > 0 or len(active_post_indices) > 0:
+                active_zone_count += 1
+                zone_name = f"active_zone_pre{pre_idx+1}_post{post_idx+1}"
+                
+                # Calculate distance statistics for active presynaptic points
+                if len(active_pre_coords) > 0:
+                    distances_active = distances_pre[active_pre_indices]
+                    min_dist = np.min(distances_active)
+                    max_dist = np.max(distances_active)
+                    avg_dist = np.mean(distances_active)
+                else:
+                    min_dist = float('inf')
+                    max_dist = 0
+                    avg_dist = 0
+                
+                pre_mesh = trimesh.Trimesh(vertices=presyn_data['vertices'], faces=presyn_data['faces'])
+                # Get only faces that contain only active presynaptic points
+                active_pre_faces_mask = np.isin(pre_mesh.faces, active_pre_indices).all(axis=1)
+                active_pre_faces_indices = np.where(active_pre_faces_mask)[0]
+                active_pre_mesh = pre_mesh.submesh([active_pre_faces_indices], append=True)
+                # Get area of active presynaptic mesh
+                active_pre_area = active_pre_mesh.area / 1e6  # Convert to µm²
+                active_zones[zone_name] = {
+                    'presynaptic_membrane_index': pre_idx + 1,
+                    'postsynaptic_membrane_index': post_idx + 1,
+                    'active_presynaptic_points': active_pre_coords,
+                    'active_presynaptic_faces': active_pre_mesh.faces,
+                    'active_presynaptic_area': active_pre_area,
+                    'active_postsynaptic_points': postsyn_coords[active_post_indices] if len(active_post_indices) > 0 else np.array([]),
+                    'active_presynaptic_indices': active_pre_indices,
+                    'active_postsynaptic_indices': active_post_indices,
+                    'min_distance': min_dist,
+                    'max_distance': max_dist,
+                    'avg_distance': avg_dist,
+                    'active_pre_count': len(active_pre_indices),
+                    'active_post_count': len(active_post_indices)
+                }
+                #
+                print(f"Found active zone: {zone_name} with {len(active_pre_indices)} presynaptic and {len(active_post_indices)} postsynaptic points")
+            else:
+                print(f"No active zone found between presynaptic {pre_idx+1} and postsynaptic {post_idx+1}")
     return {
         'active_zones': active_zones,
         'total_active_zones': active_zone_count,

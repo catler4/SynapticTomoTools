@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synaptic-tomo-tools"
+version = "0.1.0"
+description = "A Python toolkit for analyzing synaptic cryo-electron tomography (cryo-ET) data"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.21",
+    "scipy>=1.7",
+    "pandas>=1.3",
+    "starfile>=0.1.3",
+    "mrcfile>=1.4",
+    "matplotlib>=3.4",
+    "aquarel",
+    "tqdm>=4.62",
+    "scikit-image>=0.19",
+    "opencv-python>=4.5",
+    "torch>=1.9",
+    "segment-anything>=1.0",
+    "imageio>=2.9",
+    "psutil>=5.8",
+    "seaborn>=0.11",
+    "reportlab",
+    "pillow",
+    "PyPDF2",
+    "scikit-learn",
+    "trimesh"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-cov",
+    "black",
+    "isort",
+    "flake8",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/synaptic-tomo-tools"
+Repository = "https://github.com/yourusername/synaptic-tomo-tools"
+
+[project.scripts]
+synaptic-tomo-tools = "synaptic_tomo_tools.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+
+[tool.isort]
+profile = "black"
