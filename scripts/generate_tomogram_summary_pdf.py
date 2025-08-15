@@ -52,13 +52,28 @@ def get_stats(tomo_name, base_data_dir):
     # Find vesicle_results.json and aunp data for this tomogram
     vesicle_json = list(Path(base_data_dir).glob(f"**/{tomo_name}/best_alignment/STT_results/vesicles/vesicle_results.json"))
     aunp_csv = list(Path(base_data_dir).glob(f"**/{tomo_name}/best_alignment/STT_results/aunps/aunp_clusters.csv"))
-    aunp_star_files = list(Path(base_data_dir).glob(f"**/{tomo_name}/best_alignment/aunps/aunp_tm_BP_active_zone_*.star"))
+    
+    # Try to get AuNP count from the results CSV first
+    aunp_results_csv = Path("results/aunps_results.csv")
     stats = {
         'total_vesicles': 'N/A',
         'az_adjacent_vesicles': 'N/A',
         'total_aunps': 'N/A',
         'aunp_clusters': 'N/A',
     }
+    
+    # Get AuNP count from results CSV
+    if aunp_results_csv.exists():
+        try:
+            import pandas as pd
+            df = pd.read_csv(aunp_results_csv)
+            tomo_row = df[df['tomogram_name'] == tomo_name]
+            if not tomo_row.empty:
+                aunp_count = tomo_row['aunp_analysis_aunp_count'].iloc[0]
+                if pd.notna(aunp_count):
+                    stats['total_aunps'] = int(aunp_count)
+        except Exception as e:
+            print(f"Warning: Error reading AuNP results CSV for {tomo_name}: {e}")
     # Vesicle stats
     if vesicle_json:
         try:
@@ -84,26 +99,7 @@ def get_stats(tomo_name, base_data_dir):
             print(f"File: {vesicle_json[0]}")
             print(f"File analysis: {check_file_corruption(vesicle_json[0])}")
     
-    # AuNP stats - count total AuNPs from original star files
-    total_aunps = 0
-    if aunp_star_files:
-        try:
-            import starfile
-            for star_file in aunp_star_files:
-                # Skip the _all.star file if it exists
-                if '_all.star' in str(star_file):
-                    continue
-                try:
-                    star_data = starfile.read(star_file)
-                    if 'particles' in star_data:
-                        total_aunps += len(star_data['particles'])
-                    elif 'data' in star_data:
-                        total_aunps += len(star_data['data'])
-                except Exception as e:
-                    print(f"Warning: Error reading star file {star_file}: {e}")
-            stats['total_aunps'] = total_aunps
-        except Exception as e:
-            print(f"Warning: Error processing AuNP star files for {tomo_name}: {e}")
+
     
     # AuNP cluster stats
     if aunp_csv:
