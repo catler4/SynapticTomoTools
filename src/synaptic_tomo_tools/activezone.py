@@ -317,20 +317,22 @@ def find_active_zones(membranes: Dict[str, List[np.ndarray]], distance_threshold
         'distance_threshold': distance_threshold
     }
 
-def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]], distance_threshold: float = 40.0) -> Dict[str, Any]:
+def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]], distance_range: Tuple[float, float] = (10.0, 40.0)) -> Dict[str, Any]:
     """
-    Find active zones by identifying presynaptic points within distance_threshold of postsynaptic points.
+    Find active zones by identifying presynaptic points within distance_range of postsynaptic points.
     Uses KD-tree for efficient spatial queries. Only vertices with normals pointing towards the other side are considered.
     
     Args:
         membranes: Dictionary containing membrane coordinate arrays from GLB
-        distance_threshold: Distance threshold in nm (default: 40.0)
+        distance_range: Distance range in nm as (min_distance, max_distance) (default: (10.0, 40.0))
         
     Returns:
         Dictionary containing active zone information and segmentations
     """
     import trimesh 
 
+    min_distance, max_distance = distance_range
+    
     active_zones = {}
     active_zone_count = 0
     presyn_membranes = membranes['presynaptic']
@@ -347,28 +349,28 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
             # Build KD-tree for postsynaptic points
             post_tree = KDTree(postsyn_coords)
             
-            # Find presynaptic points within threshold of any postsynaptic point
-            distances_pre, indices_pre = post_tree.query(presyn_coords, distance_upper_bound=distance_threshold)
+            # Find presynaptic points within max_distance of any postsynaptic point
+            distances_pre, indices_pre = post_tree.query(presyn_coords, distance_upper_bound=max_distance)
             
-            # Get active presynaptic points (those within threshold)
-            active_pre_mask = distances_pre <= distance_threshold
+            # Get active presynaptic points (those within distance range)
+            active_pre_mask = (distances_pre >= min_distance) & (distances_pre <= max_distance)
             # Filter presynaptic points based on normals pointing towards postsynaptic points
             active_pre_mask[active_pre_mask] = (np.sum(presyn_normals[active_pre_mask] * postsyn_normals[indices_pre[active_pre_mask]], axis=1) < 0)
 
             active_pre_indices = np.where(active_pre_mask)[0]
             active_pre_coords = presyn_coords[active_pre_indices] if len(active_pre_indices) > 0 else np.array([])
             
-            # Find postsynaptic points within threshold of active presynaptic points
+            # Find postsynaptic points within distance range of active presynaptic points
             active_post_indices = np.array([])
             if len(active_pre_coords) > 0:
                 # Build KD-tree for active presynaptic points
                 pre_tree = KDTree(active_pre_coords)
                 
-                # Find postsynaptic points within threshold of active presynaptic points
-                distances_post, indices_post = pre_tree.query(postsyn_coords, distance_upper_bound=distance_threshold)
+                # Find postsynaptic points within max_distance of active presynaptic points
+                distances_post, indices_post = pre_tree.query(postsyn_coords, distance_upper_bound=max_distance)
                 
-                # Get active postsynaptic points
-                active_post_mask = distances_post <= distance_threshold
+                # Get active postsynaptic points (those within distance range)
+                active_post_mask = (distances_post >= min_distance) & (distances_post <= max_distance)
                 # Filter postsynaptic points based on normals pointing towards presynaptic points
                 active_post_mask[active_post_mask] = (np.sum(postsyn_normals[active_post_mask] * presyn_normals[active_pre_mask][indices_post[active_post_mask]], axis=1) < 0)
                 active_post_indices = np.where(active_post_mask)[0]
@@ -418,7 +420,7 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
     return {
         'active_zones': active_zones,
         'total_active_zones': active_zone_count,
-        'distance_threshold': distance_threshold
+        'distance_range': distance_range
     }
 
 
@@ -463,12 +465,12 @@ def define_active_zone(tomogram_path) -> Dict[str, Any]:
     """
     print(f"Defining active zone in {Path(tomogram_path).name}")
     
-    # Import membrane segmentations
+    # Import membrane segmentations from GLB
     try:
-        membranes = import_membrane_segmentations(tomogram_path)
+        membranes = import_membrane_segmentations_from_glb(tomogram_path)
         
-        # Find active zones
-        active_zones = find_active_zones(membranes, distance_threshold=40.0)
+        # Find active zones from GLB
+        active_zones = find_active_zones_from_glb(membranes, distance_range=(10.0, 40.0))
         
         # Save active zone segmentations
         save_active_zone_segmentations(active_zones, tomogram_path)
@@ -477,45 +479,50 @@ def define_active_zone(tomogram_path) -> Dict[str, Any]:
         total_active_pre_points = sum(len(zone['active_presynaptic_points']) for zone in active_zones['active_zones'].values())
         total_active_post_points = sum(len(zone['active_postsynaptic_points']) for zone in active_zones['active_zones'].values())
         
-        # Calculate active zone areas using convex hull surface area
+        # Calculate active zone areas using mesh surface area from GLB
         active_zone_areas = []
         for zone_name, zone_data in active_zones['active_zones'].items():
-            # Use only presynaptic active zone points
-            presynaptic_points = zone_data['active_presynaptic_points']
-            
-            if len(presynaptic_points) >= 4:  # Need at least 4 points for 3D convex hull
-                try:
-                    # Calculate 3D convex hull surface area of presynaptic points
-                    hull = ConvexHull(presynaptic_points)
-                    surface_area_nm2 = hull.area  # Surface area in nm²
-                    
-                    # Divide by 2 to estimate presynaptic area
-                    presynaptic_area_nm2 = surface_area_nm2 / 2.0
-                    
-                    # Convert to µm² (1 µm² = 10^6 nm²)
-                    presynaptic_area_um2 = presynaptic_area_nm2 / 1e6
-                    
-                    active_zone_areas.append(presynaptic_area_um2)
-                    print(f"Active zone area {zone_name}: {presynaptic_area_um2:.6f} µm²")
-                    
-                except Exception as e:
-                    print(f"Error calculating convex hull for {zone_name}: {e}")
-                    # Fallback to 2D convex hull area
+            # Use the active presynaptic area calculated from GLB mesh
+            if 'active_presynaptic_area' in zone_data:
+                active_zone_areas.append(zone_data['active_presynaptic_area'])
+                print(f"Active zone area {zone_name}: {zone_data['active_presynaptic_area']:.6f} µm²")
+            else:
+                # Fallback to convex hull calculation if mesh area not available
+                presynaptic_points = zone_data['active_presynaptic_points']
+                
+                if len(presynaptic_points) >= 4:  # Need at least 4 points for 3D convex hull
                     try:
-                        coords_2d = presynaptic_points[:, :2]  # Use only X and Y
-                        hull_2d = ConvexHull(coords_2d)
-                        area_nm2 = hull_2d.area
-                        area_um2 = area_nm2 / 1e6
-                        active_zone_areas.append(area_um2)
-                        print(f"Active zone {zone_name} (2D fallback): {area_um2:.6f} µm²")
-                    except Exception as e2:
-                        print(f"Error with 2D fallback for {zone_name}: {e2}")
-                        # Final fallback to bounding box
-                        bbox_size = np.max(presynaptic_points[:, :2], axis=0) - np.min(presynaptic_points[:, :2], axis=0)
-                        area_nm2 = bbox_size[0] * bbox_size[1]
-                        area_um2 = area_nm2 / 1e6
-                        active_zone_areas.append(area_um2)
-                        print(f"Active zone {zone_name} (bbox fallback): {area_um2:.6f} µm²")
+                        # Calculate 3D convex hull surface area of presynaptic points
+                        hull = ConvexHull(presynaptic_points)
+                        surface_area_nm2 = hull.area  # Surface area in nm²
+                        
+                        # Divide by 2 to estimate presynaptic area
+                        presynaptic_area_nm2 = surface_area_nm2 / 2.0
+                        
+                        # Convert to µm² (1 µm² = 10^6 nm²)
+                        presynaptic_area_um2 = presynaptic_area_nm2 / 1e6
+                        
+                        active_zone_areas.append(presynaptic_area_um2)
+                        print(f"Active zone area {zone_name} (convex hull): {presynaptic_area_um2:.6f} µm²")
+                        
+                    except Exception as e:
+                        print(f"Error calculating convex hull for {zone_name}: {e}")
+                        # Fallback to 2D convex hull area
+                        try:
+                            coords_2d = presynaptic_points[:, :2]  # Use only X and Y
+                            hull_2d = ConvexHull(coords_2d)
+                            area_nm2 = hull_2d.area
+                            area_um2 = area_nm2 / 1e6
+                            active_zone_areas.append(area_um2)
+                            print(f"Active zone {zone_name} (2D fallback): {area_um2:.6f} µm²")
+                        except Exception as e2:
+                            print(f"Error with 2D fallback for {zone_name}: {e2}")
+                            # Final fallback to bounding box
+                            bbox_size = np.max(presynaptic_points[:, :2], axis=0) - np.min(presynaptic_points[:, :2], axis=0)
+                            area_nm2 = bbox_size[0] * bbox_size[1]
+                            area_um2 = area_nm2 / 1e6
+                            active_zone_areas.append(area_um2)
+                            print(f"Active zone {zone_name} (bbox fallback): {area_um2:.6f} µm²")
         
         avg_active_zone_area = np.mean(active_zone_areas) if active_zone_areas else 0.0
         
@@ -527,7 +534,7 @@ def define_active_zone(tomogram_path) -> Dict[str, Any]:
             'total_active_pre_points': total_active_pre_points,
             'total_active_post_points': total_active_post_points,
             'avg_active_zone_area': avg_active_zone_area,
-            'distance_threshold': active_zones['distance_threshold'],
+            'distance_range': active_zones['distance_range'],
             'active_zone_names': list(active_zones['active_zones'].keys()),
             'membrane_volumes': volumes_data,
             'status': 'completed'
@@ -540,7 +547,7 @@ def define_active_zone(tomogram_path) -> Dict[str, Any]:
             'total_active_pre_points': 0,
             'total_active_post_points': 0,
             'avg_active_zone_area': 0.0,
-            'distance_threshold': 40.0,
+            'distance_range': (10.0, 40.0),
             'active_zone_names': [],
             'membrane_volumes': {},
             'status': 'error',
