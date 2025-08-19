@@ -83,6 +83,96 @@ def save_membrane_volumes(membranes: Dict[str, List[np.ndarray]], tomogram_path)
     return volumes_data
 
 
+def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]], tomogram_path):
+    """
+    Calculate and save volumes for each membrane segmentation from GLB mesh data.
+    
+    Args:
+        membranes: Dictionary containing membrane mesh data from GLB
+        tomogram_path: Path to tomogram directory (str or Path)
+    """
+    import trimesh
+    
+    tomogram_path = Path(tomogram_path)
+    stt_results_dir = tomogram_path / "best_alignment" / "STT_results"
+    
+    # Create volumes directory
+    volumes_dir = stt_results_dir / "volumes"
+    volumes_dir.mkdir(parents=True, exist_ok=True)
+    
+    volumes_data = {}
+    
+    # Calculate presynaptic membrane volumes from meshes
+    for i, mesh_data in enumerate(membranes['presynaptic']):
+        try:
+            # Create trimesh object from vertices and faces
+            mesh = trimesh.Trimesh(vertices=mesh_data['vertices'], faces=mesh_data['faces'])
+            
+            # Calculate volume (trimesh gives volume in nm³, convert to µm³)
+            volume_um3 = mesh.volume / 1e9  # Convert nm³ to µm³
+            
+            membrane_name = f"presynaptic_membrane_{i+1}"
+            volumes_data[membrane_name] = {
+                'volume_um3': volume_um3,
+                'vertex_count': len(mesh_data['vertices']),
+                'face_count': len(mesh_data['faces']),
+                'surface_area_um2': mesh.area / 1e6,  # Convert nm² to µm²
+                'source': 'glb_mesh'
+            }
+            print(f"Presynaptic membrane {i+1} volume: {volume_um3:.6f} µm³ ({len(mesh_data['vertices'])} vertices, {len(mesh_data['faces'])} faces)")
+        except Exception as e:
+            print(f"Error calculating volume for presynaptic membrane {i+1}: {e}")
+            # Fallback to convex hull method
+            volume = calculate_membrane_volume(mesh_data['vertices'])
+            membrane_name = f"presynaptic_membrane_{i+1}"
+            volumes_data[membrane_name] = {
+                'volume_um3': volume,
+                'vertex_count': len(mesh_data['vertices']),
+                'face_count': len(mesh_data['faces']),
+                'source': 'convex_hull_fallback'
+            }
+            print(f"Presynaptic membrane {i+1} volume (fallback): {volume:.6f} µm³")
+    
+    # Calculate postsynaptic membrane volumes from meshes
+    for i, mesh_data in enumerate(membranes['postsynaptic']):
+        try:
+            # Create trimesh object from vertices and faces
+            mesh = trimesh.Trimesh(vertices=mesh_data['vertices'], faces=mesh_data['faces'])
+            
+            # Calculate volume (trimesh gives volume in nm³, convert to µm³)
+            volume_um3 = mesh.volume / 1e9  # Convert nm³ to µm³
+            
+            membrane_name = f"postsynaptic_membrane_{i+1}"
+            volumes_data[membrane_name] = {
+                'volume_um3': volume_um3,
+                'vertex_count': len(mesh_data['vertices']),
+                'face_count': len(mesh_data['faces']),
+                'surface_area_um2': mesh.area / 1e6,  # Convert nm² to µm²
+                'source': 'glb_mesh'
+            }
+            print(f"Postsynaptic membrane {i+1} volume: {volume_um3:.6f} µm³ ({len(mesh_data['vertices'])} vertices, {len(mesh_data['faces'])} faces)")
+        except Exception as e:
+            print(f"Error calculating volume for postsynaptic membrane {i+1}: {e}")
+            # Fallback to convex hull method
+            volume = calculate_membrane_volume(mesh_data['vertices'])
+            membrane_name = f"postsynaptic_membrane_{i+1}"
+            volumes_data[membrane_name] = {
+                'volume_um3': volume,
+                'vertex_count': len(mesh_data['vertices']),
+                'face_count': len(mesh_data['faces']),
+                'source': 'convex_hull_fallback'
+            }
+            print(f"Postsynaptic membrane {i+1} volume (fallback): {volume:.6f} µm³")
+    
+    # Save volumes to JSON file
+    import json
+    volumes_file = volumes_dir / "membrane_volumes.json"
+    with open(volumes_file, 'w') as f:
+        json.dump(volumes_data, f, indent=2, default=str)
+    
+    return volumes_data
+
+
 def load_membrane_volumes(tomogram_path) -> Dict[str, Any]:
     """
     Load membrane volumes from JSON file and calculate averages.
@@ -228,6 +318,9 @@ def import_membrane_segmentations_from_glb(tomogram_path) -> Dict[str, List[Dict
 
     membranes['presynaptic'] = [{'vertices': mesh['vertices'][:, [0, 2, 1]] * np.array([10, -10, 10]),'faces':mesh['faces'],'normals':mesh['vertex_normals'][:, [0, 2, 1]] * np.array([10, -10, 10])} for mesh in presyn["geometry"].values()]
     membranes['postsynaptic'] = [{'vertices': mesh['vertices'][:, [0, 2, 1]] * np.array([10, -10, 10]),'faces':mesh['faces'],'normals':mesh['vertex_normals'][:, [0, 2, 1]] * np.array([10, -10, 10])} for mesh in postsyn["geometry"].values()]
+
+    # Save volumes to STT_results/volumes
+    save_membrane_volumes_from_glb(membranes, tomogram_path)
 
     return membranes
 
