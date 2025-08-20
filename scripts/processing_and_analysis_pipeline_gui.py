@@ -711,6 +711,21 @@ Do you want to continue?"""
         title_label = ttk.Label(frame, text="Post-Analysis Tools", font=("Helvetica", 16, "bold"))
         title_label.pack(pady=(0, 20))
         
+        # Combined Zonogram Analysis section
+        zonogram_frame = ttk.LabelFrame(frame, text="Combined Zonogram Analysis", padding=10)
+        zonogram_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Description
+        zonogram_desc_label = ttk.Label(zonogram_frame, text="Run both regular active zonogram analysis and mini zonogram analysis for small clusters.\nGenerates 3-view active zonograms and XY-only mini zonograms for clusters with <11 AuNPs.\nAll output images are saved to results/visualizations/azograms/ with tomogram name prefixes.")
+        zonogram_desc_label.pack(pady=(0, 10))
+        
+        # Run button
+        zonogram_btn = ttk.Button(zonogram_frame, text="Run Combined Zonogram Analysis", command=self._run_combined_zonogram_analysis)
+        zonogram_btn.pack(pady=(0, 10))
+        
+        # Add tooltip
+        ToolTip(zonogram_btn, "Run combined zonogram analysis on all tomograms in the CSV. Creates regular active zonograms and mini zonograms for small clusters. Requires membrane segmentation and AuNP analysis to be completed first.")
+        
         # Vesicle Slice Extraction section
         vesicle_frame = ttk.LabelFrame(frame, text="Vesicle Slice Extraction", padding=10)
         vesicle_frame.pack(fill=tk.X, pady=(0, 10))
@@ -807,6 +822,126 @@ Do you want to continue?"""
             self._log(f"Opening close vesicles PDF: {pdf_path}\n")
         except Exception as e:
             messagebox.showerror("Error", f"Could not open PDF: {e}")
+
+    def _run_combined_zonogram_analysis(self):
+        """Run the combined zonogram analysis script on all tomograms."""
+        if not self.csv_path.get():
+            messagebox.showerror("Error", "Please select a CSV file first.")
+            return
+        
+        # Check if root directory is specified
+        if not self.root_dir.get():
+            messagebox.showerror("Error", "Please specify the root directory for tomogram sets.")
+            return
+        
+        # Use default output directory (same as script default)
+        output_dir = "results"
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Read CSV to get tomogram names and sets
+        try:
+            df = pd.read_csv(self.csv_path.get())
+            
+            # Handle processing mode and starting tomogram selection
+            processing_mode = self.processing_mode.get()
+            selected_tomogram = self.start_tomogram.get()
+            
+            if processing_mode == "Single tomogram" and selected_tomogram:
+                # Filter to only the selected tomogram
+                tomogram_row = df[df['tomoname'] == selected_tomogram]
+                if not tomogram_row.empty:
+                    df = tomogram_row
+                    self._log(f"Processing single tomogram: {selected_tomogram}\n")
+                else:
+                    self._log(f"Warning: Tomogram {selected_tomogram} not found in CSV\n")
+                    
+            elif processing_mode == "Start from" and selected_tomogram:
+                # Filter to the selected tomogram and all tomograms after it
+                tomogram_indices = df[df['tomoname'] == selected_tomogram].index
+                if len(tomogram_indices) > 0:
+                    start_index = tomogram_indices[0]
+                    df = df.iloc[start_index:]
+                    self._log(f"Processing from tomogram {selected_tomogram} onwards ({len(df)} tomograms)\n")
+                else:
+                    self._log(f"Warning: Tomogram {selected_tomogram} not found in CSV\n")
+            
+            # Check for different possible column names for tomogram names
+            if 'tomogram_name' in df.columns:
+                tomogram_names = df['tomogram_name'].tolist()
+            elif 'tomoname' in df.columns:
+                tomogram_names = df['tomoname'].tolist()
+            elif 'tomogram' in df.columns:
+                tomogram_names = df['tomogram'].tolist()
+            else:
+                # Try to find any column that might contain tomogram names
+                possible_columns = [col for col in df.columns if 'tom' in col.lower() or 'name' in col.lower()]
+                if possible_columns:
+                    tomogram_names = df[possible_columns[0]].tolist()
+                    self._log(f"Using column '{possible_columns[0]}' for tomogram names\n")
+                else:
+                    messagebox.showerror("Error", "Could not find tomogram name column in CSV. Expected 'tomogram_name', 'tomoname', or 'tomogram'")
+                    return
+            
+            # Get the set column for path construction
+            if 'set' in df.columns:
+                tomogram_sets = df['set'].tolist()
+            else:
+                # Default to '15F1' if no set column found
+                tomogram_sets = ['15F1'] * len(tomogram_names)
+                self._log("No 'set' column found, defaulting to '15F1' for all tomograms\n")
+                    
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not read CSV file: {e}")
+            return
+        
+        self._log(f"Starting combined zonogram analysis for {len(tomogram_names)} tomograms...\n")
+        self._log(f"Output directory: {output_dir}\n")
+        
+        # Process all tomograms using the same approach as other analyses
+        all_commands = []
+        
+        for i, (tomogram_name, tomogram_set) in enumerate(zip(tomogram_names, tomogram_sets), 1):
+            self._log(f"\nPreparing tomogram {i}/{len(tomogram_names)}: {tomogram_name} (set: {tomogram_set})\n")
+            
+            # Build tomogram path using the correct structure
+            # All sets follow the pattern: data/{set_name}/TOP_TOMOS/{tomogram_name}
+            tomogram_path = os.path.join(self.root_dir.get(), tomogram_set, 'TOP_TOMOS', tomogram_name)
+            
+            if not os.path.exists(tomogram_path):
+                self._log(f"Warning: Tomogram directory not found: {tomogram_path}\n")
+                continue
+            
+            # Build command for this tomogram
+            cli = ["python", "-u", "scripts/run_combined_zonogram_analysis.py"]
+            cli += ["--tomogram-path", tomogram_path]
+            cli += ["--output-dir", output_dir]
+            cli += ["--tomogram-name", tomogram_name]
+            
+            all_commands.append((tomogram_name, cli))
+        
+        if not all_commands:
+            self._log("No valid tomograms found to process.\n")
+            return
+        
+        # Run all commands sequentially with real-time output
+        self._log(f"\nStarting combined zonogram analysis for {len(all_commands)} tomograms...\n")
+        
+        # Use threading to run the entire sequence in background while maintaining real-time output
+        def run_sequential_analysis():
+            for i, (tomogram_name, cli) in enumerate(all_commands, 1):
+                self._log(f"\n{'='*60}\n")
+                self._log(f"Processing tomogram {i}/{len(all_commands)}: {tomogram_name}\n")
+                self._log(f"Command: {' '.join(cli)}\n")
+                self._log(f"{'='*60}\n")
+                
+                # Run the subprocess and wait for completion
+                self._run_subprocess(cli, os.environ.copy())
+            
+            self._log(f"\nCombined zonogram analysis completed for {len(all_commands)} tomograms.\n")
+            self._log(f"Results saved to: {output_dir}\n")
+        
+        # Start the sequential analysis in a background thread
+        threading.Thread(target=run_sequential_analysis).start()
 
 if __name__ == "__main__":
     app = AnalysisPipelineGUI()
