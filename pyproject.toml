@@ -43,7 +43,9 @@ dependencies = [
     "pillow",
     "PyPDF2",
     "scikit-learn",
-    "trimesh"
+    "trimesh",
+    "torch-transform-image",
+    "torch-affine-utils"
 ]
 
 [project.optional-dependencies]

@@ -900,3 +900,198 @@ def calculate_cleft_width(tomogram_path) -> Dict[str, Any]:
             'status': 'error',
             'error_message': str(e)
         }
+
+
+def define_active_zonogram(active_zones):
+    """
+    Define active zonogram from active zones.
+    
+    Args:
+        active_zones: Dictionary containing active zone data.
+        
+    Returns:
+        Dictionary containing active zonogram results.
+    """
+    print("Defining active zonogram")
+    from torch_affine_utils.transforms_3d import T
+    from torch_affine_utils.utils import homogenise_coordinates
+    import torch
+    import einops
+    
+    if not active_zones or 'active_zones' not in active_zones:
+        print("No active zones found for zonogram definition")
+        return {
+            'status': 'no_active_zones',
+            'active_zone_count': 0,
+            'zonogram_data': {}
+        }
+    
+    # Prepare zonogram data
+    zonogram_data = {}
+    
+    for zone_name, zone_data in active_zones['active_zones'].items():
+        # Define center of active zonogram
+        center_presyn = np.mean(zone_data['active_presynaptic_points'], axis=0) if len(zone_data['active_presynaptic_points']) > 0 else np.zeros(3)
+        center_postsyn = np.mean(zone_data['active_postsynaptic_points'], axis=0) if len(zone_data['active_postsynaptic_points']) > 0 else np.zeros(3)
+        center = (center_presyn + center_postsyn) / 2.0
+        # Construct coordinate system
+        # Get 100 random points in postsynapse
+        post_points_sel = zone_data['active_postsynaptic_points'][np.random.choice(zone_data['active_postsynaptic_points'].shape[0], 100, replace=False)]
+        # Get closest points in presynapse
+        pre_dis, pre_i = KDTree(zone_data['active_presynaptic_points']).query(post_points_sel)
+        pre_points_el = zone_data['active_presynaptic_points'][pre_i]
+        norm_vector = np.mean(post_points_sel - pre_points_el, axis=0)
+        norm_vector = norm_vector / np.linalg.norm(norm_vector)
+        z = np.array([0, 0, 1])
+        xp = np.cross(norm_vector, z)
+        yp = np.cross(norm_vector, xp)
+        xp = xp / np.linalg.norm(xp) 
+        yp = yp / np.linalg.norm(yp)
+
+        # Generate 4x4 transformation matrix bringing center to 0 and make xp, yp, norm_vector the new axes
+        M = torch.eye(4)
+        M[0, :3] = torch.tensor(xp)
+        M[1, :3] = torch.tensor(yp)
+        M[2, :3] = torch.tensor(norm_vector)
+        M = M @ T(-center)
+
+        # Calculate the extent of the active zonogram
+        # Use the maximum distance from the center to any active presynaptic or postsynaptic point
+        all_points = homogenise_coordinates(torch.tensor(np.concatenate([zone_data['active_presynaptic_points'], zone_data['active_postsynaptic_points']]), dtype=torch.float32))
+        transformed_points = M @ einops.rearrange(all_points, 'b xyzw -> b xyzw 1')
+        transformed_points = einops.rearrange(transformed_points, 'b xyzw 1 -> b xyzw')[:, :3]
+        max_extent = torch.max(torch.abs(transformed_points), dim=0)[0].numpy().astype(int) * 2 + 10  # Add 10 nm padding
+        # Define extent of active zonogram
+        zonogram_data[zone_name] = {
+            'center': center,
+            'transformation_matrix': M.numpy(),
+            'extent': max_extent
+        }
+
+    return {
+        'status': 'completed',
+        'active_zone_count': len(active_zones['active_zones']),
+        'zonogram_data': zonogram_data
+    }
+
+
+def extract_active_zonogram(active_zonograms, active_zones, tomo_path, tomo_type='ddw'):
+    """
+    Extract active zonogram data.
+    
+    Args:
+        active_zonograms: Dictionary containing active zonogram data.
+        active_zones: Dictionary containing active zone data.
+    """
+    import mrcfile
+    import torch
+    from torch_transform_image import affine_transform_image_3d
+    from torch_affine_utils.transforms_3d import T
+    
+    print("Rendering active zonogram")
+    
+    if not active_zonograms or 'zonogram_data' not in active_zonograms:
+        print("No active zonograms found for rendering")
+        return {
+            'status': 'no_active_zonograms',
+            'active_zone_count': 0,
+            'rendered_zonograms': []
+        }
+    
+    # Prepare rendering data
+    rendered_zonograms = {}
+    # Open tomogram
+
+    mrcs = list((Path(tomo_path) / 'best_alignment').glob(f'*{tomo_type}.mrc'))
+    if not mrcs:
+        return None, None
+    with mrcfile.open(mrcs[0], 'r') as mrc:
+        data = torch.tensor(mrc.data)
+    
+    for zone_name, zone_data in active_zonograms['zonogram_data'].items():
+        if zone_name not in active_zones['active_zones']:
+            continue
+        
+        # Get active zone information
+        active_zone = active_zones['active_zones'][zone_name]
+
+        new_center = zone_data['extent'] // 2
+
+        M = torch.tensor(zone_data['transformation_matrix'], dtype=torch.float32)
+        M = T(new_center) @ M
+
+        transformed_tomo = affine_transform_image_3d(
+            image=data,
+            matrices=torch.linalg.inv(M),
+            interpolation='trilinear',
+            zyx_matrices=False,
+            output_shape=tuple(zone_data['extent'][::-1]),
+
+        )
+        rendered_zonograms[zone_name] = {
+            'transformed_tomogram': transformed_tomo.numpy(),
+        }
+
+        
+        
+    
+    return {
+        'status': 'completed',
+        'active_zone_count': len(active_zones['active_zones']),
+        'rendered_zonograms': rendered_zonograms
+    }
+
+
+def transform_coordinates_to_active_zonogram(
+        coordinates: np.ndarray, 
+        active_zonogram: Dict[str, Any],
+        eliminate_coordinates_outside = True
+        ) -> np.ndarray:
+    """
+        Transforms a set of 3D coordinates into the space of an active zonogram using a provided transformation matrix.
+
+        Parameters
+        ----------
+        coordinates : np.ndarray
+            An array of shape (N, 3) or (N, 4) containing the coordinates to be transformed.
+        active_zonogram : Dict[str, Any]
+            A dictionary containing the zonogram's transformation matrix ('transformation_matrix') and its spatial extent ('extent').
+            - 'transformation_matrix': A 4x4 affine transformation matrix.
+            - 'extent': A tuple or array specifying the size of the zonogram in each dimension (x, y, z).
+        eliminate_coordinates_outside : bool, optional
+            If True, coordinates that fall outside the zonogram's extent after transformation are removed from the output.
+            Default is True.
+
+        Returns
+        -------
+        np.ndarray
+            The transformed coordinates as a NumPy array of shape (M, 3), where M <= N depending on filtering.
+
+        Notes
+        -----
+        - The function uses PyTorch for tensor operations and applies affine transformations in homogeneous coordinates.
+        - Coordinates outside the zonogram's extent are optionally eliminated.
+        - The transformation centers the zonogram before applying the affine matrix.    
+    """
+    import torch
+    from torch_affine_utils.transforms_3d import T
+    from torch_affine_utils.utils import homogenise_coordinates
+    import einops
+
+    coordinates = torch.tensor(coordinates, dtype=torch.float32)
+    M = torch.tensor(active_zonogram['transformation_matrix'])
+    new_center = active_zonogram['extent'] // 2
+    M = T(new_center) @ M
+    coordinates = homogenise_coordinates(coordinates)
+    transformed_coordinates = M @ einops.rearrange(coordinates, 'b xyzw -> b xyzw 1')
+    transformed_coordinates = einops.rearrange(transformed_coordinates, 'b xyzw 1 -> b xyzw')[:, :3]
+    if eliminate_coordinates_outside:
+        transformed_coordinates = transformed_coordinates[(
+            (transformed_coordinates[:, 0] >= 0) &
+            (transformed_coordinates[:, 0] < active_zonogram['extent'][0]) &
+            (transformed_coordinates[:, 1] >= 0) &
+            (transformed_coordinates[:, 1] < active_zonogram['extent'][1]) &
+            (transformed_coordinates[:, 2] >= 0) &
+            (transformed_coordinates[:, 2] < active_zonogram['extent'][2])
+        )]
+    return transformed_coordinates.numpy()
