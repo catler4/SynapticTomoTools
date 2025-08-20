@@ -726,6 +726,20 @@ Do you want to continue?"""
         # Add tooltip
         ToolTip(zonogram_btn, "Run combined zonogram analysis on all tomograms in the CSV. Creates regular active zonograms and mini zonograms for small clusters. Requires membrane segmentation and AuNP analysis to be completed first.")
         
+        # Generate PDF button
+        zonogram_pdf_btn = ttk.Button(zonogram_frame, text="Generate Zonogram PDF", command=self._generate_zonogram_pdf)
+        zonogram_pdf_btn.pack(pady=(0, 10))
+        
+        # Add tooltip
+        ToolTip(zonogram_pdf_btn, "Generate a comprehensive PDF showing all zonogram images from all tomograms. Shows regular active zonograms and mini zonograms in a two-column layout.")
+        
+        # Generate Mini Zonogram PDF button
+        mini_zonogram_pdf_btn = ttk.Button(zonogram_frame, text="Generate Mini Zonogram PDF", command=self._generate_mini_zonogram_pdf)
+        mini_zonogram_pdf_btn.pack(pady=(0, 10))
+        
+        # Add tooltip
+        ToolTip(mini_zonogram_pdf_btn, "Generate a PDF showing only the mini zonogram comparison images from all tomograms. Shows small cluster analysis in a two-column layout.")
+        
         # Vesicle Slice Extraction section
         vesicle_frame = ttk.LabelFrame(frame, text="Vesicle Slice Extraction", padding=10)
         vesicle_frame.pack(fill=tk.X, pady=(0, 10))
@@ -942,6 +956,461 @@ Do you want to continue?"""
         
         # Start the sequential analysis in a background thread
         threading.Thread(target=run_sequential_analysis).start()
+
+    def _generate_zonogram_pdf(self):
+        """Generate a comprehensive PDF showing all zonogram images from all tomograms."""
+        if not self.csv_path.get():
+            messagebox.showerror("Error", "Please select a CSV file first.")
+            return
+        
+        # Check if root directory is specified
+        if not self.root_dir.get():
+            messagebox.showerror("Error", "Please specify the root directory for tomogram sets.")
+            return
+        
+        # Use threading to run the PDF generation in background while maintaining real-time output
+        def generate_pdf_background():
+            try:
+                self._log("Starting zonogram PDF generation...\n")
+                
+                # Read CSV to get tomogram names and sets
+                df = pd.read_csv(self.csv_path.get())
+                
+                # Handle processing mode and starting tomogram selection
+                processing_mode = self.processing_mode.get()
+                selected_tomogram = self.start_tomogram.get()
+                
+                if processing_mode == "Single tomogram" and selected_tomogram:
+                    tomogram_row = df[df['tomoname'] == selected_tomogram]
+                    if not tomogram_row.empty:
+                        df = tomogram_row
+                        self._log(f"Generating PDF for single tomogram: {selected_tomogram}\n")
+                    else:
+                        self._log(f"Warning: Tomogram {selected_tomogram} not found in CSV\n")
+                        return
+                        
+                elif processing_mode == "Start from" and selected_tomogram:
+                    tomogram_indices = df[df['tomoname'] == selected_tomogram].index
+                    if len(tomogram_indices) > 0:
+                        start_index = tomogram_indices[0]
+                        df = df.iloc[start_index:]
+                        self._log(f"Generating PDF from tomogram {selected_tomogram} onwards ({len(df)} tomograms)\n")
+                    else:
+                        self._log(f"Warning: Tomogram {selected_tomogram} not found in CSV\n")
+                        return
+                
+                # Check for different possible column names for tomogram names
+                if 'tomogram_name' in df.columns:
+                    tomogram_names = df['tomogram_name'].tolist()
+                elif 'tomoname' in df.columns:
+                    tomogram_names = df['tomoname'].tolist()
+                elif 'tomogram' in df.columns:
+                    tomogram_names = df['tomogram'].tolist()
+                else:
+                    possible_columns = [col for col in df.columns if 'tom' in col.lower() or 'name' in col.lower()]
+                    if possible_columns:
+                        tomogram_names = df[possible_columns[0]].tolist()
+                        self._log(f"Using column '{possible_columns[0]}' for tomogram names\n")
+                    else:
+                        messagebox.showerror("Error", "Could not find tomogram name column in CSV.")
+                        return
+                
+                # Get the set column for path construction
+                if 'set' in df.columns:
+                    tomogram_sets = df['set'].tolist()
+                else:
+                    tomogram_sets = ['15F1'] * len(tomogram_names)
+                    self._log("No 'set' column found, defaulting to '15F1' for all tomograms\n")
+                
+                # Create output directory
+                output_dir = Path("results/visualizations/azograms")
+                output_dir.mkdir(parents=True, exist_ok=True)
+                pdf_path = output_dir / "all_zonograms_summary.pdf"
+                
+                self._log(f"Generating PDF: {pdf_path}\n")
+                
+                # Import required libraries
+                from reportlab.lib.pagesizes import letter, A4
+                from reportlab.platypus import SimpleDocTemplate, Image, PageBreak, Spacer, Paragraph
+                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                from reportlab.lib.units import inch
+                from reportlab.lib import colors
+                
+                # Create PDF document
+                doc = SimpleDocTemplate(str(pdf_path), pagesize=A4)
+                story = []
+                styles = getSampleStyleSheet()
+                
+                # Create custom style for tomogram names
+                title_style = ParagraphStyle(
+                    'CustomTitle',
+                    parent=styles['Heading1'],
+                    fontSize=16,
+                    spaceAfter=20,
+                    textColor=colors.darkblue
+                )
+                
+                # Process each tomogram
+                for i, (tomogram_name, tomogram_set) in enumerate(zip(tomogram_names, tomogram_sets), 1):
+                    self._log(f"Processing tomogram {i}/{len(tomogram_names)}: {tomogram_name}\n")
+                    
+                    # Build tomogram path
+                    tomogram_path = Path(self.root_dir.get()) / tomogram_set / "TOP_TOMOS" / tomogram_name
+                    azograms_dir = tomogram_path / "best_alignment" / "STT_results" / "azograms"
+                    
+                    if not azograms_dir.exists():
+                        self._log(f"Warning: Azograms directory not found: {azograms_dir}\n")
+                        continue
+                    
+                    # Add tomogram name as title
+                    story.append(Paragraph(f"Tomogram: {tomogram_name}", title_style))
+                    story.append(Spacer(1, 10))
+                    
+                    # Find regular active zonogram files (aunps_by_cluster.png)
+                    regular_zonogram_files = list(azograms_dir.glob("*_active_zonogram_*_selected_aunps_by_cluster.png"))
+                    
+                    # Add regular active zonograms first
+                    for zonogram_file in sorted(regular_zonogram_files):
+                        try:
+                            # Get zone name from filename
+                            zone_name = zonogram_file.stem.split('_active_zonogram_')[1].split('_selected_aunps_by_cluster')[0]
+                            
+                            # Add zone name as subtitle
+                            zone_style = ParagraphStyle(
+                                'ZoneTitle',
+                                parent=styles['Heading2'],
+                                fontSize=12,
+                                spaceAfter=10,
+                                textColor=colors.darkgreen
+                            )
+                            story.append(Paragraph(f"Active Zone: {zone_name}", zone_style))
+                            
+                            # Add the image (preserve aspect ratio but ensure it fits on page)
+                            # First, get the original image dimensions
+                            from PIL import Image as PILImage
+                            pil_img = PILImage.open(str(zonogram_file))
+                            orig_width, orig_height = pil_img.size
+                            aspect_ratio = orig_width / orig_height
+                            
+                            # Calculate maximum dimensions that fit on page
+                            max_width = 7 * inch
+                            max_height = 600  # Leave some margin
+                            
+                            # Calculate dimensions that preserve aspect ratio and fit within limits
+                            if max_width / aspect_ratio <= max_height:
+                                # Width is the limiting factor
+                                final_width = max_width
+                                final_height = max_width / aspect_ratio
+                            else:
+                                # Height is the limiting factor
+                                final_height = max_height
+                                final_width = max_height * aspect_ratio
+                            
+                            img = Image(str(zonogram_file), width=final_width, height=final_height)
+                            story.append(img)
+                            story.append(Spacer(1, 10))
+                            
+                            self._log(f"  Added regular zonogram: {zone_name}\n")
+                        except Exception as e:
+                            self._log(f"  Error adding regular zonogram {zonogram_file}: {e}\n")
+                    
+                    # Find mini zonogram comparison files
+                    mini_zonogram_files = list(azograms_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
+                    
+                    if mini_zonogram_files:
+                        # Add mini zonograms section title
+                        mini_style = ParagraphStyle(
+                            'MiniTitle',
+                            parent=styles['Heading2'],
+                            fontSize=12,
+                            spaceAfter=10,
+                            textColor=colors.darkred
+                        )
+                        story.append(Paragraph("Mini Zonograms (Small Clusters)", mini_style))
+                        story.append(Spacer(1, 5))
+                        
+                        # Add mini zonograms in two columns
+                        for j in range(0, len(mini_zonogram_files), 2):
+                            # Create a table-like layout for two columns
+                            from reportlab.platypus import Table, TableStyle
+                            from reportlab.lib import colors
+                            
+                            row_data = []
+                            for k in range(2):
+                                if j + k < len(mini_zonogram_files):
+                                    mini_file = mini_zonogram_files[j + k]
+                                    try:
+                                        # Get cluster number from filename
+                                        cluster_num = mini_file.stem.split('_cluster_')[1].split('_comparison')[0]
+                                        
+                                        # Add image (smaller size for two columns, preserve aspect ratio but ensure it fits)
+                                        # First, get the original image dimensions
+                                        from PIL import Image as PILImage
+                                        pil_img = PILImage.open(str(mini_file))
+                                        orig_width, orig_height = pil_img.size
+                                        aspect_ratio = orig_width / orig_height
+                                        
+                                        # Calculate maximum dimensions that fit in two columns
+                                        max_width = 3.5 * inch
+                                        max_height = 300  # Leave some margin for mini zonograms
+                                        
+                                        # Calculate dimensions that preserve aspect ratio and fit within limits
+                                        if max_width / aspect_ratio <= max_height:
+                                            # Width is the limiting factor
+                                            final_width = max_width
+                                            final_height = max_width / aspect_ratio
+                                        else:
+                                            # Height is the limiting factor
+                                            final_height = max_height
+                                            final_width = max_height * aspect_ratio
+                                        
+                                        img = Image(str(mini_file), width=final_width, height=final_height)
+                                        
+                                        row_data.append([img])
+                                        self._log(f"  Added mini zonogram: Cluster {cluster_num}\n")
+                                    except Exception as e:
+                                        self._log(f"  Error adding mini zonogram {mini_file}: {e}\n")
+                                        row_data.append([""])
+                                else:
+                                    row_data.append([""])
+                            
+                            if any(cell != [""] for cell in row_data):
+                                # Create table for this row
+                                table = Table(row_data, colWidths=[3.5*inch, 3.5*inch])
+                                table.setStyle(TableStyle([
+                                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                                    ('LEFTPADDING', (0, 0), (-1, -1), 5),
+                                    ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+                                ]))
+                                story.append(table)
+                                story.append(Spacer(1, 10))
+                    
+                    # Add page break between tomograms
+                    if i < len(tomogram_names):
+                        story.append(PageBreak())
+                
+                # Build PDF
+                self._log("Building PDF...\n")
+                doc.build(story)
+                
+                self._log(f"PDF generation completed successfully!\n")
+                self._log(f"PDF saved to: {pdf_path}\n")
+                
+                # Open the PDF
+                try:
+                    webbrowser.open(f"file://{pdf_path.absolute()}")
+                    self._log("PDF opened in browser.\n")
+                except Exception as e:
+                    self._log(f"Could not open PDF automatically: {e}\n")
+                    self._log(f"Please open manually: {pdf_path}\n")
+                
+            except Exception as e:
+                self._log(f"Error generating zonogram PDF: {e}\n")
+                import traceback
+                self._log(f"Traceback: {traceback.format_exc()}\n")
+        
+        # Start the PDF generation in a background thread
+        threading.Thread(target=generate_pdf_background).start()
+
+    def _generate_mini_zonogram_pdf(self):
+        """Generate a PDF showing only the mini zonogram comparison images from all tomograms."""
+        if not self.csv_path.get():
+            messagebox.showerror("Error", "Please select a CSV file first.")
+            return
+        
+        # Check if root directory is specified
+        if not self.root_dir.get():
+            messagebox.showerror("Error", "Please specify the root directory for tomogram sets.")
+            return
+        
+        # Use threading to run the PDF generation in background while maintaining real-time output
+        def generate_pdf_background():
+            try:
+                self._log("Starting mini zonogram PDF generation...\n")
+                
+                # Read CSV to get tomogram names and sets
+                df = pd.read_csv(self.csv_path.get())
+                
+                # Handle processing mode and starting tomogram selection
+                processing_mode = self.processing_mode.get()
+                selected_tomogram = self.start_tomogram.get()
+                
+                if processing_mode == "Single tomogram" and selected_tomogram:
+                    tomogram_row = df[df['tomoname'] == selected_tomogram]
+                    if not tomogram_row.empty:
+                        df = tomogram_row
+                        self._log(f"Generating mini zonogram PDF for single tomogram: {selected_tomogram}\n")
+                    else:
+                        self._log(f"Warning: Tomogram {selected_tomogram} not found in CSV\n")
+                        return
+                        
+                elif processing_mode == "Start from" and selected_tomogram:
+                    tomogram_indices = df[df['tomoname'] == selected_tomogram].index
+                    if len(tomogram_indices) > 0:
+                        start_index = tomogram_indices[0]
+                        df = df.iloc[start_index:]
+                        self._log(f"Generating mini zonogram PDF from tomogram {selected_tomogram} onwards ({len(df)} tomograms)\n")
+                    else:
+                        self._log(f"Warning: Tomogram {selected_tomogram} not found in CSV\n")
+                        return
+                
+                # Check for different possible column names for tomogram names
+                if 'tomogram_name' in df.columns:
+                    tomogram_names = df['tomogram_name'].tolist()
+                elif 'tomoname' in df.columns:
+                    tomogram_names = df['tomoname'].tolist()
+                elif 'tomogram' in df.columns:
+                    tomogram_names = df['tomogram'].tolist()
+                else:
+                    possible_columns = [col for col in df.columns if 'tom' in col.lower() or 'name' in col.lower()]
+                    if possible_columns:
+                        tomogram_names = df[possible_columns[0]].tolist()
+                        self._log(f"Using column '{possible_columns[0]}' for tomogram names\n")
+                    else:
+                        messagebox.showerror("Error", "Could not find tomogram name column in CSV.")
+                        return
+                
+                # Get the set column for path construction
+                if 'set' in df.columns:
+                    tomogram_sets = df['set'].tolist()
+                else:
+                    tomogram_sets = ['15F1'] * len(tomogram_names)
+                    self._log("No 'set' column found, defaulting to '15F1' for all tomograms\n")
+                
+                # Create output directory
+                output_dir = Path("results/visualizations/azograms")
+                output_dir.mkdir(parents=True, exist_ok=True)
+                pdf_path = output_dir / "mini_zonograms_summary.pdf"
+                
+                self._log(f"Generating mini zonogram PDF: {pdf_path}\n")
+                
+                # Import required libraries
+                from reportlab.lib.pagesizes import letter, A4
+                from reportlab.platypus import SimpleDocTemplate, Image, PageBreak, Spacer, Paragraph
+                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                from reportlab.lib.units import inch
+                from reportlab.lib import colors
+                
+                # Create PDF document
+                doc = SimpleDocTemplate(str(pdf_path), pagesize=A4)
+                story = []
+                styles = getSampleStyleSheet()
+                
+                # Create custom style for tomogram names
+                title_style = ParagraphStyle(
+                    'CustomTitle',
+                    parent=styles['Heading1'],
+                    fontSize=16,
+                    spaceAfter=20,
+                    textColor=colors.darkblue
+                )
+                
+                # Process each tomogram
+                for i, (tomogram_name, tomogram_set) in enumerate(zip(tomogram_names, tomogram_sets), 1):
+                    self._log(f"Processing tomogram {i}/{len(tomogram_names)}: {tomogram_name}\n")
+                    
+                    # Build tomogram path
+                    tomogram_path = Path(self.root_dir.get()) / tomogram_set / "TOP_TOMOS" / tomogram_name
+                    azograms_dir = tomogram_path / "best_alignment" / "STT_results" / "azograms"
+                    
+                    if not azograms_dir.exists():
+                        self._log(f"Warning: Azograms directory not found: {azograms_dir}\n")
+                        continue
+                    
+                    # Find mini zonogram comparison files
+                    mini_zonogram_files = list(azograms_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
+                    
+                    if mini_zonogram_files:
+                        # Add tomogram name as title
+                        story.append(Paragraph(f"Tomogram: {tomogram_name}", title_style))
+                        story.append(Spacer(1, 10))
+                        
+                        # Add mini zonograms in two columns
+                        for j in range(0, len(mini_zonogram_files), 2):
+                            # Create a table-like layout for two columns
+                            from reportlab.platypus import Table, TableStyle
+                            from reportlab.lib import colors
+                            
+                            row_data = []
+                            for k in range(2):
+                                if j + k < len(mini_zonogram_files):
+                                    mini_file = mini_zonogram_files[j + k]
+                                    try:
+                                        # Get cluster number from filename
+                                        cluster_num = mini_file.stem.split('_cluster_')[1].split('_comparison')[0]
+                                        
+                                        # Add image (preserve aspect ratio but ensure it fits)
+                                        # First, get the original image dimensions
+                                        from PIL import Image as PILImage
+                                        pil_img = PILImage.open(str(mini_file))
+                                        orig_width, orig_height = pil_img.size
+                                        aspect_ratio = orig_width / orig_height
+                                        
+                                        # Calculate maximum dimensions that fit in two columns
+                                        max_width = 3.5 * inch
+                                        max_height = 300  # Leave some margin for mini zonograms
+                                        
+                                        # Calculate dimensions that preserve aspect ratio and fit within limits
+                                        if max_width / aspect_ratio <= max_height:
+                                            # Width is the limiting factor
+                                            final_width = max_width
+                                            final_height = max_width / aspect_ratio
+                                        else:
+                                            # Height is the limiting factor
+                                            final_height = max_height
+                                            final_width = max_height * aspect_ratio
+                                        
+                                        img = Image(str(mini_file), width=final_width, height=final_height)
+                                        
+                                        row_data.append([img])
+                                        self._log(f"  Added mini zonogram: Cluster {cluster_num}\n")
+                                    except Exception as e:
+                                        self._log(f"  Error adding mini zonogram {mini_file}: {e}\n")
+                                        row_data.append([""])
+                                else:
+                                    row_data.append([""])
+                            
+                            if any(cell != [""] for cell in row_data):
+                                # Create table for this row
+                                table = Table(row_data, colWidths=[3.5*inch, 3.5*inch])
+                                table.setStyle(TableStyle([
+                                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                                    ('LEFTPADDING', (0, 0), (-1, -1), 5),
+                                    ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+                                ]))
+                                story.append(table)
+                                story.append(Spacer(1, 10))
+                    else:
+                        self._log(f"  No mini zonograms found for {tomogram_name}\n")
+                    
+                    # Add page break between tomograms
+                    if i < len(tomogram_names):
+                        story.append(PageBreak())
+                
+                # Build PDF
+                self._log("Building mini zonogram PDF...\n")
+                doc.build(story)
+                
+                self._log(f"Mini zonogram PDF generation completed successfully!\n")
+                self._log(f"PDF saved to: {pdf_path}\n")
+                
+                # Open the PDF
+                try:
+                    webbrowser.open(f"file://{pdf_path.absolute()}")
+                    self._log("PDF opened in browser.\n")
+                except Exception as e:
+                    self._log(f"Could not open PDF automatically: {e}\n")
+                    self._log(f"Please open manually: {pdf_path}\n")
+                
+            except Exception as e:
+                self._log(f"Error generating mini zonogram PDF: {e}\n")
+                import traceback
+                self._log(f"Traceback: {traceback.format_exc()}\n")
+        
+        # Start the PDF generation in a background thread
+        threading.Thread(target=generate_pdf_background).start()
 
 if __name__ == "__main__":
     app = AnalysisPipelineGUI()
