@@ -280,9 +280,6 @@ def import_membrane_segmentations(tomogram_path) -> Dict[str, List[np.ndarray]]:
         except Exception as e:
             print(f"Error importing {file_path}: {e}")
     
-    # Save volumes to STT_results/volumes
-    save_membrane_volumes(membranes, tomogram_path)
-    
     return membranes
 
 def import_membrane_segmentations_from_glb(tomogram_path) -> Dict[str, List[Dict[str, np.ndarray]]]:
