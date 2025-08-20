@@ -1282,8 +1282,9 @@ Do you want to continue?"""
                 output_dir = Path("results/visualizations/azograms")
                 output_dir.mkdir(parents=True, exist_ok=True)
                 pdf_path = output_dir / "mini_zonograms_summary.pdf"
+                pdf_path_4aunps = output_dir / "mini_zonograms_4aunps_summary.pdf"
                 
-                self._log(f"Generating mini zonogram PDF: {pdf_path}\n")
+                self._log(f"Generating mini zonogram PDFs: {pdf_path} and {pdf_path_4aunps}\n")
                 
                 # Import required libraries
                 from reportlab.lib.pagesizes import letter, A4
@@ -1321,10 +1322,35 @@ Do you want to continue?"""
                     # Find mini zonogram comparison files
                     mini_zonogram_files = list(azograms_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
                     
+                    # Get cluster data to identify clusters with 4 AuNPs
+                    cluster_data_path = tomogram_path / "best_alignment" / "STT_results" / "aunps" / "aunp_clusters.star"
+                    clusters_with_4_aunps = set()
+                    
+                    if cluster_data_path.exists():
+                        try:
+                            import starfile
+                            cluster_df = starfile.read(cluster_data_path)
+                            # Count AuNPs per cluster
+                            cluster_counts = cluster_df['aunp_cluster'].value_counts()
+                            # Get clusters with exactly 4 AuNPs
+                            clusters_with_4_aunps = set(cluster_counts[cluster_counts == 4].index)
+                            self._log(f"  Found {len(clusters_with_4_aunps)} clusters with 4 AuNPs: {sorted(clusters_with_4_aunps)}\n")
+                        except Exception as e:
+                            self._log(f"  Warning: Could not read cluster data: {e}\n")
+                    
                     if mini_zonogram_files:
                         # Add tomogram name as title
                         story.append(Paragraph(f"Tomogram: {tomogram_name}", title_style))
                         story.append(Spacer(1, 10))
+                        
+                        # Also add to 4 AuNP PDF if this tomogram has any 4 AuNP clusters
+                        has_4aunp_clusters = any(
+                            int(f.stem.split('_cluster_')[1].split('_comparison')[0]) in clusters_with_4_aunps 
+                            for f in mini_zonogram_files
+                        )
+                        if has_4aunp_clusters:
+                            story_4aunps.append(Paragraph(f"Tomogram: {tomogram_name}", title_style))
+                            story_4aunps.append(Spacer(1, 10))
                         
                         # Add mini zonograms in two columns
                         for j in range(0, len(mini_zonogram_files), 2):
@@ -1382,6 +1408,66 @@ Do you want to continue?"""
                                 ]))
                                 story.append(table)
                                 story.append(Spacer(1, 10))
+                        
+                        # Add 4 AuNP clusters to the separate PDF using same two-column layout
+                        clusters_4aunps = [f for f in mini_zonogram_files 
+                                         if int(f.stem.split('_cluster_')[1].split('_comparison')[0]) in clusters_with_4_aunps]
+                        
+                        if clusters_4aunps:
+                            for j in range(0, len(clusters_4aunps), 2):
+                                # Create a table-like layout for two columns (same as main PDF)
+                                from reportlab.platypus import Table, TableStyle
+                                from reportlab.lib import colors
+                                
+                                row_data = []
+                                for k in range(2):
+                                    if j + k < len(clusters_4aunps):
+                                        mini_file = clusters_4aunps[j + k]
+                                        try:
+                                            # Get cluster number from filename
+                                            cluster_num = mini_file.stem.split('_cluster_')[1].split('_comparison')[0]
+                                            
+                                            # Add image (preserve aspect ratio but ensure it fits) - same as main PDF
+                                            from PIL import Image as PILImage
+                                            pil_img = PILImage.open(str(mini_file))
+                                            orig_width, orig_height = pil_img.size
+                                            aspect_ratio = orig_width / orig_height
+                                            
+                                            # Calculate maximum dimensions that fit in two columns (same as main PDF)
+                                            max_width = 3.5 * inch
+                                            max_height = 300  # Leave some margin for mini zonograms
+                                            
+                                            # Calculate dimensions that preserve aspect ratio and fit within limits
+                                            if max_width / aspect_ratio <= max_height:
+                                                # Width is the limiting factor
+                                                final_width = max_width
+                                                final_height = max_width / aspect_ratio
+                                            else:
+                                                # Height is the limiting factor
+                                                final_height = max_height
+                                                final_width = max_height * aspect_ratio
+                                            
+                                            img = Image(str(mini_file), width=final_width, height=final_height)
+                                            
+                                            row_data.append([img])
+                                            self._log(f"  Added to 4 AuNP PDF: Cluster {cluster_num}\n")
+                                        except Exception as e:
+                                            self._log(f"  Error adding 4 AuNP mini zonogram {mini_file}: {e}\n")
+                                            row_data.append([""])
+                                    else:
+                                        row_data.append([""])
+                                
+                                if any(cell != [""] for cell in row_data):
+                                    # Create table for this row (same as main PDF)
+                                    table = Table(row_data, colWidths=[3.5*inch, 3.5*inch])
+                                    table.setStyle(TableStyle([
+                                        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                                        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                                        ('LEFTPADDING', (0, 0), (-1, -1), 5),
+                                        ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+                                    ]))
+                                    story_4aunps.append(table)
+                                    story_4aunps.append(Spacer(1, 10))
                     else:
                         self._log(f"  No mini zonograms found for {tomogram_name}\n")
                     
@@ -1389,14 +1475,30 @@ Do you want to continue?"""
                     if i < len(tomogram_names):
                         story.append(PageBreak())
                 
-                # Build PDF
-                self._log("Building mini zonogram PDF...\n")
+                # Build PDFs
+                self._log("Building mini zonogram PDFs...\n")
                 doc.build(story)
+                
+                # Build 4 AuNP PDF if there are any clusters with 4 AuNPs
+                if story_4aunps:
+                    doc_4aunps.build(story_4aunps)
+                    self._log(f"4 AuNP mini zonogram PDF generation completed successfully!\n")
+                    self._log(f"4 AuNP PDF saved to: {pdf_path_4aunps}\n")
+                    
+                    # Open the 4 AuNP PDF
+                    try:
+                        webbrowser.open(f"file://{pdf_path_4aunps.absolute()}")
+                        self._log("4 AuNP PDF opened in browser.\n")
+                    except Exception as e:
+                        self._log(f"Could not open 4 AuNP PDF automatically: {e}\n")
+                        self._log(f"Please open manually: {pdf_path_4aunps}\n")
+                else:
+                    self._log("No clusters with 4 AuNPs found, skipping 4 AuNP PDF.\n")
                 
                 self._log(f"Mini zonogram PDF generation completed successfully!\n")
                 self._log(f"PDF saved to: {pdf_path}\n")
                 
-                # Open the PDF
+                # Open the main PDF
                 try:
                     webbrowser.open(f"file://{pdf_path.absolute()}")
                     self._log("PDF opened in browser.\n")
