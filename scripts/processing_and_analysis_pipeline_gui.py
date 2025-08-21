@@ -1293,9 +1293,11 @@ Do you want to continue?"""
                 from reportlab.lib.units import inch
                 from reportlab.lib import colors
                 
-                # Create PDF document
+                # Create PDF documents
                 doc = SimpleDocTemplate(str(pdf_path), pagesize=A4)
+                doc_4aunps = SimpleDocTemplate(str(pdf_path_4aunps), pagesize=A4)
                 story = []
+                story_4aunps = []
                 styles = getSampleStyleSheet()
                 
                 # Create custom style for tomogram names
