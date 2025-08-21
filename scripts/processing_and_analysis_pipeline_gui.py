@@ -719,6 +719,12 @@ Do you want to continue?"""
         zonogram_desc_label = ttk.Label(zonogram_frame, text="Run both regular active zonogram analysis and mini zonogram analysis for small clusters.\nGenerates 3-view active zonograms and XY-only mini zonograms for clusters with <11 AuNPs.\nAll output images are saved to results/visualizations/azograms/ with tomogram name prefixes.")
         zonogram_desc_label.pack(pady=(0, 10))
         
+        # Delete previous results checkbox
+        self.delete_zonogram_results_var = tk.BooleanVar()
+        delete_zonogram_cb = ttk.Checkbutton(zonogram_frame, text="Delete previous zonogram results before running", variable=self.delete_zonogram_results_var)
+        delete_zonogram_cb.pack(anchor=tk.W, pady=(0, 10))
+        ToolTip(delete_zonogram_cb, "Delete all previous active zonogram and mini zonogram results before running new analysis.")
+        
         # Run button
         zonogram_btn = ttk.Button(zonogram_frame, text="Run Combined Zonogram Analysis", command=self._run_combined_zonogram_analysis)
         zonogram_btn.pack(pady=(0, 10))
@@ -932,6 +938,34 @@ Do you want to continue?"""
             cli += ["--tomogram-name", tomogram_name]
             
             all_commands.append((tomogram_name, cli))
+        
+        # Delete previous results if checkbox is checked (only for tomograms that will be processed)
+        if self.delete_zonogram_results_var.get():
+            self._log("Deleting previous zonogram results for selected tomograms...\n")
+            try:
+                # Delete results from individual tomogram directories (only for tomograms that will be processed)
+                for tomogram_name, tomogram_set in zip(tomogram_names, tomogram_sets):
+                    tomogram_path = os.path.join(self.root_dir.get(), tomogram_set, 'TOP_TOMOS', tomogram_name)
+                    azograms_dir = os.path.join(tomogram_path, 'best_alignment', 'STT_results', 'azograms')
+                    if os.path.exists(azograms_dir):
+                        import shutil
+                        shutil.rmtree(azograms_dir)
+                        self._log(f"Deleted zonogram results for {tomogram_name}\n")
+                
+                # Delete results from global results directory (only for tomograms that will be processed)
+                results_azograms_dir = os.path.join(output_dir, 'visualizations', 'azograms')
+                if os.path.exists(results_azograms_dir):
+                    # Only delete files that match the tomogram names that will be processed
+                    import glob
+                    for tomogram_name in tomogram_names:
+                        pattern = os.path.join(results_azograms_dir, f"{tomogram_name}_*")
+                        for file_path in glob.glob(pattern):
+                            os.remove(file_path)
+                            self._log(f"Deleted global zonogram file: {os.path.basename(file_path)}\n")
+                
+                self._log("Previous zonogram results deleted successfully for selected tomograms.\n")
+            except Exception as e:
+                self._log(f"Warning: Error deleting previous results: {e}\n")
         
         if not all_commands:
             self._log("No valid tomograms found to process.\n")
