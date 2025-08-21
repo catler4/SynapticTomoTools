@@ -281,7 +281,18 @@ def select_aunps_by_cluster_findingampa_style(aunp_data, cluster_data, az_data, 
         
         # Filter out noise cluster (-1) and assign it grey color
         non_noise_clusters = [c for c in unique_clusters if c != -1]
-        colors = plt.cm.tab10(np.linspace(0, 1, len(non_noise_clusters)))
+        
+        # Use a larger colormap to ensure unique colors for all clusters
+        # Use tab20 which has 20 distinct colors, or cycle through tab10 if more than 20 clusters
+        if len(non_noise_clusters) <= 20:
+            colors = plt.cm.tab20(np.linspace(0, 1, len(non_noise_clusters)))
+        else:
+            # For more than 20 clusters, cycle through tab10 colors
+            base_colors = plt.cm.tab10(np.linspace(0, 1, 10))
+            colors = []
+            for i in range(len(non_noise_clusters)):
+                colors.append(base_colors[i % 10])
+            colors = np.array(colors)
         
         cluster_color_map = {}
         # Assign grey to noise cluster (-1)
