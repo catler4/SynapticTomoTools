@@ -150,10 +150,36 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
 
         # --- New: AuNP clustering analysis using DBSCAN ---
         try:
-            db = DBSCAN(eps=20, min_samples=4).fit(coords)
-            df_valid['aunp_cluster'] = db.labels_
-            n_clusters = len(set(db.labels_)) - (1 if -1 in db.labels_ else 0)
-            print(f"DBSCAN found {n_clusters} AuNP clusters (eps=20 nm, min_samples=4)")
+            # Use DBSCAN with min_samples=1, then filter out clusters with < 4 points
+            db = DBSCAN(eps=20, min_samples=1).fit(coords)
+            initial_labels = db.labels_
+            
+            # Count points in each cluster
+            unique_labels, counts = np.unique(initial_labels, return_counts=True)
+            
+            # Create a mapping: clusters with < 4 points become noise (-1)
+            label_mapping = {}
+            valid_cluster_count = 0
+            for label, count in zip(unique_labels, counts):
+                if label == -1:  # Keep noise as noise
+                    label_mapping[label] = -1
+                elif count < 4:  # Small clusters become noise
+                    label_mapping[label] = -1
+                else:  # Renumber larger clusters starting from 1
+                    valid_cluster_count += 1
+                    label_mapping[label] = valid_cluster_count
+            
+            # Apply the mapping to get final cluster assignments
+            final_labels = np.array([label_mapping[label] for label in initial_labels])
+            df_valid['aunp_cluster'] = final_labels
+            
+            # Count final clusters (excluding noise)
+            n_clusters = len(set(final_labels)) - (1 if -1 in final_labels else 0)
+            n_small_clusters_filtered = len([count for label, count in zip(unique_labels, counts) 
+                                           if label != -1 and count < 4])
+            
+            print(f"DBSCAN found {n_clusters} AuNP clusters (eps=20 nm, min_samples=1)")
+            print(f"Filtered out {n_small_clusters_filtered} small clusters (< 4 points) and reassigned to noise")
         except Exception as e:
             print(f"Error in DBSCAN clustering: {e}")
             df_valid['aunp_cluster'] = -1
