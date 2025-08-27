@@ -288,13 +288,12 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
         # Save mini zonogram files to both locations
         mini_filename_base = f"{tomogram_name}_mini_zonogram_cluster_{cluster_id}"
         
-        # 1. Save MRC file to both locations
+        # 1. Save MRC file to tomogram directory only
         mrc_filename = f"{mini_filename_base}.mrc"
         mrcfile.write(tomogram_activezonograms_dir / mrc_filename, transformed_tomogram.numpy(), overwrite=True)
-        mrcfile.write(results_activezonograms_dir / mrc_filename, transformed_tomogram.numpy(), overwrite=True)
-        print(f"    Saved {mrc_filename} to both locations")
+        print(f"    Saved {mrc_filename} to tomogram directory")
         
-        # 2. Save NPY file to both locations
+        # 2. Save NPY file to tomogram directory only
         npy_filename = f"{mini_filename_base}.npy"
         npy_data = {
             "cs": coordinate_system, 
@@ -304,8 +303,7 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
             "aunp_count": len(cluster_data)
         }
         np.save(tomogram_activezonograms_dir / npy_filename, npy_data, allow_pickle=True)
-        np.save(results_activezonograms_dir / npy_filename, npy_data, allow_pickle=True)
-        print(f"    Saved {npy_filename} to both locations")
+        print(f"    Saved {npy_filename} to tomogram directory")
         
         # 3. Generate main PNG and save to both locations
         fig, axxy = render_mini_zonogram_xy_only(mini_zonogram_findingampa)
@@ -629,22 +627,20 @@ def main():
                     # Create zonogram data in findingampa format
                     zonogram_findingampa = (np.eye(3), np.zeros(3), torch.tensor(zone_data['transformed_tomogram']), ())
                     
-                    # Save MRC file to both locations
+                    # Save MRC file to tomogram directory only
                     mrc_filename = f"{tomogram_name}_active_zonogram_{zone_name}.mrc"
-                    mrcfile.write(results_activezonograms_dir / mrc_filename, zone_data['transformed_tomogram'], overwrite=True)
                     mrcfile.write(tomogram_activezonograms_dir / mrc_filename, zone_data['transformed_tomogram'], overwrite=True)
-                    print(f"  Saved {mrc_filename} to both locations")
+                    print(f"  Saved {mrc_filename} to tomogram directory")
                     
-                    # Save NPY file to both locations
+                    # Save NPY file to tomogram directory only
                     npy_filename = f"{tomogram_name}_active_zonogram_{zone_name}.npy"
                     npy_data = {
                         "cs": np.eye(3),
                         "center": np.zeros(3),
                         "objects": ()
                     }
-                    np.save(results_activezonograms_dir / npy_filename, npy_data, allow_pickle=True)
                     np.save(tomogram_activezonograms_dir / npy_filename, npy_data, allow_pickle=True)
-                    print(f"  Saved {npy_filename} to both locations")
+                    print(f"  Saved {npy_filename} to tomogram directory")
                     
                     # Generate main PNG and save to both locations
                     fig = render_active_zonograms_findingampa_style(zonogram_findingampa)
