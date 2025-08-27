@@ -376,9 +376,9 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
             distances = pdist(original_positions)
             distance_matrix = squareform(distances)
             
-            # Define a set of distinct colors for the distance lines
+            # Define a set of distinct colors for the distance lines (no grey to avoid confusion with noise)
             line_colors = ['yellow', 'cyan', 'magenta', 'orange', 'lime', 'red', 'blue', 'green', 
-                          'pink', 'purple', 'brown', 'gray', 'olive', 'navy', 'teal', 'maroon']
+                          'pink', 'purple', 'brown', 'olive', 'navy', 'teal', 'maroon', 'darkorange']
             
             # Find pairs of AuNPs that are less than 15 nm apart and collect distance info
             distance_pairs = []
@@ -466,9 +466,9 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
             distances = pdist(original_positions)
             distance_matrix = squareform(distances)
             
-            # Define a set of distinct colors for the distance lines
+            # Define a set of distinct colors for the distance lines (no grey to avoid confusion with noise)
             line_colors = ['yellow', 'cyan', 'magenta', 'orange', 'lime', 'red', 'blue', 'green', 
-                          'pink', 'purple', 'brown', 'gray', 'olive', 'navy', 'teal', 'maroon']
+                          'pink', 'purple', 'brown', 'olive', 'navy', 'teal', 'maroon', 'darkorange']
             
             # Find pairs of AuNPs that are less than 15 nm apart and collect distance info
             distance_pairs = []

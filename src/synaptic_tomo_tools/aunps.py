@@ -148,7 +148,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         dists, idxs = tree.query(coords, k=2)
         df_valid['nearest_neighbor_distance'] = dists[:, 1]
 
-        # --- New: AuNP clustering analysis using DBSCAN ---
+        # --- AuNP clustering analysis using DBSCAN ---
         try:
             # Use DBSCAN with min_samples=1, then filter out clusters with < 4 points
             db = DBSCAN(eps=20, min_samples=1).fit(coords)
