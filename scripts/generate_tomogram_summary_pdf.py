@@ -348,7 +348,7 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Generate tomogram summary PDFs')
-    parser.add_argument('--vis-dir', default='results/visualizations', help='Directory with visualization images')
+    parser.add_argument('--vis-dir', default='results/visualizations/aunps_and_vesicles', help='Directory with visualization images')
     parser.add_argument('--data-dir', default='data', help='Base data directory for tomogram stats')
     parser.add_argument('--output-dir', default='results/summary_pdfs', help='Output directory for PDFs')
     parser.add_argument('--tomocsv', default='data/tomograms.csv', help='CSV file mapping tomogram names to sets')

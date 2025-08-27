@@ -175,12 +175,12 @@ def select_aunps_by_cluster_findingampa_style(active_zone_data, cluster_data, to
         # Fallback: return empty arrays if no transformation data available
         return [], []
 
-def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, tomogram_azograms_dir, results_azograms_dir, active_zones_data, cluster_color_map, tomogram_name):
+def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, tomogram_activezonograms_dir, results_activezonograms_dir, active_zones_data, cluster_color_map, tomogram_name):
     """
     Create a mini zonogram centered on a specific small cluster.
     Uses the same transformation matrix calculation as regular active zonograms.
     Uses the same color scheme as the regular zonogram analysis.
-    Saves files in both tomogram's STT_results/azograms and results/visualizations/azograms.
+    Saves files in both tomogram's STT_results/activezonograms and results/visualizations/activezonograms.
     """
     print(f"  Creating mini zonogram for cluster {cluster_id} with {len(cluster_data)} AuNPs")
     
@@ -290,8 +290,8 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
         
         # 1. Save MRC file to both locations
         mrc_filename = f"{mini_filename_base}.mrc"
-        mrcfile.write(tomogram_azograms_dir / mrc_filename, transformed_tomogram.numpy(), overwrite=True)
-        mrcfile.write(results_azograms_dir / mrc_filename, transformed_tomogram.numpy(), overwrite=True)
+        mrcfile.write(tomogram_activezonograms_dir / mrc_filename, transformed_tomogram.numpy(), overwrite=True)
+        mrcfile.write(results_activezonograms_dir / mrc_filename, transformed_tomogram.numpy(), overwrite=True)
         print(f"    Saved {mrc_filename} to both locations")
         
         # 2. Save NPY file to both locations
@@ -303,15 +303,15 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
             "cluster_id": cluster_id,
             "aunp_count": len(cluster_data)
         }
-        np.save(tomogram_azograms_dir / npy_filename, npy_data, allow_pickle=True)
-        np.save(results_azograms_dir / npy_filename, npy_data, allow_pickle=True)
+        np.save(tomogram_activezonograms_dir / npy_filename, npy_data, allow_pickle=True)
+        np.save(results_activezonograms_dir / npy_filename, npy_data, allow_pickle=True)
         print(f"    Saved {npy_filename} to both locations")
         
         # 3. Generate main PNG and save to both locations
         fig, axxy = render_mini_zonogram_xy_only(mini_zonogram_findingampa)
         png_filename = f"{mini_filename_base}.png"
-        fig.savefig(tomogram_azograms_dir / png_filename)
-        fig.savefig(results_azograms_dir / png_filename)
+        fig.savefig(tomogram_activezonograms_dir / png_filename)
+        fig.savefig(results_activezonograms_dir / png_filename)
         plt.close(fig)
         print(f"    Saved {png_filename} to both locations")
         
@@ -351,8 +351,8 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
             axxy.scatter(cluster_positions_transformed[:,0], cluster_positions_transformed[:,1], 
                         s=circle_size, c='none', alpha=1.0, edgecolors=cluster_color, linewidth=1.5)
         
-        fig.savefig(tomogram_azograms_dir / aunp_filename)
-        fig.savefig(results_azograms_dir / aunp_filename)
+        fig.savefig(tomogram_activezonograms_dir / aunp_filename)
+        fig.savefig(results_activezonograms_dir / aunp_filename)
         plt.close(fig)
         print(f"    Saved {aunp_filename} to both locations")
         
@@ -421,8 +421,8 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
                            fontsize=6, frameon=True, fancybox=True, shadow=True,
                            bbox_to_anchor=(1.05, 0.5), framealpha=0.9)
         
-        fig.savefig(tomogram_azograms_dir / aunp_distances_filename, bbox_inches='tight')
-        fig.savefig(results_azograms_dir / aunp_distances_filename, bbox_inches='tight')
+        fig.savefig(tomogram_activezonograms_dir / aunp_distances_filename, bbox_inches='tight')
+        fig.savefig(results_activezonograms_dir / aunp_distances_filename, bbox_inches='tight')
         plt.close(fig)
         print(f"    Saved {aunp_distances_filename} to both locations")
         
@@ -552,8 +552,8 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
         combined_img.paste(right_img, (left_img.width + spacer_width + middle_img.width + spacer_width + border_width, border_width))
         
         # Save the combined image to both locations
-        combined_img.save(tomogram_azograms_dir / comparison_filename)
-        combined_img.save(results_azograms_dir / comparison_filename)
+        combined_img.save(tomogram_activezonograms_dir / comparison_filename)
+        combined_img.save(results_activezonograms_dir / comparison_filename)
         print(f"    Saved {comparison_filename} to both locations")
         
         return True
@@ -614,17 +614,13 @@ def main():
             
             if extracted_results and 'rendered_zonograms' in extracted_results:
                 # Create output directories for both locations
-                # 1. In results directory with tomogram name prefix
-                zonogram_dir = Path(output_dir) / f"{tomogram_name}_active_zonograms"
-                zonogram_dir.mkdir(parents=True, exist_ok=True)
+                # 1. In results/visualizations/activezonograms directory
+                results_activezonograms_dir = Path(output_dir) / "visualizations" / "activezonograms"
+                results_activezonograms_dir.mkdir(parents=True, exist_ok=True)
                 
-                # 2. In results/visualizations/azograms directory
-                results_azograms_dir = Path(output_dir) / "visualizations" / "azograms"
-                results_azograms_dir.mkdir(parents=True, exist_ok=True)
-                
-                # 3. In tomogram's STT_results/azograms directory
-                tomogram_azograms_dir = Path(tomogram_path) / "best_alignment" / "STT_results" / "azograms"
-                tomogram_azograms_dir.mkdir(parents=True, exist_ok=True)
+                # 2. In tomogram's STT_results/activezonograms directory
+                tomogram_activezonograms_dir = Path(tomogram_path) / "best_alignment" / "STT_results" / "activezonograms"
+                tomogram_activezonograms_dir.mkdir(parents=True, exist_ok=True)
                 
                 for zone_name, zone_data in extracted_results['rendered_zonograms'].items():
                     # Get the original zonogram data with transformation matrix and extent
@@ -633,33 +629,30 @@ def main():
                     # Create zonogram data in findingampa format
                     zonogram_findingampa = (np.eye(3), np.zeros(3), torch.tensor(zone_data['transformed_tomogram']), ())
                     
-                    # Save MRC file to all three locations
+                    # Save MRC file to both locations
                     mrc_filename = f"{tomogram_name}_active_zonogram_{zone_name}.mrc"
-                    mrcfile.write(zonogram_dir / mrc_filename, zone_data['transformed_tomogram'], overwrite=True)
-                    mrcfile.write(results_azograms_dir / mrc_filename, zone_data['transformed_tomogram'], overwrite=True)
-                    mrcfile.write(tomogram_azograms_dir / mrc_filename, zone_data['transformed_tomogram'], overwrite=True)
-                    print(f"  Saved {mrc_filename} to all locations")
+                    mrcfile.write(results_activezonograms_dir / mrc_filename, zone_data['transformed_tomogram'], overwrite=True)
+                    mrcfile.write(tomogram_activezonograms_dir / mrc_filename, zone_data['transformed_tomogram'], overwrite=True)
+                    print(f"  Saved {mrc_filename} to both locations")
                     
-                    # Save NPY file to all three locations
+                    # Save NPY file to both locations
                     npy_filename = f"{tomogram_name}_active_zonogram_{zone_name}.npy"
                     npy_data = {
                         "cs": np.eye(3),
                         "center": np.zeros(3),
                         "objects": ()
                     }
-                    np.save(zonogram_dir / npy_filename, npy_data, allow_pickle=True)
-                    np.save(results_azograms_dir / npy_filename, npy_data, allow_pickle=True)
-                    np.save(tomogram_azograms_dir / npy_filename, npy_data, allow_pickle=True)
-                    print(f"  Saved {npy_filename} to all locations")
+                    np.save(results_activezonograms_dir / npy_filename, npy_data, allow_pickle=True)
+                    np.save(tomogram_activezonograms_dir / npy_filename, npy_data, allow_pickle=True)
+                    print(f"  Saved {npy_filename} to both locations")
                     
-                    # Generate main PNG and save to all three locations
+                    # Generate main PNG and save to both locations
                     fig = render_active_zonograms_findingampa_style(zonogram_findingampa)
                     png_filename = f"{tomogram_name}_active_zonogram_{zone_name}.png"
-                    fig.savefig(zonogram_dir / png_filename)
-                    fig.savefig(results_azograms_dir / png_filename)
-                    fig.savefig(tomogram_azograms_dir / png_filename)
+                    fig.savefig(results_activezonograms_dir / png_filename)
+                    fig.savefig(tomogram_activezonograms_dir / png_filename)
                     plt.close(fig)
-                    print(f"  Saved {png_filename} to all locations")
+                    print(f"  Saved {png_filename} to both locations")
                     
                     # Extract active zone ID from zone_name (e.g., "active_zone_pre1_post1" -> 0, "active_zone_pre2_post1" -> 1)
                     # For now, we'll use a simple mapping since the zone names don't contain numeric IDs
@@ -682,11 +675,10 @@ def main():
                         axyz.scatter(selected_aunps[:,0], selected_aunps[:,2], s=circle_size, c='none', alpha=1.0, edgecolors='red', linewidth=1.5)
                         
                         aunp_filename = f"{tomogram_name}_active_zonogram_{zone_name}_selected_aunps.png"
-                        fig.savefig(zonogram_dir / aunp_filename)
-                        fig.savefig(results_azograms_dir / aunp_filename)
-                        fig.savefig(tomogram_azograms_dir / aunp_filename)
+                        fig.savefig(results_activezonograms_dir / aunp_filename)
+                        fig.savefig(tomogram_activezonograms_dir / aunp_filename)
                         plt.close(fig)
-                        print(f"  Saved {aunp_filename} to all locations")
+                        print(f"  Saved {aunp_filename} to both locations")
                     
                     # Generate cluster-colored AuNP visualization
                     selected_aunps, cluster_assignments = select_aunps_by_cluster_findingampa_style(zonogram_findingampa, None, tomogram_path, active_zone_id, original_zone_data)
@@ -737,11 +729,10 @@ def main():
                                       fontsize=8, frameon=True, fancybox=True, shadow=True)
                         
                         cluster_filename = f"{tomogram_name}_active_zonogram_{zone_name}_selected_aunps_by_cluster.png"
-                        fig.savefig(zonogram_dir / cluster_filename)
-                        fig.savefig(results_azograms_dir / cluster_filename)
-                        fig.savefig(tomogram_azograms_dir / cluster_filename)
+                        fig.savefig(results_activezonograms_dir / cluster_filename)
+                        fig.savefig(tomogram_activezonograms_dir / cluster_filename)
                         plt.close(fig)
-                        print(f"  Saved {cluster_filename} to all locations")
+                        print(f"  Saved {cluster_filename} to both locations")
         else:
             print("No active zonograms found")
             
@@ -789,12 +780,12 @@ def main():
         if len(small_clusters) > 0:
             # Create mini zonograms directories in both locations
             # 1. In tomogram's STT_results directory
-            tomogram_azograms_dir = Path(tomogram_path) / "best_alignment" / "STT_results" / "azograms"
-            tomogram_azograms_dir.mkdir(parents=True, exist_ok=True)
+            tomogram_activezonograms_dir = Path(tomogram_path) / "best_alignment" / "STT_results" / "activezonograms"
+            tomogram_activezonograms_dir.mkdir(parents=True, exist_ok=True)
             
             # 2. In results/visualizations directory
-            results_azograms_dir = Path(output_dir) / "visualizations" / "azograms"
-            results_azograms_dir.mkdir(parents=True, exist_ok=True)
+            results_activezonograms_dir = Path(output_dir) / "visualizations" / "activezonograms"
+            results_activezonograms_dir.mkdir(parents=True, exist_ok=True)
             
             # Create cluster color map (same as regular zonogram analysis)
             unique_clusters = sorted(set(cluster_df['aunp_cluster'].values))
@@ -826,7 +817,7 @@ def main():
                 
                 # Create mini zonogram
                 success = create_mini_zonogram_for_cluster(
-                    cluster_data, cluster_id, tomogram_path, tomogram_azograms_dir, results_azograms_dir, active_zones_data, cluster_color_map, tomogram_name
+                    cluster_data, cluster_id, tomogram_path, tomogram_activezonograms_dir, results_activezonograms_dir, active_zones_data, cluster_color_map, tomogram_name
                 )
                 
                 if success:

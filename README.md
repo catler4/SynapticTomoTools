@@ -180,8 +180,8 @@ python -m src.synaptic_tomo_tools.cli --help
   - `best_alignment/STT_results/aunps/aunp_clusters.csv`: Per-cluster summary (cluster label, number of AuNPs, area, max dimension, density)
   - `best_alignment/STT_results/aunps/aunp_clusters.star`: Per-AuNP cluster assignments in STAR format
   - `results/aunp_cluster_results.csv`: All cluster summary info from all tomograms (like vesicle_results.csv)
-  - `results/visualizations/{tomogram_name}_combined_aunpclusters.png`: Combined overlay with all AuNPs colored by cluster assignment (noise in grey)
-  - `results/visualizations/{tomogram_name}_aunpclusters.png`: All AuNPs colored by cluster, best 2D projection (noise in grey)
+  - `results/visualizations/aunps_and_vesicles/{tomogram_name}_combined_aunpclusters.png`: Combined overlay with all AuNPs colored by cluster assignment (noise in grey)
+- `results/visualizations/aunps_and_vesicles/{tomogram_name}_aunpclusters.png`: All AuNPs colored by cluster, best 2D projection (noise in grey)
 - **Combined results:**
   - `results/analysis_results.json` — all results for all tomograms in a single JSON
 - **Summary figures and PDFs:**
@@ -207,7 +207,7 @@ python -m src.synaptic_tomo_tools.cli --help
       - `{tomo_name}_combined.png`: All elements together
       - `{tomo_name}_vesicles_signal.png`: Vesicles colored by average signal intensity (gradient fill)
   - **Combined images:**
-    - `results/visualizations/` — copies of all per-tomogram images for easy access
+    - `results/visualizations/aunps_and_vesicles/` — copies of all per-tomogram images for easy access
 
 ---
 

@@ -494,6 +494,11 @@ Do you want to continue?"""
         if path:
             self.root_dir.set(path)
     
+    def _browse_cluster_csv(self):
+        path = filedialog.askopenfilename(title="Select cluster selection CSV", filetypes=[("CSV files", "*.csv")])
+        if path:
+            self.cluster_csv_path.set(path)
+    
     def _load_tomograms_from_csv(self):
         """Load tomogram names from the selected CSV file and populate the dropdown."""
         csv_path = self.csv_path.get()
@@ -711,12 +716,36 @@ Do you want to continue?"""
         title_label = ttk.Label(frame, text="Post-Analysis Tools", font=("Helvetica", 16, "bold"))
         title_label.pack(pady=(0, 20))
         
+        # Create notebook for sub-tabs
+        notebook = ttk.Notebook(frame)
+        notebook.pack(fill=tk.BOTH, expand=True)
+        
+        # Zonogram Analysis tab
+        zonogram_tab = ttk.Frame(notebook)
+        notebook.add(zonogram_tab, text="Zonogram Analysis")
+        self._build_zonogram_tab_content(zonogram_tab)
+        
+        # Cluster Analysis tab
+        cluster_tab = ttk.Frame(notebook)
+        notebook.add(cluster_tab, text="Cluster Analysis")
+        self._build_cluster_tab_content(cluster_tab)
+        
+        # Vesicle Analysis tab
+        vesicle_tab = ttk.Frame(notebook)
+        notebook.add(vesicle_tab, text="Vesicle Analysis")
+        self._build_vesicle_tab_content(vesicle_tab)
+    
+    def _build_zonogram_tab_content(self, tab):
+        """Build the content for the zonogram analysis tab."""
+        frame = ttk.Frame(tab)
+        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
         # Combined Zonogram Analysis section
         zonogram_frame = ttk.LabelFrame(frame, text="Combined Zonogram Analysis", padding=10)
         zonogram_frame.pack(fill=tk.X, pady=(0, 10))
         
         # Description
-        zonogram_desc_label = ttk.Label(zonogram_frame, text="Run both regular active zonogram analysis and mini zonogram analysis for small clusters.\nGenerates 3-view active zonograms and XY-only mini zonograms for clusters with <11 AuNPs.\nAll output images are saved to results/visualizations/azograms/ with tomogram name prefixes.")
+        zonogram_desc_label = ttk.Label(zonogram_frame, text="Run both regular active zonogram analysis and mini zonogram analysis for small clusters.\nGenerates 3-view active zonograms and XY-only mini zonograms for clusters with <11 AuNPs.\nAll output images are saved to results/visualizations/activezonograms/ with tomogram name prefixes.")
         zonogram_desc_label.pack(pady=(0, 10))
         
         # Delete previous results checkbox
@@ -745,6 +774,11 @@ Do you want to continue?"""
         
         # Add tooltip
         ToolTip(mini_zonogram_pdf_btn, "Generate a PDF showing only the mini zonogram comparison images from all tomograms. Shows small cluster analysis in a two-column layout.")
+    
+    def _build_vesicle_tab_content(self, tab):
+        """Build the content for the vesicle analysis tab."""
+        frame = ttk.Frame(tab)
+        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
         # Vesicle Slice Extraction section
         vesicle_frame = ttk.LabelFrame(frame, text="Vesicle Slice Extraction", padding=10)
@@ -780,6 +814,41 @@ Do you want to continue?"""
         
         # Add tooltip for close vesicles PDF button
         ToolTip(view_close_pdf_btn, "Open the close vesicles summary PDF (≤4nm from active zone) in your default PDF viewer.")
+    
+    def _build_cluster_tab_content(self, tab):
+        """Build the content for the cluster analysis tab."""
+        frame = ttk.Frame(tab)
+        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        # Cluster Coordinate Extraction section
+        cluster_frame = ttk.LabelFrame(frame, text="Cluster Coordinate Extraction", padding=10)
+        cluster_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Description
+        cluster_desc_label = ttk.Label(cluster_frame, text="Extract XYZ coordinates for specific AuNP clusters.\nInput a CSV file with tomogram names, cluster numbers, and set names to extract coordinates.\nOutputs a text file with XYZ coordinates for each specified cluster.")
+        cluster_desc_label.pack(pady=(0, 10))
+        
+        # Cluster selection CSV file
+        ttk.Label(cluster_frame, text="Cluster selection CSV file:").pack(anchor=tk.W)
+        self.cluster_csv_path = tk.StringVar()
+        cluster_csv_frame = ttk.Frame(cluster_frame)
+        cluster_csv_frame.pack(fill=tk.X, pady=(0, 10))
+        cluster_csv_entry = ttk.Entry(cluster_csv_frame, textvariable=self.cluster_csv_path, width=40)
+        cluster_csv_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(cluster_csv_frame, text="Browse...", command=self._browse_cluster_csv).pack(side=tk.RIGHT, padx=(5, 0))
+        
+        # Output directory
+        self.cluster_output_dir = tk.StringVar(value="results/cluster_coordinates")
+        ttk.Label(cluster_frame, text="Output directory:").pack(anchor=tk.W)
+        cluster_output_entry = ttk.Entry(cluster_frame, textvariable=self.cluster_output_dir, width=50)
+        cluster_output_entry.pack(fill=tk.X, pady=(0, 10))
+        
+        # Run button
+        cluster_btn = ttk.Button(cluster_frame, text="Extract Cluster Coordinates", command=self._run_cluster_coordinate_extraction)
+        cluster_btn.pack(pady=(0, 10))
+        
+        # Add tooltip
+        ToolTip(cluster_btn, "Extract XYZ coordinates for specific AuNP clusters based on the input CSV file. Requires AuNP analysis to be completed first.")
     
     def _run_vesicle_extraction(self):
         """Run the vesicle slice extraction script."""
@@ -842,6 +911,30 @@ Do you want to continue?"""
             self._log(f"Opening close vesicles PDF: {pdf_path}\n")
         except Exception as e:
             messagebox.showerror("Error", f"Could not open PDF: {e}")
+
+    def _run_cluster_coordinate_extraction(self):
+        """Run the cluster coordinate extraction script."""
+        if not self.cluster_csv_path.get():
+            messagebox.showerror("Error", "Please select a cluster selection CSV file first.")
+            return
+        
+        if not self.root_dir.get():
+            messagebox.showerror("Error", "Please specify the root directory for tomogram sets.")
+            return
+        
+        # Create output directory
+        output_dir = self.cluster_output_dir.get()
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Build command
+        cli = ["python", "-u", "scripts/extract_cluster_coordinates.py"]
+        cli += ["--cluster-csv", self.cluster_csv_path.get()]
+        cli += ["--data-dir", self.root_dir.get()]
+        cli += ["--output-dir", output_dir]
+        
+        self._log(f"Running cluster coordinate extraction: {' '.join(cli)}\n")
+        self._log("Note: This will extract XYZ coordinates for specified clusters and save them as text files.\n")
+        threading.Thread(target=self._run_subprocess, args=(cli, os.environ.copy())).start()
 
     def _run_combined_zonogram_analysis(self):
         """Run the combined zonogram analysis script on all tomograms."""
@@ -946,19 +1039,19 @@ Do you want to continue?"""
                 # Delete results from individual tomogram directories (only for tomograms that will be processed)
                 for tomogram_name, tomogram_set in zip(tomogram_names, tomogram_sets):
                     tomogram_path = os.path.join(self.root_dir.get(), tomogram_set, 'TOP_TOMOS', tomogram_name)
-                    azograms_dir = os.path.join(tomogram_path, 'best_alignment', 'STT_results', 'azograms')
-                    if os.path.exists(azograms_dir):
+                    activezonograms_dir = os.path.join(tomogram_path, 'best_alignment', 'STT_results', 'activezonograms')
+                    if os.path.exists(activezonograms_dir):
                         import shutil
-                        shutil.rmtree(azograms_dir)
-                        self._log(f"Deleted zonogram results for {tomogram_name}\n")
+                        shutil.rmtree(activezonograms_dir)
+                        self._log(f"Deleted active zonogram results for {tomogram_name}\n")
                 
                 # Delete results from global results directory (only for tomograms that will be processed)
-                results_azograms_dir = os.path.join(output_dir, 'visualizations', 'azograms')
-                if os.path.exists(results_azograms_dir):
+                results_activezonograms_dir = os.path.join(output_dir, 'visualizations', 'activezonograms')
+                if os.path.exists(results_activezonograms_dir):
                     # Only delete files that match the tomogram names that will be processed
                     import glob
                     for tomogram_name in tomogram_names:
-                        pattern = os.path.join(results_azograms_dir, f"{tomogram_name}_*")
+                        pattern = os.path.join(results_activezonograms_dir, f"{tomogram_name}_*")
                         for file_path in glob.glob(pattern):
                             os.remove(file_path)
                             self._log(f"Deleted global zonogram file: {os.path.basename(file_path)}\n")
@@ -1057,7 +1150,7 @@ Do you want to continue?"""
                     self._log("No 'set' column found, defaulting to '15F1' for all tomograms\n")
                 
                 # Create output directory
-                output_dir = Path("results/visualizations/azograms")
+                output_dir = Path("results/visualizations/activezonograms")
                 output_dir.mkdir(parents=True, exist_ok=True)
                 pdf_path = output_dir / "all_zonograms_summary.pdf"
                 
@@ -1090,10 +1183,10 @@ Do you want to continue?"""
                     
                     # Build tomogram path
                     tomogram_path = Path(self.root_dir.get()) / tomogram_set / "TOP_TOMOS" / tomogram_name
-                    azograms_dir = tomogram_path / "best_alignment" / "STT_results" / "azograms"
+                    activezonograms_dir = tomogram_path / "best_alignment" / "STT_results" / "activezonograms"
                     
-                    if not azograms_dir.exists():
-                        self._log(f"Warning: Azograms directory not found: {azograms_dir}\n")
+                    if not activezonograms_dir.exists():
+                        self._log(f"Warning: Active zonograms directory not found: {activezonograms_dir}\n")
                         continue
                     
                     # Add tomogram name as title
@@ -1101,7 +1194,7 @@ Do you want to continue?"""
                     story.append(Spacer(1, 10))
                     
                     # Find regular active zonogram files (aunps_by_cluster.png)
-                    regular_zonogram_files = list(azograms_dir.glob("*_active_zonogram_*_selected_aunps_by_cluster.png"))
+                    regular_zonogram_files = list(activezonograms_dir.glob("*_active_zonogram_*_selected_aunps_by_cluster.png"))
                     
                     # Add regular active zonograms first
                     for zonogram_file in sorted(regular_zonogram_files):
@@ -1149,7 +1242,7 @@ Do you want to continue?"""
                             self._log(f"  Error adding regular zonogram {zonogram_file}: {e}\n")
                     
                     # Find mini zonogram comparison files
-                    mini_zonogram_files = list(azograms_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
+                    mini_zonogram_files = list(activezonograms_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
                     
                     if mini_zonogram_files:
                         # Add mini zonograms section title
@@ -1313,7 +1406,7 @@ Do you want to continue?"""
                     self._log("No 'set' column found, defaulting to '15F1' for all tomograms\n")
                 
                 # Create output directory
-                output_dir = Path("results/visualizations/azograms")
+                output_dir = Path("results/visualizations/activezonograms")
                 output_dir.mkdir(parents=True, exist_ok=True)
                 pdf_path = output_dir / "mini_zonograms_summary.pdf"
                 pdf_path_4aunps = output_dir / "mini_zonograms_4aunps_summary.pdf"
@@ -1349,14 +1442,14 @@ Do you want to continue?"""
                     
                     # Build tomogram path
                     tomogram_path = Path(self.root_dir.get()) / tomogram_set / "TOP_TOMOS" / tomogram_name
-                    azograms_dir = tomogram_path / "best_alignment" / "STT_results" / "azograms"
+                    activezonograms_dir = tomogram_path / "best_alignment" / "STT_results" / "activezonograms"
                     
-                    if not azograms_dir.exists():
-                        self._log(f"Warning: Azograms directory not found: {azograms_dir}\n")
+                    if not activezonograms_dir.exists():
+                        self._log(f"Warning: Active zonograms directory not found: {activezonograms_dir}\n")
                         continue
                     
                     # Find mini zonogram comparison files
-                    mini_zonogram_files = list(azograms_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
+                    mini_zonogram_files = list(activezonograms_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
                     
                     # Get cluster data to identify clusters with 4 AuNPs
                     cluster_data_path = tomogram_path / "best_alignment" / "STT_results" / "aunps" / "aunp_clusters.star"

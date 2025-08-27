@@ -623,7 +623,7 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
                                  label=f'Cluster {c}' if c != -1 else 'Noise')
                           for c in unique_clusters]
         ax.legend(handles=legend_elements, loc='best')
-        output_dir_viz = Path('results/visualizations')
+        output_dir_viz = Path('results/visualizations/aunps_and_vesicles')
         output_dir_viz.mkdir(parents=True, exist_ok=True)
         out_combined = output_dir_viz / f"{tomo_name}_combined_aunpclusters.png"
         if out_combined.exists() and not rerun:

@@ -222,8 +222,8 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
     print("="*80)
     
     # Create combined visualization directory in results
-    combined_viz_dir = Path(results_manager.results_dir) / 'visualizations'
-    combined_viz_dir.mkdir(exist_ok=True)
+    combined_viz_dir = Path(results_manager.results_dir) / 'visualizations' / 'aunps_and_vesicles'
+    combined_viz_dir.mkdir(parents=True, exist_ok=True)
     print(f"Combined visualizations will be saved to: {combined_viz_dir}")
     
     for i, (tomo, set_name, aunp_active_zones) in enumerate(tomo_paths):
@@ -683,7 +683,7 @@ def main():
         print("\nGenerating PDF summary for all tomograms...")
         subprocess.run([
             sys.executable, "scripts/generate_tomogram_summary_pdf.py",
-            "--vis-dir", "results/visualizations",
+            "--vis-dir", "results/visualizations/aunps_and_vesicles",
             "--data-dir", "data",
             "--output-dir", "results/summary_pdfs"
         ], check=True)
