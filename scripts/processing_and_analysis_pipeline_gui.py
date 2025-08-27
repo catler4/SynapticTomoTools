@@ -825,7 +825,7 @@ Do you want to continue?"""
         cluster_frame.pack(fill=tk.X, pady=(0, 10))
         
         # Description
-        cluster_desc_label = ttk.Label(cluster_frame, text="Extract XYZ coordinates for specific AuNP clusters.\nInput a CSV file with tomogram names, cluster numbers, and set names to extract coordinates.\nOutputs a text file with XYZ coordinates for each specified cluster.")
+        cluster_desc_label = ttk.Label(cluster_frame, text="Extract XYZ coordinates for specific AuNP clusters.\nInput a CSV file with tomogram names, cluster numbers, and set names to extract coordinates.\nOutputs a text file with XYZ coordinates for each specified cluster.\nAlso generates a PDF summary showing mini zonogram images for the selected clusters.")
         cluster_desc_label.pack(pady=(0, 10))
         
         # Cluster selection CSV file
