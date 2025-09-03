@@ -277,13 +277,13 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
                      label='Vesicle' if 'Vesicle' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
         ax1.add_patch(circ)
     
-    # Highlight vesicles within 10 nm with transparency
+    # Highlight vesicles within 20 nm with transparency
     for v in vesicles_in_slice:
-        if v.get('distance_to_az', 99) <= 10:
+        if v.get('distance_to_az', 99) <= 20:
             c = np.array(v['center'])
             r = v['radius']
             circ = Circle((c[0], c[1]), r, color='aqua', fill=False, lw=2, alpha=0.8, 
-                         label='<=10nm' if '<=10nm' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
+                         label='<=20nm' if '<=20nm' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
             ax1.add_patch(circ)
     
     # Overlay presynaptic active zone with transparent red
@@ -299,7 +299,7 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
     # Add note about distance filtering to legend
     legend_elements = [
         Line2D([0], [0], color='pink', lw=1.5, label='Vesicles (intersecting slice)'),
-        Line2D([0], [0], color='aqua', lw=2, label='Vesicles <10 nm from AZ'),
+        Line2D([0], [0], color='aqua', lw=2, label='Vesicles <20 nm from AZ'),
         Line2D([0], [0], color='red', lw=1.5, label='Presynaptic Active Zone'),
         Line2D([0], [0], color='green', lw=1.5, label='Postsynaptic Active Zone')
     ]
@@ -328,13 +328,13 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
                      label='Vesicle' if 'Vesicle' not in [l.get_label() for l in ax2.get_legend_handles_labels()[0]] else '')
         ax2.add_patch(circ)
     
-    # Highlight vesicles within 10 nm with transparency
+    # Highlight vesicles within 20 nm with transparency
     for v in vesicles_in_slice:
-        if v.get('distance_to_az', 99) <= 10:
+        if v.get('distance_to_az', 99) <= 20:
             c = np.array(v['center'])
             r = v['radius']
             circ = Circle((c[0], c[1]), r, color='aqua', fill=False, lw=2, alpha=0.8, 
-                         label='<=10nm' if '<=10nm' not in [l.get_label() for l in ax2.get_legend_handles_labels()[0]] else '')
+                         label='<=20nm' if '<=20nm' not in [l.get_label() for l in ax2.get_legend_handles_labels()[0]] else '')
             ax2.add_patch(circ)
     
     # Add AuNPs with transparency
@@ -342,33 +342,33 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
         ax2.scatter(aunps_near['faCoordinateX'], aunps_near['faCoordinateY'], 
                   color='gold', s=30, alpha=0.8, label='AuNPs')
     
-    # Add fusion points for vesicles within 10nm
+    # Add fusion points for vesicles within 20nm
     if fusion_points_near is not None and len(fusion_points_near) > 0:
         ax2.scatter(fusion_points_near[:, 0], fusion_points_near[:, 1], 
                    color='orange', s=100, alpha=0.9, marker='*', 
                    label='Fusion Sites' if 'Fusion Sites' not in [l.get_label() for l in ax2.get_legend_handles_labels()[0]] else '')
         print(f"Plotted {len(fusion_points_near)} fusion points within slice")
     
-    # Only show fusion points for vesicles within 10nm that are also within 10 nm of slice
-    vesicles_within_10nm = [v for v in vesicles_in_slice if v.get('distance_to_az', 99) <= 10]
-    print(f"Found {len(vesicles_within_10nm)} vesicles within 10nm in slice")
+    # Only show fusion points for vesicles within 20nm that are also within 10 nm of slice
+    vesicles_within_20nm = [v for v in vesicles_in_slice if v.get('distance_to_az', 99) <= 20]
+    print(f"Found {len(vesicles_within_20nm)} vesicles within 20nm in slice")
     
-    if vesicles_within_10nm and fusion_points is not None and len(fusion_points) > 0:
-        print(f"Showing fusion points for vesicles within 10nm...")
+    if vesicles_within_20nm and fusion_points is not None and len(fusion_points) > 0:
+        print(f"Showing fusion points for vesicles within 20nm...")
         print(f"Fusion points z-range: {fusion_points[:, 2].min():.1f} to {fusion_points[:, 2].max():.1f}")
         
-        # For each vesicle within 10nm, find its corresponding fusion point
+        # For each vesicle within 20nm, find its corresponding fusion point
         from scipy.spatial.distance import cdist
-        vesicle_centers = np.array([v['center'] for v in vesicles_within_10nm])
+        vesicle_centers = np.array([v['center'] for v in vesicles_within_20nm])
         
-        # Find the closest fusion point to each vesicle within 10nm
+        # Find the closest fusion point to each vesicle within 20nm
         if len(fusion_points) > 0:
             distances = cdist(vesicle_centers, fusion_points)
             closest_fusion_indices = np.argmin(distances, axis=1)
             
-            # Plot the fusion point for each vesicle within 10nm, but only if fusion point is within 10 nm of slice
+            # Plot the fusion point for each vesicle within 20nm, but only if fusion point is within 10 nm of slice
             plotted_fusion_points = set()
-            for i, vesicle in enumerate(vesicles_within_10nm):
+            for i, vesicle in enumerate(vesicles_within_20nm):
                 fusion_point = fusion_points[closest_fusion_indices[i]]
                 fusion_point_tuple = tuple(fusion_point)
                 
@@ -379,16 +379,16 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
                                color='orange', s=100, alpha=0.9, marker='*')
                     plotted_fusion_points.add(fusion_point_tuple)
             
-            print(f"Plotted {len(plotted_fusion_points)} fusion points for vesicles within 10nm and within 10 nm of slice")
-    elif vesicles_within_10nm:
-        print("No fusion points available to plot for vesicles within 10nm")
+            print(f"Plotted {len(plotted_fusion_points)} fusion points for vesicles within 20nm and within 10 nm of slice")
+    elif vesicles_within_20nm:
+        print("No fusion points available to plot for vesicles within 20nm")
     else:
-        print("No vesicles within 10nm found in slice")
+        print("No vesicles within 20nm found in slice")
     
     # Add note about distance filtering to legend
     legend_elements = [
         Line2D([0], [0], color='pink', lw=1.5, label='Vesicles (intersecting slice)'),
-        Line2D([0], [0], color='aqua', lw=2, label='Vesicles <10 nm from AZ'),
+        Line2D([0], [0], color='aqua', lw=2, label='Vesicles <20 nm from AZ'),
         plt.scatter([], [], color='gold', s=30, label='AuNPs'),
         plt.scatter([], [], color='orange', s=100, marker='*', label='Fusion Sites')
     ]
@@ -417,13 +417,13 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
                      label='Vesicle' if 'Vesicle' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
         ax3.add_patch(circ)
     
-    # Highlight vesicles within 10 nm with transparency
+    # Highlight vesicles within 20 nm with transparency
     for v in vesicles_in_slice:
-        if v.get('distance_to_az', 99) <= 10:
+        if v.get('distance_to_az', 99) <= 20:
             c = np.array(v['center'])
             r = v['radius']
             circ = Circle((c[0], c[1]), r, color='aqua', fill=False, lw=2, alpha=0.8, 
-                         label='<=10nm' if '<=10nm' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
+                         label='<=20nm' if '<=20nm' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
             ax3.add_patch(circ)
     
     # Overlay presynaptic active zone with transparent red
@@ -441,33 +441,33 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
         ax3.scatter(aunps_near['faCoordinateX'], aunps_near['faCoordinateY'], 
                   color='gold', s=30, alpha=0.8, label='AuNPs')
     
-    # Add fusion points for vesicles within 10nm
+    # Add fusion points for vesicles within 20nm
     if fusion_points_near is not None and len(fusion_points_near) > 0:
         ax3.scatter(fusion_points_near[:, 0], fusion_points_near[:, 1], 
                    color='orange', s=100, alpha=0.9, marker='*', 
                    label='Fusion Sites' if 'Fusion Sites' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
         print(f"Plotted {len(fusion_points_near)} fusion points within slice")
     
-    # Only show fusion points for vesicles within 10nm that are also within 10 nm of slice
-    vesicles_within_10nm = [v for v in vesicles_in_slice if v.get('distance_to_az', 99) <= 10]
-    print(f"Found {len(vesicles_within_10nm)} vesicles within 10nm in slice")
+    # Only show fusion points for vesicles within 20nm that are also within 10 nm of slice
+    vesicles_within_20nm = [v for v in vesicles_in_slice if v.get('distance_to_az', 99) <= 20]
+    print(f"Found {len(vesicles_within_20nm)} vesicles within 20nm in slice")
     
-    if vesicles_within_10nm and fusion_points is not None and len(fusion_points) > 0:
-        print(f"Showing fusion points for vesicles within 10nm...")
+    if vesicles_within_20nm and fusion_points is not None and len(fusion_points) > 0:
+        print(f"Showing fusion points for vesicles within 20nm...")
         print(f"Fusion points z-range: {fusion_points[:, 2].min():.1f} to {fusion_points[:, 2].max():.1f}")
         
-        # For each vesicle within 10nm, find its corresponding fusion point
+        # For each vesicle within 20nm, find its corresponding fusion point
         from scipy.spatial.distance import cdist
-        vesicle_centers = np.array([v['center'] for v in vesicles_within_10nm])
+        vesicle_centers = np.array([v['center'] for v in vesicles_within_20nm])
         
-        # Find the closest fusion point to each vesicle within 10nm
+        # Find the closest fusion point to each vesicle within 20nm
         if len(fusion_points) > 0:
             distances = cdist(vesicle_centers, fusion_points)
             closest_fusion_indices = np.argmin(distances, axis=1)
             
-            # Plot the fusion point for each vesicle within 10nm, but only if fusion point is within 10 nm of slice
+            # Plot the fusion point for each vesicle within 20nm, but only if fusion point is within 10 nm of slice
             plotted_fusion_points = set()
-            for i, vesicle in enumerate(vesicles_within_10nm):
+            for i, vesicle in enumerate(vesicles_within_20nm):
                 fusion_point = fusion_points[closest_fusion_indices[i]]
                 fusion_point_tuple = tuple(fusion_point)
                 
@@ -478,16 +478,16 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
                                color='orange', s=100, alpha=0.9, marker='*')
                     plotted_fusion_points.add(fusion_point_tuple)
             
-            print(f"Plotted {len(plotted_fusion_points)} fusion points for vesicles within 10nm and within 10 nm of slice")
-    elif vesicles_within_10nm:
-        print("No fusion points available to plot for vesicles within 10nm")
+            print(f"Plotted {len(plotted_fusion_points)} fusion points for vesicles within 20nm and within 10 nm of slice")
+    elif vesicles_within_20nm:
+        print("No fusion points available to plot for vesicles within 20nm")
     else:
-        print("No vesicles within 10nm found in slice")
+        print("No vesicles within 20nm found in slice")
     
     # Add note about distance filtering to legend
     legend_elements = [
         Line2D([0], [0], color='pink', lw=1.5, label='Vesicles (intersecting slice)'),
-        Line2D([0], [0], color='aqua', lw=2, label='Vesicles <10 nm from AZ'),
+        Line2D([0], [0], color='aqua', lw=2, label='Vesicles <20 nm from AZ'),
         Line2D([0], [0], color='red', lw=1.5, label='Presynaptic Active Zone'),
         Line2D([0], [0], color='green', lw=1.5, label='Postsynaptic Active Zone'),
         plt.scatter([], [], color='gold', s=30, label='AuNPs'),

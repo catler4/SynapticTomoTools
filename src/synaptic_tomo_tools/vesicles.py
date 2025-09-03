@@ -615,7 +615,7 @@ def save_vesicle_results(vesicles: List[Dict[str, Any]], tomogram_path):
 
 
 def save_nearby_vesicles(vesicles: List[Dict[str, Any]], tomogram_path, 
-                        distance_threshold: float = 10.0):
+                        distance_threshold: float = 20.0):
     """
     Save vesicles near active zone to a separate JSON file.
     Uses pre-calculated distances from detect_vesicles.
@@ -924,7 +924,7 @@ def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Di
         save_vesicle_results(vesicles, tomogram_path)
         
         # Save nearby vesicles (after overlap removal and distance calculation)
-        save_nearby_vesicles(vesicles, tomogram_path, distance_threshold=10.0)
+        save_nearby_vesicles(vesicles, tomogram_path, distance_threshold=20.0)
         
         # CSV export now handled by ResultsManager
         return results
@@ -1015,7 +1015,7 @@ def measure_distances_to_az(tomogram_path) -> Dict[str, Any]:
         nearby_vesicles = []
         for vesicle in vesicles:
             distance_to_az = vesicle.get('distance_to_az', 0.0)
-            if distance_to_az <= 10.0:
+            if distance_to_az <= 20.0:
                 nearby_vesicles.append(vesicle)
         nearby_vesicle_count = len(nearby_vesicles)
         
