@@ -482,10 +482,15 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
                     avg_dist = 0
                 
                 pre_mesh = trimesh.Trimesh(vertices=presyn_data['vertices'], faces=presyn_data['faces'])
+                post_mesh = trimesh.Trimesh(vertices=postsyn_data['vertices'], faces=postsyn_data['faces'])
                 # Get only faces that contain only active presynaptic points
                 active_pre_faces_mask = np.isin(pre_mesh.faces, active_pre_indices).all(axis=1)
                 active_pre_faces_indices = np.where(active_pre_faces_mask)[0]
                 active_pre_mesh = pre_mesh.submesh([active_pre_faces_indices], append=True)
+
+                active_post_faces_mask = np.isin(postsyn_data['faces'], active_post_indices).all(axis=1)
+                active_post_faces_indices = np.where(active_post_faces_mask)[0]
+                active_post_mesh = post_mesh.submesh([active_post_faces_indices], append=True)
                 # Get area of active presynaptic mesh
                 active_pre_area = active_pre_mesh.area / 1e6  # Convert to µm²
                 active_zones[zone_name] = {
@@ -493,8 +498,10 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
                     'postsynaptic_membrane_index': post_idx + 1,
                     'active_presynaptic_points': active_pre_coords,
                     'active_presynaptic_faces': active_pre_mesh.faces,
+                    'active_presynaptic_mesh': active_pre_mesh,
                     'active_presynaptic_area': active_pre_area,
                     'active_postsynaptic_points': postsyn_coords[active_post_indices] if len(active_post_indices) > 0 else np.array([]),
+                    'active_postsynaptic_mesh': active_post_mesh,
                     'active_presynaptic_indices': active_pre_indices,
                     'active_postsynaptic_indices': active_post_indices,
                     'min_distance': min_dist,
