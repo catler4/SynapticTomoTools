@@ -16,10 +16,10 @@ import re
 
 # CSV export functions removed - now handled by ResultsManager
 
-def compute_fusion_points(tomogram_path, vesicle_distance_threshold=10.0, fusion_point_threshold=10.0):
+def compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0, fusion_point_threshold=20.0):
     """
-    For each vesicle within 10 nm of the presynaptic active zone, compute the putative fusion point as the average
-    of all presynaptic active zone points within 10 nm of any vesicle point. Supports multiple active zones.
+    For each vesicle within 20 nm of the presynaptic active zone, compute the putative fusion point as the average
+    of all presynaptic active zone points within 20 nm of any vesicle point. Supports multiple active zones.
     Returns a list of fusion points (np.ndarray shape (N, 3)).
     """
     # Load vesicle results
@@ -151,7 +151,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         # --- AuNP clustering analysis using DBSCAN ---
         try:
             # Use DBSCAN with min_samples=1, then filter out clusters with < 4 points
-            db = DBSCAN(eps=20, min_samples=1).fit(coords)
+            db = DBSCAN(eps=16, min_samples=1).fit(coords)
             initial_labels = db.labels_
             
             # Count points in each cluster
@@ -178,7 +178,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
             n_small_clusters_filtered = len([count for label, count in zip(unique_labels, counts) 
                                            if label != -1 and count < 4])
             
-            print(f"DBSCAN found {n_clusters} AuNP clusters (eps=20 nm, min_samples=1)")
+            print(f"DBSCAN found {n_clusters} AuNP clusters (eps=16 nm, min_samples=1)")
             print(f"Filtered out {n_small_clusters_filtered} small clusters (< 4 points) and reassigned to noise")
         except Exception as e:
             print(f"Error in DBSCAN clustering: {e}")
@@ -315,7 +315,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         # --- End new ---
         # Save nearest neighbor distances in STT_results/aunps directory
         # Compute fusion points
-        fusion_points = compute_fusion_points(tomogram_path)
+        fusion_points = compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0)
         fusion_points = np.asarray(fusion_points)
         if len(fusion_points) > 0 and fusion_points.shape[0] > 0:
             fusion_tree = KDTree(fusion_points)
@@ -388,15 +388,30 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
             n_clusters = len(df_valid['aunp_cluster'].unique()) - (1 if -1 in df_valid['aunp_cluster'].values else 0)
             summary_stats['aunp_cluster_count'] = n_clusters
         
-        # Add AuNP density (AuNPs per unit volume - approximate using bounding box)
+        # Add AuNP density (AuNPs per unit active zone area)
         if n_aunps > 0:
-            # Calculate bounding box volume for density estimation
-            coords_array = np.array(coords)
-            x_range = coords_array[:, 0].max() - coords_array[:, 0].min()
-            y_range = coords_array[:, 1].max() - coords_array[:, 1].min()
-            z_range = coords_array[:, 2].max() - coords_array[:, 2].min()
-            volume = x_range * y_range * z_range
-            summary_stats['aunp_density'] = float(n_aunps / volume) if volume > 0 else 0.0
+            # Get active zone area from existing results
+            try:
+                # Load active zone results to get the surface area
+                from .results_manager import ResultsManager
+                results_manager = ResultsManager("results")
+                active_zone_results = results_manager.get_tomogram_results(tomogram_name, 'activezone')
+                if active_zone_results and 'results' in active_zone_results:
+                    az_data = active_zone_results['results'].get('active_zone', {})
+                    # Calculate total active zone area (sum of all active zones)
+                    active_zone_count = az_data.get('active_zone_count', 0)
+                    avg_active_zone_area = az_data.get('avg_active_zone_area', 0.0)
+                    total_active_zone_area = active_zone_count * avg_active_zone_area
+                    
+                    if total_active_zone_area > 0:
+                        summary_stats['aunp_density'] = float(n_aunps / total_active_zone_area)  # AuNPs per µm²
+                    else:
+                        summary_stats['aunp_density'] = 0.0
+                else:
+                    summary_stats['aunp_density'] = 0.0
+            except Exception as e:
+                print(f"Error getting active zone area for density calculation: {e}")
+                summary_stats['aunp_density'] = 0.0
         else:
             summary_stats['aunp_density'] = 0.0
         

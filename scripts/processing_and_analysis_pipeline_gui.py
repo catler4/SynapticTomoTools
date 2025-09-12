@@ -734,6 +734,11 @@ Do you want to continue?"""
         vesicle_tab = ttk.Frame(notebook)
         notebook.add(vesicle_tab, text="Vesicle Analysis")
         self._build_vesicle_tab_content(vesicle_tab)
+        
+        # AMPA Poses Analysis tab
+        ampa_tab = ttk.Frame(notebook)
+        notebook.add(ampa_tab, text="AMPA Poses Analysis")
+        self._build_ampa_tab_content(ampa_tab)
     
     def _build_zonogram_tab_content(self, tab):
         """Build the content for the zonogram analysis tab."""
@@ -814,6 +819,60 @@ Do you want to continue?"""
         
         # Add tooltip for close vesicles PDF button
         ToolTip(view_close_pdf_btn, "Open the close vesicles summary PDF (≤4nm from active zone) in your default PDF viewer.")
+    
+    def _build_ampa_tab_content(self, tab):
+        """Build the content for the AMPA poses analysis tab."""
+        frame = ttk.Frame(tab)
+        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        # AMPA Poses Analysis section
+        ampa_frame = ttk.LabelFrame(frame, text="AMPA Receptor Poses Analysis", padding=10)
+        ampa_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Description
+        ampa_desc_label = ttk.Label(ampa_frame, text="Estimate AMPA receptor poses based on AuNP pair analysis.\nFinds AuNP pairs within specified distance ranges and estimates AMPA receptor positions and orientations.\nGenerates RELION star files and summary CSV files for further analysis.")
+        ampa_desc_label.pack(pady=(0, 10))
+        
+        # Parameters frame
+        params_frame = ttk.Frame(ampa_frame)
+        params_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # AuNP distance parameters
+        ttk.Label(params_frame, text="AuNP Distance Range (nm):").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        self.ampa_aunp_min_dist = tk.StringVar(value="6")
+        ttk.Entry(params_frame, textvariable=self.ampa_aunp_min_dist, width=10).grid(row=0, column=1, padx=(0, 5))
+        ttk.Label(params_frame, text="to").grid(row=0, column=2, padx=5)
+        self.ampa_aunp_max_dist = tk.StringVar(value="12")
+        ttk.Entry(params_frame, textvariable=self.ampa_aunp_max_dist, width=10).grid(row=0, column=3, padx=(5, 0))
+        
+        # AuNP distance cutoff checkbox
+        self.ampa_aunp_no_cutoff = tk.BooleanVar()
+        ttk.Checkbutton(params_frame, text="No AuNP distance cutoff", variable=self.ampa_aunp_no_cutoff).grid(row=0, column=4, padx=(10, 0), sticky=tk.W)
+        
+        # Membrane distance parameters
+        ttk.Label(params_frame, text="Membrane Distance Range (nm):").grid(row=1, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
+        self.ampa_membrane_min_dist = tk.StringVar(value="17")
+        ttk.Entry(params_frame, textvariable=self.ampa_membrane_min_dist, width=10).grid(row=1, column=1, padx=(0, 5), pady=(10, 0))
+        ttk.Label(params_frame, text="to").grid(row=1, column=2, padx=5, pady=(10, 0))
+        self.ampa_membrane_max_dist = tk.StringVar(value="23")
+        ttk.Entry(params_frame, textvariable=self.ampa_membrane_max_dist, width=10).grid(row=1, column=3, padx=(5, 0), pady=(10, 0))
+        
+        # Membrane distance cutoff checkbox
+        self.ampa_membrane_no_cutoff = tk.BooleanVar()
+        ttk.Checkbutton(params_frame, text="No membrane distance cutoff", variable=self.ampa_membrane_no_cutoff).grid(row=1, column=4, padx=(10, 0), sticky=tk.W, pady=(10, 0))
+        
+        # Output directory
+        self.ampa_output_dir = tk.StringVar(value="STT_results/ampa_poses")
+        ttk.Label(ampa_frame, text="Output directory (relative to each tomogram):").pack(anchor=tk.W, pady=(10, 0))
+        ampa_output_entry = ttk.Entry(ampa_frame, textvariable=self.ampa_output_dir, width=50)
+        ampa_output_entry.pack(fill=tk.X, pady=(0, 10))
+        
+        # Run button
+        ampa_btn = ttk.Button(ampa_frame, text="Run AMPA Poses Analysis", command=self._run_ampa_poses_analysis)
+        ampa_btn.pack(pady=(0, 10))
+        
+        # Add tooltip
+        ToolTip(ampa_btn, "Estimate AMPA receptor poses based on AuNP pair analysis. Results are saved within each tomogram's STT_results directory. Requires AuNP analysis and membrane segmentation to be completed first.")
     
     def _build_cluster_tab_content(self, tab):
         """Build the content for the cluster analysis tab."""
@@ -1080,6 +1139,293 @@ Do you want to continue?"""
             
             self._log(f"\nCombined zonogram analysis completed for {len(all_commands)} tomograms.\n")
             self._log(f"Results saved to: {output_dir}\n")
+        
+        # Start the sequential analysis in a background thread
+        threading.Thread(target=run_sequential_analysis).start()
+
+    def _run_ampa_poses_analysis(self):
+        """Run the AMPA poses analysis on all tomograms."""
+        if not self.csv_path.get():
+            messagebox.showerror("Error", "Please select a CSV file first.")
+            return
+        
+        # Check if root directory is specified
+        if not self.root_dir.get():
+            messagebox.showerror("Error", "Please specify the root directory for tomogram sets.")
+            return
+        
+        # Get parameters from GUI
+        try:
+            aunp_min_dist = float(self.ampa_aunp_min_dist.get())
+            aunp_max_dist = float(self.ampa_aunp_max_dist.get())
+            membrane_min_dist = float(self.ampa_membrane_min_dist.get())
+            membrane_max_dist = float(self.ampa_membrane_max_dist.get())
+        except ValueError:
+            messagebox.showerror("Error", "Please enter valid numeric values for distance parameters.")
+            return
+        
+        # Check if cutoffs are disabled
+        aunp_no_cutoff = self.ampa_aunp_no_cutoff.get()
+        membrane_no_cutoff = self.ampa_membrane_no_cutoff.get()
+        
+        # Validate distance ranges only if cutoffs are enabled
+        if not aunp_no_cutoff and aunp_min_dist >= aunp_max_dist:
+            messagebox.showerror("Error", "AuNP minimum distance must be less than maximum distance.")
+            return
+        
+        if not membrane_no_cutoff and membrane_min_dist >= membrane_max_dist:
+            messagebox.showerror("Error", "Membrane minimum distance must be less than maximum distance.")
+            return
+        
+        # Get output directory (will be constructed per tomogram)
+        output_dir_relative = self.ampa_output_dir.get()
+        
+        # Read CSV to get tomogram names and sets
+        try:
+            df = pd.read_csv(self.csv_path.get())
+            
+            # Handle processing mode and starting tomogram selection
+            processing_mode = self.processing_mode.get()
+            selected_tomogram = self.start_tomogram.get()
+            
+            if processing_mode == "Single tomogram" and selected_tomogram:
+                # Filter to only the selected tomogram
+                tomogram_row = df[df['tomoname'] == selected_tomogram]
+                if not tomogram_row.empty:
+                    df = tomogram_row
+                    self._log(f"Processing single tomogram: {selected_tomogram}\n")
+                else:
+                    self._log(f"Warning: Tomogram {selected_tomogram} not found in CSV\n")
+                    
+            elif processing_mode == "Start from" and selected_tomogram:
+                # Filter to the selected tomogram and all tomograms after it
+                tomogram_indices = df[df['tomoname'] == selected_tomogram].index
+                if len(tomogram_indices) > 0:
+                    start_index = tomogram_indices[0]
+                    df = df.iloc[start_index:]
+                    self._log(f"Processing from tomogram {selected_tomogram} onwards ({len(df)} tomograms)\n")
+                else:
+                    self._log(f"Warning: Tomogram {selected_tomogram} not found in CSV\n")
+            
+            # Check for different possible column names for tomogram names
+            if 'tomogram_name' in df.columns:
+                tomogram_names = df['tomogram_name'].tolist()
+            elif 'tomoname' in df.columns:
+                tomogram_names = df['tomoname'].tolist()
+            elif 'tomogram' in df.columns:
+                tomogram_names = df['tomogram'].tolist()
+            else:
+                # Try to find any column that might contain tomogram names
+                possible_columns = [col for col in df.columns if 'tom' in col.lower() or 'name' in col.lower()]
+                if possible_columns:
+                    tomogram_names = df[possible_columns[0]].tolist()
+                    self._log(f"Using column '{possible_columns[0]}' for tomogram names\n")
+                else:
+                    messagebox.showerror("Error", "Could not find tomogram name column in CSV. Expected 'tomogram_name', 'tomoname', or 'tomogram'")
+                    return
+            
+            # Get the set column for path construction
+            if 'set' in df.columns:
+                tomogram_sets = df['set'].tolist()
+            else:
+                # Default to '15F1' if no set column found
+                tomogram_sets = ['15F1'] * len(tomogram_names)
+                self._log("No 'set' column found, defaulting to '15F1' for all tomograms\n")
+                    
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not read CSV file: {e}")
+            return
+        
+        self._log(f"Starting AMPA poses analysis for {len(tomogram_names)} tomograms...\n")
+        self._log(f"Output directory (relative to each tomogram): {output_dir_relative}\n")
+        
+        if aunp_no_cutoff:
+            self._log(f"AuNP distance range: No cutoff (using all AuNP pairs)\n")
+        else:
+            self._log(f"AuNP distance range: {aunp_min_dist}-{aunp_max_dist} nm\n")
+            
+        if membrane_no_cutoff:
+            self._log(f"Membrane distance range: No cutoff (using all pairs regardless of membrane distance)\n")
+        else:
+            self._log(f"Membrane distance range: {membrane_min_dist}-{membrane_max_dist} nm\n")
+        
+        # Process all tomograms
+        all_commands = []
+        
+        for i, (tomogram_name, tomogram_set) in enumerate(zip(tomogram_names, tomogram_sets), 1):
+            self._log(f"\nPreparing tomogram {i}/{len(tomogram_names)}: {tomogram_name} (set: {tomogram_set})\n")
+            
+            # Build tomogram path using the correct structure
+            tomogram_path = os.path.join(self.root_dir.get(), tomogram_set, 'TOP_TOMOS', tomogram_name)
+            
+            if not os.path.exists(tomogram_path):
+                self._log(f"Warning: Tomogram directory not found: {tomogram_path}\n")
+                continue
+            
+            # Get active zones for this tomogram from CSV
+            tomogram_row = df[df['tomoname'] == tomogram_name] if 'tomoname' in df.columns else df[df.iloc[:, 0] == tomogram_name]
+            aunp_active_zones = None
+            
+            if not tomogram_row.empty and 'aunp_active_zones' in df.columns:
+                aunp_active_zones_str = tomogram_row['aunp_active_zones'].iloc[0]
+                if pd.notna(aunp_active_zones_str) and str(aunp_active_zones_str).strip():
+                    try:
+                        # Parse active zones (can be comma-separated or space-separated)
+                        aunp_active_zones_str = str(aunp_active_zones_str).strip()
+                        if ',' in aunp_active_zones_str:
+                            aunp_active_zones = [int(x.strip()) for x in aunp_active_zones_str.split(',')]
+                        else:
+                            aunp_active_zones = [int(x.strip()) for x in aunp_active_zones_str.split()]
+                        self._log(f"Using active zones for {tomogram_name}: {aunp_active_zones}\n")
+                    except (ValueError, AttributeError):
+                        self._log(f"Warning: Could not parse active zones for {tomogram_name}: {aunp_active_zones_str}\n")
+                        aunp_active_zones = None
+                else:
+                    self._log(f"No active zones specified for {tomogram_name}, using all active zones\n")
+            else:
+                self._log(f"No active zones specified for {tomogram_name}, using all active zones\n")
+            
+            # Build command for this tomogram
+            # Construct full output directory path relative to tomogram
+            full_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative)
+            os.makedirs(full_output_dir, exist_ok=True)
+            
+            cli = ["python", "-u", "scripts/run_ampa_poses_analysis.py"]
+            cli += ["--tomogram-path", tomogram_path]
+            cli += ["--output-dir", full_output_dir]
+            
+            # Add distance parameters only if cutoffs are enabled
+            if not aunp_no_cutoff:
+                cli += ["--aunp-min-distance", str(aunp_min_dist)]
+                cli += ["--aunp-max-distance", str(aunp_max_dist)]
+            else:
+                cli += ["--no-aunp-distance-cutoff"]
+                
+            if not membrane_no_cutoff:
+                cli += ["--membrane-min-distance", str(membrane_min_dist)]
+                cli += ["--membrane-max-distance", str(membrane_max_dist)]
+            else:
+                cli += ["--no-membrane-distance-cutoff"]
+            
+            # Add active zones if specified
+            if aunp_active_zones is not None:
+                cli += ["--aunp-active-zones"] + [str(az) for az in aunp_active_zones]
+            
+            all_commands.append((tomogram_name, cli))
+        
+        if not all_commands:
+            self._log("No valid tomograms found to process.\n")
+            return
+        
+        # Run all commands sequentially with real-time output
+        self._log(f"\nStarting AMPA poses analysis for {len(all_commands)} tomograms...\n")
+        
+        # Use threading to run the entire sequence in background while maintaining real-time output
+        def run_sequential_analysis():
+            all_particles_data = []
+            all_aunps_data = []
+            all_aunps_all_data = []
+            successful_tomograms = []
+            
+            for i, (tomogram_name, cli) in enumerate(all_commands, 1):
+                self._log(f"\n{'='*60}\n")
+                self._log(f"Processing tomogram {i}/{len(all_commands)}: {tomogram_name}\n")
+                self._log(f"Command: {' '.join(cli)}\n")
+                self._log(f"{'='*60}\n")
+                
+                # Run the subprocess and wait for completion
+                self._run_subprocess(cli, os.environ.copy())
+                
+                # Try to load the results for combining
+                try:
+                    import starfile
+                    import pandas as pd
+                    
+                    # Load the individual results
+                    tomogram_path = os.path.join(self.root_dir.get(), tomogram_sets[i-1], 'TOP_TOMOS', tomogram_name)
+                    individual_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative)
+                    
+                    # Find the star file (it will have the distance parameters in the name)
+                    star_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and 'ampa_poses' in f and '_aunps' not in f]
+                    if star_files:
+                        star_file_path = os.path.join(individual_output_dir, star_files[0])
+                        star_data = starfile.read(star_file_path)
+                        if 'particles' in star_data:
+                            particles_df = star_data['particles'].copy()
+                            particles_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
+                            all_particles_data.append(particles_df)
+                            successful_tomograms.append(tomogram_name)
+                    
+                    # Load the AuNPs file (used for AMPA poses)
+                    aunps_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and 'ampa_poses' in f and '_aunps' in f and '_all_aunps' not in f]
+                    if aunps_files:
+                        aunps_file_path = os.path.join(individual_output_dir, aunps_files[0])
+                        aunps_data = starfile.read(aunps_file_path)
+                        if 'particles' in aunps_data:
+                            aunps_df = aunps_data['particles'].copy()
+                            aunps_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
+                            all_aunps_data.append(aunps_df)
+                    
+                    # Load the all AuNPs file
+                    all_aunps_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and 'ampa_poses' in f and '_all_aunps' in f]
+                    if all_aunps_files:
+                        all_aunps_file_path = os.path.join(individual_output_dir, all_aunps_files[0])
+                        all_aunps_data = starfile.read(all_aunps_file_path)
+                        if 'particles' in all_aunps_data:
+                            all_aunps_df = all_aunps_data['particles'].copy()
+                            all_aunps_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
+                            all_aunps_all_data.append(all_aunps_df)
+                
+                except Exception as e:
+                    self._log(f"Warning: Could not load results for {tomogram_name}: {e}\n")
+            
+            # Save combined star files
+            if all_particles_data:
+                try:
+                    # Create results/ampa_poses directory
+                    combined_output_dir = "results/ampa_poses"
+                    os.makedirs(combined_output_dir, exist_ok=True)
+                    
+                    # Combine all particles data
+                    combined_particles = pd.concat(all_particles_data, ignore_index=True)
+                    
+                    # Save combined AMPA poses star file
+                    starfile.write({
+                        'particles': combined_particles,
+                        'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
+                    }, os.path.join(combined_output_dir, "all_ampa_poses.star"))
+                    
+                    self._log(f"Saved combined AMPA poses to {combined_output_dir}/all_ampa_poses.star\n")
+                    
+                    # Save combined AuNPs star file (used for AMPA poses)
+                    if all_aunps_data:
+                        combined_aunps = pd.concat(all_aunps_data, ignore_index=True)
+                        starfile.write({
+                            'particles': combined_aunps,
+                            'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
+                        }, os.path.join(combined_output_dir, "all_ampa_poses_aunps.star"))
+                        
+                        self._log(f"Saved combined AuNPs to {combined_output_dir}/all_ampa_poses_aunps.star\n")
+                    
+                    # Save combined ALL AuNPs star file
+                    if all_aunps_all_data:
+                        combined_all_aunps = pd.concat(all_aunps_all_data, ignore_index=True)
+                        starfile.write({
+                            'particles': combined_all_aunps,
+                            'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
+                        }, os.path.join(combined_output_dir, "all_ampa_poses_all_aunps.star"))
+                        
+                        self._log(f"Saved combined ALL AuNPs to {combined_output_dir}/all_ampa_poses_all_aunps.star\n")
+                    
+                    self._log(f"Combined results from {len(successful_tomograms)} tomograms: {', '.join(successful_tomograms)}\n")
+                    
+                except Exception as e:
+                    self._log(f"Warning: Could not save combined results: {e}\n")
+            
+            self._log(f"\nAMPA poses analysis completed for {len(all_commands)} tomograms.\n")
+            self._log(f"Results saved to: {output_dir_relative} within each tomogram's STT_results directory\n")
+            if all_particles_data:
+                self._log(f"Combined results saved to: results/ampa_poses/\n")
         
         # Start the sequential analysis in a background thread
         threading.Thread(target=run_sequential_analysis).start()

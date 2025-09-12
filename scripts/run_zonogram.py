@@ -172,7 +172,7 @@ def select_aunps_findingampa_style(aunp_data, az_data, res_ddw, threshold=3.8, s
     
     return fig, significant_picks_mask, selected_aunp_pos, selected_aunp_pos_mask, selected_aunp_pos_postsyn_mask
 
-def select_aunps_by_cluster_findingampa_style(aunp_data, cluster_data, az_data, res_ddw, threshold=3.8, skip_segment_activezone=False):
+def select_aunps_by_cluster_findingampa_style(aunp_data, cluster_data, az_data, res_ddw, threshold=3.8, skip_segment_activezone=False, tomogram_path=None):
     """
     Select AuNPs and color them by cluster assignment using the exact same approach as findingampa.
     Based on findingampa/src/findingampa/utils/analysis.py:select_aunps() but with cluster coloring.
@@ -339,6 +339,72 @@ def select_aunps_by_cluster_findingampa_style(aunp_data, cluster_data, az_data, 
         if legend_handles:
             fig.legend(legend_handles, legend_labels, loc='lower right', bbox_to_anchor=(1.0, 0.0), 
                       fontsize=8, frameon=True, fancybox=True, shadow=True)
+    
+    # Add fusion points if tomogram path is provided
+    if tomogram_path is not None:
+        try:
+            # Load fusion points from vesicle results (more efficient than recomputing)
+            import sys
+            import os
+            import json
+            sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+            from synaptic_tomo_tools.aunps import compute_fusion_points
+            
+            # Try to load cached fusion points first
+            fusion_points_cache_path = Path(tomogram_path) / "best_alignment" / "STT_results" / "vesicles" / "fusion_points.npy"
+            fusion_points = None
+            
+            if fusion_points_cache_path.exists():
+                try:
+                    fusion_points = np.load(fusion_points_cache_path)
+                    print(f"Loaded {len(fusion_points)} cached fusion points")
+                except Exception as e:
+                    print(f"Could not load cached fusion points: {e}")
+            
+            # Compute fusion points if not cached
+            if fusion_points is None:
+                print(f"Computing fusion points for {Path(tomogram_path).name}...")
+                fusion_points = compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0)
+                print(f"Computed {len(fusion_points)} fusion points")
+                
+                # Cache the fusion points for future use
+                if len(fusion_points) > 0:
+                    try:
+                        fusion_points_cache_path.parent.mkdir(parents=True, exist_ok=True)
+                        np.save(fusion_points_cache_path, fusion_points)
+                        print(f"Cached fusion points to {fusion_points_cache_path}")
+                    except Exception as e:
+                        print(f"Could not cache fusion points: {e}")
+            
+            if len(fusion_points) > 0:
+                # Transform fusion points to the same coordinate system as AuNPs
+                fusion_points_transformed = transform_coordinates(fusion_points, res_ddw)
+                
+                # Plot fusion points as orange stars on all three views
+                for fp in fusion_points_transformed:
+                    axxy.scatter(fp[0], fp[1], color='orange', s=100, alpha=0.9, marker='*', 
+                               edgecolors='darkorange', linewidth=0.5)
+                    axxz.scatter(fp[2], fp[1], color='orange', s=100, alpha=0.9, marker='*', 
+                               edgecolors='darkorange', linewidth=0.5)
+                    axyz.scatter(fp[0], fp[2], color='orange', s=100, alpha=0.9, marker='*', 
+                               edgecolors='darkorange', linewidth=0.5)
+                
+                # Add fusion points to legend
+                fusion_handle = plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='orange', 
+                                         markeredgecolor='darkorange', markersize=10, linewidth=0.5)
+                if legend_handles:
+                    legend_handles.append(fusion_handle)
+                    legend_labels.append('Fusion Sites')
+                    # Update the legend
+                    fig.legend(legend_handles, legend_labels, loc='lower right', bbox_to_anchor=(1.0, 0.0), 
+                              fontsize=8, frameon=True, fancybox=True, shadow=True)
+                else:
+                    fig.legend([fusion_handle], ['Fusion Sites'], loc='lower right', bbox_to_anchor=(1.0, 0.0), 
+                              fontsize=8, frameon=True, fancybox=True, shadow=True)
+                
+                print(f"Added {len(fusion_points)} fusion points to zonogram visualization")
+        except Exception as e:
+            print(f"Warning: Could not load fusion points: {e}")
     
     return fig, significant_picks_mask, selected_aunp_pos, selected_aunp_pos_mask, selected_aunp_pos_postsyn_mask
 
@@ -531,31 +597,52 @@ def main():
                 plt.close()
                 print(f"  Saved {selected_filename} (no data)")
             
-            # 5. Generate cluster-colored AuNPs PNG
+            # 5. Generate cluster-colored AuNPs PNG (original version)
             cluster_filename = f"active_zonogram_{i}_selected_aunps_by_cluster.png"
             cluster_filepath = zonogram_dir / cluster_filename
+            
+            # 6. Generate cluster-colored AuNPs PNG with fusion points
+            cluster_fusion_filename = f"active_zonogram_{i}_selected_aunps_by_cluster_with_fusion_points.png"
+            cluster_fusion_filepath = zonogram_dir / cluster_fusion_filename
             
             # Try to load cluster data
             cluster_data_path = Path(tomogram_path) / "best_alignment" / "STT_results" / "aunps" / "aunp_clusters.star"
             
             if cluster_data_path.exists() and aunp_data_path.exists():
                 try:
-                    # Use the findingampa-style AuNP selection with cluster coloring
-                    fig, significant_picks_mask, selected_aunp_pos, selected_aunp_pos_mask, selected_aunp_pos_postsyn_mask = select_aunps_by_cluster_findingampa_style(
+                    # First, generate the original version without fusion points
+                    fig_original, significant_picks_mask, selected_aunp_pos, selected_aunp_pos_mask, selected_aunp_pos_postsyn_mask = select_aunps_by_cluster_findingampa_style(
                         aunp_data_path, 
                         cluster_data_path,
                         zonogram_metadata, 
                         res_ddw, 
                         threshold=3.8, 
-                        skip_segment_activezone=False
+                        skip_segment_activezone=False,
+                        tomogram_path=None  # No fusion points for original version
                     )
                     
-                    if fig is not None:
-                        fig.savefig(cluster_filepath)
-                        plt.close(fig)
+                    if fig_original is not None:
+                        fig_original.savefig(cluster_filepath)
+                        plt.close(fig_original)
                         print(f"  Saved {cluster_filename} with cluster-colored AuNPs")
+                    
+                    # Then, generate the version with fusion points
+                    fig_with_fusion, _, _, _, _ = select_aunps_by_cluster_findingampa_style(
+                        aunp_data_path, 
+                        cluster_data_path,
+                        zonogram_metadata, 
+                        res_ddw, 
+                        threshold=3.8, 
+                        skip_segment_activezone=False,
+                        tomogram_path=tomogram_path  # Include fusion points
+                    )
+                    
+                    if fig_with_fusion is not None:
+                        fig_with_fusion.savefig(cluster_fusion_filepath)
+                        plt.close(fig_with_fusion)
+                        print(f"  Saved {cluster_fusion_filename} with cluster-colored AuNPs and fusion points")
                     else:
-                        # Fallback if cluster AuNP selection failed
+                        # Fallback if cluster AuNP selection failed - create both versions
                         fig, ax = plt.subplots(1, 1, figsize=(10, 8))
                         ax.text(0.5, 0.5, f'Cluster-Colored AuNPs\n(Cluster selection failed)', 
                                 transform=ax.transAxes, ha='center', va='center', fontsize=12,
@@ -566,12 +653,14 @@ def main():
                         ax.set_title(f'Cluster-Colored AuNPs: {zone_name}')
                         plt.tight_layout()
                         plt.savefig(cluster_filepath, dpi=300, bbox_inches='tight')
+                        plt.savefig(cluster_fusion_filepath, dpi=300, bbox_inches='tight')
                         plt.close()
                         print(f"  Saved {cluster_filename} (fallback)")
+                        print(f"  Saved {cluster_fusion_filename} (fallback)")
                         
                 except Exception as e:
                     print(f"    Warning: Could not create cluster AuNP visualization: {e}")
-                    # Create error fallback
+                    # Create error fallback for both versions
                     fig, ax = plt.subplots(1, 1, figsize=(10, 8))
                     ax.text(0.5, 0.5, f'Cluster-Colored AuNPs\n(Error: {str(e)[:50]}...)', 
                             transform=ax.transAxes, ha='center', va='center', fontsize=12,
@@ -582,11 +671,13 @@ def main():
                     ax.set_title(f'Cluster-Colored AuNPs: {zone_name}')
                     plt.tight_layout()
                     plt.savefig(cluster_filepath, dpi=300, bbox_inches='tight')
+                    plt.savefig(cluster_fusion_filepath, dpi=300, bbox_inches='tight')
                     plt.close()
                     print(f"  Saved {cluster_filename} (error fallback)")
+                    print(f"  Saved {cluster_fusion_filename} (error fallback)")
             else:
                 print(f"    No cluster data found at {cluster_data_path}, skipping cluster visualization")
-                # Create no-data fallback
+                # Create no-data fallback for both versions
                 fig, ax = plt.subplots(1, 1, figsize=(10, 8))
                 ax.text(0.5, 0.5, f'Cluster-Colored AuNPs\n(No cluster data available)', 
                         transform=ax.transAxes, ha='center', va='center', fontsize=12,
@@ -597,8 +688,10 @@ def main():
                 ax.set_title(f'Cluster-Colored AuNPs: {zone_name}')
                 plt.tight_layout()
                 plt.savefig(cluster_filepath, dpi=300, bbox_inches='tight')
+                plt.savefig(cluster_fusion_filepath, dpi=300, bbox_inches='tight')
                 plt.close()
                 print(f"  Saved {cluster_filename} (no data)")
+                print(f"  Saved {cluster_fusion_filename} (no data)")
                 
     else:
         print(f"Error extracting zonograms: {extracted_results.get('status', 'unknown error')}")

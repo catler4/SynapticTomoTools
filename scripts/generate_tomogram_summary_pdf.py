@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Generate summary PDF for each tomogram after analysis.
-Includes: combined visualization, aunp cluster overlay, aunp clusters visualization, total aunp #, aunp cluster #, total vesicle #, and active zone-adjacent (<10 nm) vesicle #.
+Includes: combined visualization, aunp cluster overlay, aunp clusters visualization, total aunp #, aunp cluster #, total vesicle #, and active zone-adjacent (<20 nm) vesicle #.
 """
 import os
 import glob
@@ -80,10 +80,10 @@ def get_stats(tomo_name, base_data_dir):
             with open(vesicle_json[0], 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 stats['total_vesicles'] = data.get('summary', {}).get('total_vesicles', 'N/A')
-                # Count vesicles with distance_to_az <= 10
+                # Count vesicles with distance_to_az <= 20
                 az_adj = 0
                 for v in data.get('vesicles', []):
-                    if 'distance_to_az' in v and v['distance_to_az'] <= 10:
+                    if 'distance_to_az' in v and v['distance_to_az'] <= 20:
                         az_adj += 1
                 stats['az_adjacent_vesicles'] = az_adj
         except UnicodeDecodeError as e:
@@ -120,15 +120,29 @@ def get_stats(tomo_name, base_data_dir):
             print(f"File analysis: {check_file_corruption(aunp_csv[0])}")
     return stats
 
-def get_active_zonogram_images(tomo_name, base_data_dir):
+def get_active_zonogram_images(tomo_name, base_data_dir, selected_az_indices=None):
     # Find the active_zonogram folder for this tomogram
     az_dir_candidates = list(Path(base_data_dir).glob(f"**/{tomo_name}/best_alignment/active_zonograms"))
     if not az_dir_candidates:
         return []
     az_dir = az_dir_candidates[0]
+    
     # Find all *_position.png and *_selected_aunps.png pairs
     position_imgs = sorted(az_dir.glob('active_zonogram_*_position.png'))
     selected_imgs = sorted(az_dir.glob('active_zonogram_*_selected_aunps.png'))
+    
+    # Filter by selected active zone indices if provided
+    if selected_az_indices is not None:
+        # Convert to set for faster lookup
+        selected_indices = set(selected_az_indices)
+        # Filter position images to only include selected indices
+        filtered_position_imgs = []
+        for pos_img in position_imgs:
+            m = re.search(r'active_zonogram_(\d+)_position.png', pos_img.name)
+            if m and int(m.group(1)) in selected_indices:
+                filtered_position_imgs.append(pos_img)
+        position_imgs = filtered_position_imgs
+    
     # Pair by index (assuming same numbering)
     pairs = []
     for pos_img in position_imgs:
@@ -140,15 +154,16 @@ def get_active_zonogram_images(tomo_name, base_data_dir):
         # Find corresponding selected_aunps image
         sel_img = az_dir / f"active_zonogram_{idx}_selected_aunps.png"
         if sel_img.exists():
-            pairs.append((pos_img, sel_img))
+            pairs.append((pos_img, sel_img, int(idx)))
         else:
-            pairs.append((pos_img, None))
+            pairs.append((pos_img, None, int(idx)))
     return pairs
 
 def load_tomo_set_map(tomocsv_path):
     import csv
     tomo_set_map = {}
     tomo_az_map = {}
+    tomo_az_indices_map = {}
     with open(tomocsv_path, newline='') as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
@@ -157,9 +172,17 @@ def load_tomo_set_map(tomocsv_path):
             az = (row.get('aunp_active_zones') or '').strip()
             if az:
                 tomo_az_map[row['tomoname']] = az
+                # Parse active zone indices
+                try:
+                    az_indices = [int(x.strip()) for x in az.split(',') if x.strip()]
+                    tomo_az_indices_map[row['tomoname']] = az_indices
+                except ValueError:
+                    print(f"Warning: Could not parse active zone indices for {row['tomoname']}: {az}")
+                    tomo_az_indices_map[row['tomoname']] = None
             else:
                 tomo_az_map[row['tomoname']] = 'All'
-    return tomo_set_map, tomo_az_map
+                tomo_az_indices_map[row['tomoname']] = None
+    return tomo_set_map, tomo_az_map, tomo_az_indices_map
 
 def add_image(c, img_path, x, y, max_width, max_height):
     if img_path is None:
@@ -184,7 +207,7 @@ def add_image(c, img_path, x, y, max_width, max_height):
         print(f"Error opening image {img_path}: {e}")
         return 0
 
-def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tomo_set_map=None, tomo_az_map=None):
+def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tomo_set_map=None, tomo_az_map=None, tomo_az_indices_map=None):
     c = canvas.Canvas(str(output_dir / f"{tomo_name}_summary.pdf"), pagesize=letter)
     width, height = letter
     margin = 40
@@ -227,7 +250,7 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
     c.setFont("Helvetica", 12)
     c.drawString(margin, info_y, f"Total vesicles: {stats['total_vesicles']}")
     info_y -= 18
-    c.drawString(margin, info_y, f"Active zone-adjacent vesicles (<10 nm): {stats['az_adjacent_vesicles']}")
+    c.drawString(margin, info_y, f"Active zone-adjacent vesicles (<20 nm): {stats['az_adjacent_vesicles']}")
     info_y -= 18
     c.drawString(margin, info_y, f"Total AuNPs: {stats['total_aunps']}")
     info_y -= 18
@@ -237,17 +260,22 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
     # Add a consistent gap before the first figure
     y -= 16
     # --- Add active zonogram images next ---
-    az_pairs = get_active_zonogram_images(tomo_name, base_data_dir)
+    # Get selected active zone indices for this tomogram
+    selected_az_indices = None
+    if tomo_az_indices_map is not None:
+        selected_az_indices = tomo_az_indices_map.get(tomo_name, None)
+    
+    az_pairs = get_active_zonogram_images(tomo_name, base_data_dir, selected_az_indices)
     if az_pairs:
         # Place the first pair on the first page, stacked, using as much vertical space as possible
-        pos_img, sel_img = az_pairs[0]
+        pos_img, sel_img, az_id = az_pairs[0]
         gap = 28
         available_height = y - margin  # space left on first page
         img_height = (available_height - gap) // 2
         img_width = width - 2*margin
         # Position image 1
         c.setFont("Helvetica-Bold", 14)
-        c.drawString(margin, y, f"Active Zonogram 0 - Position")
+        c.drawString(margin, y, f"Active Zonogram {az_id} - Position")
         y -= 6
         used_height1 = add_image(c, pos_img, margin, y-img_height, img_width, img_height)
         y -= used_height1
@@ -255,7 +283,7 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
         # Position image 2
         if sel_img:
             c.setFont("Helvetica-Bold", 14)
-            c.drawString(margin, y, f"Active Zonogram 0 - Selected AuNPs")
+            c.drawString(margin, y, f"Active Zonogram {az_id} - Selected AuNPs")
             y -= 6
             used_height2 = add_image(c, sel_img, margin, y-img_height, img_width, img_height)
             y -= used_height2
@@ -267,12 +295,12 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
         # Remove the first pair from az_pairs
         az_pairs = az_pairs[1:]
     # The rest as before
-    for i, (pos_img, sel_img) in enumerate(az_pairs, start=1):
+    for pos_img, sel_img, az_id in az_pairs:
         if y < (2*400 + 40):
             c.showPage()
             y = height - margin
         c.setFont("Helvetica-Bold", 14)
-        c.drawString(margin, y, f"Active Zonogram {i} - Position")
+        c.drawString(margin, y, f"Active Zonogram {az_id} - Position")
         y -= 6
         used_height = add_image(c, pos_img, margin, y-400, width-2*margin, 400)
         y -= used_height
@@ -280,7 +308,7 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
         if sel_img:
             y -= 16
             c.setFont("Helvetica-Bold", 14)
-            c.drawString(margin, y, f"Active Zonogram {i} - Selected AuNPs")
+            c.drawString(margin, y, f"Active Zonogram {az_id} - Selected AuNPs")
             y -= 6
             used_height = add_image(c, sel_img, margin, y-400, width-2*margin, 400)
             y -= used_height
@@ -359,7 +387,7 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     # Load tomogram set and active zone mapping
-    tomo_set_map, tomo_az_map = load_tomo_set_map(args.tomocsv)
+    tomo_set_map, tomo_az_map, tomo_az_indices_map = load_tomo_set_map(args.tomocsv)
     
     # Get tomograms in CSV order
     csv_tomograms = list(tomo_set_map.keys())
@@ -386,7 +414,7 @@ def main():
     for i, tomo_name in enumerate(csv_tomograms[start_index:], start=start_index):
         if tomo_name in tomo_to_img:
             print(f"Generating PDF for {tomo_name} (CSV order, position {i+1}/{len(csv_tomograms)})")
-            generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tomo_set_map, tomo_az_map)
+            generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tomo_set_map, tomo_az_map, tomo_az_indices_map)
             pdf_path = output_dir / f"{tomo_name}_summary.pdf"
             if pdf_path.exists():
                 pdf_paths.append(str(pdf_path))

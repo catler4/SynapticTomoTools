@@ -1058,10 +1058,10 @@ def calculate_combined_sphericity(sphericity_data: Dict[str, float]) -> float:
     volume_sphericity = sphericity_data.get('sphericity_volume', 0.0)
     fit_quality_sphericity = sphericity_data.get('sphericity_fit_quality', 0.0)
     
-    # Weighted average with emphasis on volume-based sphericity
+    # Weighted average with equal emphasis on both measures
     weights = {
-        'volume': 0.7,      # Most important - volume vs surface area
-        'fit_quality': 0.3  # How well points fit the sphere
+        'volume': 0.5,      # Volume vs surface area ratio
+        'fit_quality': 0.5  # How well points fit the sphere
     }
     
     weighted_average = (

@@ -93,9 +93,13 @@ def load_aunps(tomo_path, active_zone_indices=None):
                 if isinstance(star_data, dict):
                     for v in star_data.values():
                         if isinstance(v, pd.DataFrame):
+                            v = v.copy()
+                            v['active_zone'] = idx  # Add active zone identifier
                             star_dfs.append(v)
                             break
                 elif isinstance(star_data, pd.DataFrame):
+                    star_data = star_data.copy()
+                    star_data['active_zone'] = idx  # Add active zone identifier
                     star_dfs.append(star_data)
     else:
         print("[viz] active_zone_indices is None, loading all aunp_tm_BP_active_zone_*.star files")
@@ -105,13 +109,18 @@ def load_aunps(tomo_path, active_zone_indices=None):
             fname = Path(file).name
             m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
             if m:
+                az_id = int(m.group(1))
                 star_data = starfile.read(Path(file))
                 if isinstance(star_data, dict):
                     for v in star_data.values():
                         if isinstance(v, pd.DataFrame):
+                            v = v.copy()
+                            v['active_zone'] = az_id  # Add active zone identifier
                             star_dfs.append(v)
                             break
                 elif isinstance(star_data, pd.DataFrame):
+                    star_data = star_data.copy()
+                    star_data['active_zone'] = az_id  # Add active zone identifier
                     star_dfs.append(star_data)
         if not star_dfs:
             print("[viz] No numeric aunp_tm_BP_active_zone_*.star files found and _all.star fallback is disabled.")
@@ -119,13 +128,13 @@ def load_aunps(tomo_path, active_zone_indices=None):
     return pd.concat(star_dfs, ignore_index=True)
 
 def load_fusion_points(tomo_path):
-    """Load fusion points for vesicles within 10nm of active zone."""
+    """Load fusion points for vesicles within 20nm of active zone."""
     try:
         from scipy.spatial import KDTree
         from .aunps import compute_fusion_points
         
         print(f"Computing fusion points for {Path(tomo_path).name}...")
-        fusion_points = compute_fusion_points(tomo_path)
+        fusion_points = compute_fusion_points(tomo_path, vesicle_distance_threshold=20.0)
         print(f"Computed {len(fusion_points)} fusion points")
         if len(fusion_points) > 0:
             print(f"Fusion points shape: {fusion_points.shape}")
@@ -207,32 +216,174 @@ def load_postsynaptic_active_zone_coords(tomo_path):
     coords = [np.loadtxt(f) for f in files if f.exists()]
     return coords
 
+def load_specific_active_zone_coords(tomo_path, active_zone_indices, aunps):
+    """Load active zone coordinates only for the specified active zone indices, matched by distance to AuNPs."""
+    az_dir = Path(tomo_path) / 'best_alignment' / 'STT_results' / 'active_zones'
+    
+    azs_pre = []
+    azs_post = []
+    
+    if active_zone_indices is not None and aunps is not None and not aunps.empty:
+        # Get all available active zone files
+        pre_files = sorted(list(az_dir.glob('active_zone_pre*_post*_pre.txt')))
+        post_files = sorted(list(az_dir.glob('active_zone_pre*_post*_post.txt')))
+        
+        print(f"Found {len(pre_files)} presynaptic active zone files")
+        print(f"Found {len(post_files)} postsynaptic active zone files")
+        
+        for az_id in active_zone_indices:
+            # Get AuNPs for this specific active zone
+            if 'active_zone' in aunps.columns:
+                aunps_in_az = aunps[aunps['active_zone'] == az_id]
+            else:
+                print(f"Warning: No 'active_zone' column in AuNP data, cannot match membranes for active zone {az_id}")
+                continue
+            
+            if aunps_in_az.empty:
+                print(f"Warning: No AuNPs found for active zone {az_id}, cannot match membranes")
+                continue
+            
+            # Calculate center of AuNPs for this active zone
+            aunp_center = np.mean(aunps_in_az[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values, axis=0)
+            print(f"Active zone {az_id} AuNP center: ({aunp_center[0]:.1f}, {aunp_center[1]:.1f}, {aunp_center[2]:.1f})")
+            
+            # Find the active zone membrane file closest to these AuNPs
+            best_pre_file = None
+            best_post_file = None
+            min_pre_distance = float('inf')
+            min_post_distance = float('inf')
+            
+            # Check each presynaptic active zone file
+            for pre_file in pre_files:
+                try:
+                    pre_coords = np.loadtxt(pre_file)
+                    if pre_coords.size > 0:
+                        # Calculate distance from AuNP center to membrane points
+                        distances = np.linalg.norm(pre_coords - aunp_center, axis=1)
+                        avg_distance = np.mean(distances)
+                        
+                        if avg_distance < min_pre_distance:
+                            min_pre_distance = avg_distance
+                            best_pre_file = pre_file
+                except Exception as e:
+                    print(f"Error reading {pre_file}: {e}")
+                    continue
+            
+            # Check each postsynaptic active zone file
+            for post_file in post_files:
+                try:
+                    post_coords = np.loadtxt(post_file)
+                    if post_coords.size > 0:
+                        # Calculate distance from AuNP center to membrane points
+                        distances = np.linalg.norm(post_coords - aunp_center, axis=1)
+                        avg_distance = np.mean(distances)
+                        
+                        if avg_distance < min_post_distance:
+                            min_post_distance = avg_distance
+                            best_post_file = post_file
+                except Exception as e:
+                    print(f"Error reading {post_file}: {e}")
+                    continue
+            
+            # Load the best matching files
+            if best_pre_file is not None:
+                try:
+                    pre_coords = np.loadtxt(best_pre_file)
+                    azs_pre.append(pre_coords)
+                    print(f"Matched active zone {az_id} to presynaptic membrane {best_pre_file.name} (avg distance: {min_pre_distance:.1f} nm)")
+                except Exception as e:
+                    print(f"Error loading {best_pre_file}: {e}")
+            
+            if best_post_file is not None:
+                try:
+                    post_coords = np.loadtxt(best_post_file)
+                    azs_post.append(post_coords)
+                    print(f"Matched active zone {az_id} to postsynaptic membrane {best_post_file.name} (avg distance: {min_post_distance:.1f} nm)")
+                except Exception as e:
+                    print(f"Error loading {best_post_file}: {e}")
+    
+    return azs_pre, azs_post
+
 def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None, rerun=False):
-    """Generate 2D overlay plot and save to file. Optionally filter AuNPs by active zone indices."""
+    """Generate 2D overlay plot and save to file. Only processes CSV-specified active zones."""
     vesicles = load_vesicles(tomo_path)
     pre_mem = load_membrane_coords(tomo_path, 'presynatptic')
     post_mem = load_membrane_coords(tomo_path, 'postsynaptic')
-    azs_pre = load_active_zone_coords(tomo_path)
-    azs_post = load_postsynaptic_active_zone_coords(tomo_path)
     aunps = load_aunps(tomo_path, aunp_active_zone_indices)
     fusion_points = load_fusion_points(tomo_path)
+    
+    # Load only the active zone membranes for CSV-specified active zones, matched by distance to AuNPs
+    azs_pre, azs_post = load_specific_active_zone_coords(tomo_path, aunp_active_zone_indices, aunps)
     
     # Debug: Check what was loaded
     print(f"Loaded {len(pre_mem)} presynaptic membrane files")
     print(f"Loaded {len(post_mem)} postsynaptic membrane files")
-    print(f"Loaded {len(azs_pre)} presynaptic active zone files")
-    print(f"Loaded {len(azs_post)} postsynaptic active zone files")
+    print(f"Loaded {len(azs_pre)} CSV-specified presynaptic active zone files")
+    print(f"Loaded {len(azs_post)} CSV-specified postsynaptic active zone files")
     print(f"Loaded {len(fusion_points) if fusion_points is not None else 0} fusion points")
     
-    # Find z center of first active zone
-    z_center = int(np.mean(azs_pre[0][:,2])) if azs_pre else None
-    print(f"Using z_center: {z_center}")
-    slice2d, zc = load_tomogram_slice(tomo_path, z_center)
+    # Only process CSV-specified active zones
+    if aunp_active_zone_indices is None or len(aunp_active_zone_indices) == 0:
+        print("No active zones specified in CSV, using middle of tomogram")
+        # Fallback to middle of tomogram
+        slice2d, z_center = load_tomogram_slice(tomo_path, None)
+        if slice2d is None:
+            print(f"Could not load tomogram slice for {tomo_path}")
+            return
+        _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center, vesicles, 
+                                         pre_mem, post_mem, [], [], aunps, fusion_points, 
+                                         aunp_active_zone_indices, rerun, "middle")
+    else:
+        # Generate visualizations for each CSV-specified active zone
+        for az_id in aunp_active_zone_indices:
+            print(f"Processing CSV-specified active zone {az_id}")
+            
+            # Calculate z_center based on AuNPs within this specific active zone
+            z_center = _calculate_active_zone_center_from_aunps(aunps, az_id)
+            if z_center is None:
+                print(f"Warning: No AuNPs found for active zone {az_id}, skipping visualization")
+                continue
+            
+            print(f"Generating visualizations for active zone {az_id}, z_center from AuNPs: {z_center}")
+            
+            slice2d, zc = load_tomogram_slice(tomo_path, z_center)
+            if slice2d is None:
+                print(f"Could not load tomogram slice for {tomo_path} at z={z_center}")
+                continue
+            
+            _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center, vesicles, 
+                                             pre_mem, post_mem, azs_pre, azs_post, aunps, fusion_points, 
+                                             aunp_active_zone_indices, rerun, f"az{az_id}")
 
-    if slice2d is None:
-        print(f"Could not load tomogram slice for {tomo_path}")
-        return
+def _calculate_active_zone_center_from_aunps(aunps, active_zone_id):
+    """Calculate the z_center of an active zone based on the center of AuNPs within that active zone."""
+    if aunps is None or aunps.empty:
+        return None
+    
+    # Filter AuNPs for this specific active zone
+    if 'active_zone' in aunps.columns:
+        aunps_in_az = aunps[aunps['active_zone'] == active_zone_id]
+    else:
+        # If no active_zone column, we can't filter by active zone
+        print(f"Warning: No 'active_zone' column in AuNP data, cannot calculate center for active zone {active_zone_id}")
+        return None
+    
+    if aunps_in_az.empty:
+        print(f"Warning: No AuNPs found in active zone {active_zone_id}")
+        return None
+    
+    # Calculate the mean Z coordinate of AuNPs in this active zone
+    z_center = int(np.mean(aunps_in_az['faCoordinateZ']))
+    print(f"Active zone {active_zone_id}: {len(aunps_in_az)} AuNPs, z_center = {z_center}")
+    
+    return z_center
 
+def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center, vesicles, 
+                                     pre_mem, post_mem, azs_pre, azs_post, aunps, fusion_points, 
+                                     aunp_active_zone_indices, rerun, suffix):
+    """Generate all visualization types for a specific slice."""
+    tomo_name = Path(tomo_path).name
+    
     # Contrast adjustment: use 2nd and 98th percentiles for vmin/vmax
     vmin, vmax = np.percentile(slice2d, [2, 98])
     
@@ -259,15 +410,13 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
     print(f"Found {len(vesicles_in_slice)} vesicles in slice")
     print(f"Found {len(fusion_points_near) if fusion_points_near is not None else 0} fusion points in slice")
     
-    tomo_name = Path(tomo_path).name
-    
     # Version 1: Vesicles and Active Zones
-    output_file1 = output_dir / f"{tomo_name}_vesicles_active_zones.png"
+    output_file1 = output_dir / f"{tomo_name}_vesicles_active_zones_{suffix}.png"
     if output_file1.exists() and not rerun:
         print(f"Skipping {output_file1}, already exists.")
     else:
         fig1, ax1 = plt.subplots(figsize=(12, 12))
-        ax1.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax)
+        ax1.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax, origin='lower')
     
     # Overlay vesicles with transparency
     for v in vesicles_in_slice:
@@ -313,12 +462,12 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
     print(f"Saved vesicles and active zones: {output_file1}")
     
     # Version 2: Vesicles and AuNPs
-    output_file2 = output_dir / f"{tomo_name}_vesicles_aunps.png"
+    output_file2 = output_dir / f"{tomo_name}_vesicles_aunps_{suffix}.png"
     if output_file2.exists() and not rerun:
         print(f"Skipping {output_file2}, already exists.")
     else:
         fig2, ax2 = plt.subplots(figsize=(12, 12))
-        ax2.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax)
+        ax2.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax, origin='lower')
     
     # Overlay vesicles with transparency
     for v in vesicles_in_slice:
@@ -402,12 +551,12 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
     print(f"Saved vesicles and AuNPs: {output_file2}")
     
     # Version 3: Combined - Vesicles, Active Zones, AuNPs, and Fusion Sites
-    output_file3 = output_dir / f"{tomo_name}_combined.png"
+    output_file3 = output_dir / f"{tomo_name}_combined_{suffix}.png"
     if output_file3.exists() and not rerun:
         print(f"Skipping {output_file3}, already exists.")
     else:
         fig3, ax3 = plt.subplots(figsize=(12, 12))
-        ax3.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax)
+        ax3.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax, origin='lower')
     
     # Overlay vesicles with transparency
     for v in vesicles_in_slice:
@@ -498,17 +647,42 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
     ax3.set_xlabel('X (pixels)')
     ax3.set_ylabel('Y (pixels)')
     
+    # Save the original combined image with legend
     plt.savefig(output_file3, dpi=300, bbox_inches='tight')
-    plt.close()
     print(f"Saved combined visualization: {output_file3}")
+    
+    # Also save without suffix for PDF compatibility (only for the first active zone)
+    if suffix == "az0" or suffix == "middle":
+        output_file3_pdf = output_dir / f"{tomo_name}_combined.png"
+        plt.savefig(output_file3_pdf, dpi=300, bbox_inches='tight')
+        print(f"Saved combined visualization for PDF: {output_file3_pdf}")
+    
+    # Save version without legend
+    ax3.legend().set_visible(False)
+    output_file3_no_legend = output_dir / f"{tomo_name}_combined_no_legend_{suffix}.png"
+    plt.savefig(output_file3_no_legend, dpi=300, bbox_inches='tight')
+    print(f"Saved combined visualization (no legend): {output_file3_no_legend}")
+    
+    # Save legend only
+    fig_legend, ax_legend = plt.subplots(figsize=(4, 6))
+    ax_legend.legend(handles=legend_elements, loc='center')
+    ax_legend.set_xlim(0, 1)
+    ax_legend.set_ylim(0, 1)
+    ax_legend.axis('off')
+    ax_legend.set_title(f'Legend - {tomo_name}', pad=20)
+    
+    output_file3_legend = output_dir / f"{tomo_name}_combined_legend_{suffix}.png"
+    plt.savefig(output_file3_legend, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Saved combined legend: {output_file3_legend}")
 
     # Version 4: Vesicles colored by average signal intensity
-    output_file4 = output_dir / f"{tomo_name}_vesicles_signal.png"
+    output_file4 = output_dir / f"{tomo_name}_vesicles_signal_{suffix}.png"
     if output_file4.exists() and not rerun:
         print(f"Skipping {output_file4}, already exists.")
     else:
         fig4, ax4 = plt.subplots(figsize=(12, 12))
-        ax4.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax)
+        ax4.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax, origin='lower')
         # Gather signal values for color mapping
         vesicle_signals = [v.get('average_signal', 0.0) for v in vesicles_in_slice]
         # Normalize signals per tomogram
@@ -557,23 +731,69 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
         print(f"Saved vesicles colored by signal: {output_file4}")
 
     # --- AuNP Cluster Visualization ---
-    # Try to load cluster assignments from aunp_clusters.star or aunp_nearest_neighbor_distances.csv
-    import starfile
-    aunps_results_dir = Path(tomo_path) / "best_alignment" / "STT_results" / "aunps"
-    cluster_star = aunps_results_dir / "aunp_clusters.star"
-    cluster_csv = aunps_results_dir / "aunp_nearest_neighbor_distances.csv"
-    aunp_clusters = None
-    if cluster_star.exists():
-        try:
-            aunp_clusters = starfile.read(cluster_star)
-        except Exception:
-            aunp_clusters = None
-    if aunp_clusters is None and cluster_csv.exists():
-        try:
-            aunp_clusters = pd.read_csv(cluster_csv)
-        except Exception:
-            aunp_clusters = None
+    # Use the same filtered AuNPs that were used in the analysis
+    aunp_clusters = aunps  # Use the filtered AuNPs from load_aunps()
+    
     if aunp_clusters is not None and not aunp_clusters.empty:
+        # Try to load cluster assignments from the filtered AuNPs
+        aunps_results_dir = Path(tomo_path) / "best_alignment" / "STT_results" / "aunps"
+        cluster_star = aunps_results_dir / "aunp_clusters.star"
+        cluster_csv = aunps_results_dir / "aunp_nearest_neighbor_distances.csv"
+        
+        # Load cluster assignments
+        cluster_assignments = None
+        if cluster_star.exists():
+            try:
+                import starfile
+                cluster_data = starfile.read(cluster_star)
+                if isinstance(cluster_data, dict):
+                    for v in cluster_data.values():
+                        if isinstance(v, pd.DataFrame):
+                            cluster_assignments = v
+                            break
+                elif isinstance(cluster_data, pd.DataFrame):
+                    cluster_assignments = cluster_data
+            except Exception:
+                cluster_assignments = None
+        
+        if cluster_assignments is None and cluster_csv.exists():
+            try:
+                cluster_assignments = pd.read_csv(cluster_csv)
+            except Exception:
+                cluster_assignments = None
+        
+        # Filter cluster assignments to match the filtered AuNPs
+        if cluster_assignments is not None and not cluster_assignments.empty:
+            # Match AuNPs by coordinates to get their cluster assignments
+            if 'faCoordinateX' in aunp_clusters.columns and 'faCoordinateX' in cluster_assignments.columns:
+                # Create coordinate-based matching
+                from scipy.spatial.distance import cdist
+                coords_viz = aunp_clusters[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values
+                coords_cluster = cluster_assignments[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values
+                
+                # Find closest matches
+                distances = cdist(coords_viz, coords_cluster)
+                closest_indices = np.argmin(distances, axis=1)
+                
+                # Only keep matches that are very close (within 1 pixel)
+                close_matches = distances[np.arange(len(closest_indices)), closest_indices] < 1.0
+                
+                if np.any(close_matches):
+                    # Add cluster assignments to the filtered AuNPs
+                    aunp_clusters = aunp_clusters.copy()
+                    aunp_clusters['aunp_cluster'] = -1  # Default to noise
+                    aunp_clusters.loc[close_matches, 'aunp_cluster'] = cluster_assignments.iloc[closest_indices[close_matches]]['aunp_cluster'].values
+                    print(f"Matched {np.sum(close_matches)} AuNPs with cluster assignments")
+                else:
+                    print("Warning: Could not match filtered AuNPs with cluster assignments")
+                    aunp_clusters['aunp_cluster'] = -1
+            else:
+                print("Warning: Coordinate columns not found for cluster matching")
+                aunp_clusters['aunp_cluster'] = -1
+        else:
+            print("Warning: No cluster assignments found")
+            aunp_clusters['aunp_cluster'] = -1
+        
         # Assign colors to clusters
         import matplotlib.colors as mcolors
         import matplotlib.cm as cm
@@ -581,15 +801,37 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
         unique_clusters = np.unique(clusters)
         n_clusters = len(unique_clusters[unique_clusters != -1])
         
-        # Use a colormap that can handle more clusters and ensure distinct colors
+        # Use scientific publication colors as base, extended to 20 options
+        # Note: Gray is excluded since noise points are always gray
+        scientific_colors = [
+            '#1f77b4',  # Blue
+            '#ff7f0e',  # Orange
+            '#2ca02c',  # Green
+            '#d62728',  # Red
+            '#9467bd',  # Purple
+            '#8c564b',  # Brown
+            '#e377c2',  # Pink
+            '#bcbd22',  # Olive
+            '#17becf',  # Cyan
+            '#ff1493',  # Deep Pink
+            '#aec7e8',  # Light Blue
+            '#ffbb78',  # Light Orange
+            '#98df8a',  # Light Green
+            '#ff9896',  # Light Red
+            '#c5b0d5',  # Light Purple
+            '#c49c94',  # Light Brown
+            '#f7b6d3',  # Light Pink
+            '#dbdb8d',  # Light Olive
+            '#9edae5',  # Light Cyan
+            '#ffa500',  # Orange (alternative)
+        ]
+        
         if n_clusters <= 20:
-            cmap = cm.get_cmap('tab20', n_clusters)
+            # Use the scientific colors directly
+            cmap = mcolors.ListedColormap(scientific_colors[:n_clusters])
         else:
-            # For more than 20 clusters, use a different approach
-            # Create a custom colormap that cycles through distinct colors
-            import matplotlib.colors as mcolors
-            base_colors = plt.cm.tab20(np.linspace(0, 1, 20))
-            # Add more distinct colors by mixing and varying saturation
+            # For more than 20 clusters, extend the scientific colors
+            base_colors = np.array([mcolors.to_rgba(color) for color in scientific_colors])
             additional_colors = []
             for i in range(n_clusters - 20):
                 # Create variations of existing colors
@@ -605,12 +847,14 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
             all_colors = np.vstack([base_colors, additional_colors])
             cmap = mcolors.ListedColormap(all_colors[:n_clusters])
         
-        cluster_color_map = {c: cmap(i) for i, c in enumerate(unique_clusters) if c != -1}
+        # Create mapping from cluster ID to color index
+        valid_clusters = unique_clusters[unique_clusters != -1]
+        cluster_color_map = {c: cmap(i) for i, c in enumerate(valid_clusters)}
         cluster_color_map[-1] = (0.5, 0.5, 0.5, 1.0)  # grey for noise
         colors = [cluster_color_map.get(c, (0.5, 0.5, 0.5, 1.0)) for c in clusters]
         # 1. Overlay all AuNPs on the combined visualization, colored by cluster
         fig, ax = plt.subplots(figsize=(12, 12))
-        ax.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax)
+        ax.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax, origin='lower')
         # Plot all AuNPs
         ax.scatter(aunp_clusters['faCoordinateX'], aunp_clusters['faCoordinateY'],
                    c=colors, s=40, edgecolor='k', linewidth=0.5, alpha=0.9, label='AuNPs (clustered)')
@@ -625,13 +869,20 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
         ax.legend(handles=legend_elements, loc='best')
         output_dir_viz = Path('results/visualizations/aunps_and_vesicles')
         output_dir_viz.mkdir(parents=True, exist_ok=True)
-        out_combined = output_dir_viz / f"{tomo_name}_combined_aunpclusters.png"
+        out_combined = output_dir_viz / f"{tomo_name}_combined_aunpclusters_{suffix}.png"
         if out_combined.exists() and not rerun:
             print(f"Skipping {out_combined}, already exists.")
         else:
             plt.savefig(out_combined, dpi=300, bbox_inches='tight')
-            plt.close()
             print(f"Saved combined AuNP cluster overlay: {out_combined}")
+            
+            # Also save without suffix for PDF compatibility (only for the first active zone)
+            if suffix == "az0" or suffix == "middle":
+                out_combined_pdf = output_dir_viz / f"{tomo_name}_combined_aunpclusters.png"
+                plt.savefig(out_combined_pdf, dpi=300, bbox_inches='tight')
+                print(f"Saved combined AuNP cluster overlay for PDF: {out_combined_pdf}")
+            
+            plt.close()
         # 2. Save a separate image showing all AuNPs colored by cluster, best 2D projection
         coords = np.stack([aunp_clusters['faCoordinateX'],
                           aunp_clusters['faCoordinateY'],
@@ -648,21 +899,28 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
         ax.set_ylabel(['X', 'Y', 'Z'][best_proj[1]])
         ax.set_title(f"{tomo_name} - AuNP Clusters (Best 2D Projection)")
         ax.legend(handles=legend_elements, loc='best')
-        out_clusters = output_dir_viz / f"{tomo_name}_aunpclusters.png"
+        out_clusters = output_dir_viz / f"{tomo_name}_aunpclusters_{suffix}.png"
         if out_clusters.exists() and not rerun:
             print(f"Skipping {out_clusters}, already exists.")
         else:
             plt.savefig(out_clusters, dpi=300, bbox_inches='tight')
-            plt.close()
             print(f"Saved AuNP cluster summary image: {out_clusters}")
+            
+            # Also save without suffix for PDF compatibility (only for the first active zone)
+            if suffix == "az0" or suffix == "middle":
+                out_clusters_pdf = output_dir_viz / f"{tomo_name}_aunpclusters.png"
+                plt.savefig(out_clusters_pdf, dpi=300, bbox_inches='tight')
+                print(f"Saved AuNP cluster summary image for PDF: {out_clusters_pdf}")
+            
+            plt.close()
         # Save also to the tomogram's own visualization directory
         tomo_viz_dir = Path(tomo_path) / "best_alignment" / "STT_results" / "visualizations"
         tomo_viz_dir.mkdir(parents=True, exist_ok=True)
-        out_combined_tomo = tomo_viz_dir / f"{tomo_name}_combined_aunpclusters.png"
-        out_clusters_tomo = tomo_viz_dir / f"{tomo_name}_aunpclusters.png"
+        out_combined_tomo = tomo_viz_dir / f"{tomo_name}_combined_aunpclusters_{suffix}.png"
+        out_clusters_tomo = tomo_viz_dir / f"{tomo_name}_aunpclusters_{suffix}.png"
         # Save the same figures to the tomogram's visualization directory
         plt.figure(figsize=(12, 12))
-        plt.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax)
+        plt.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax, origin='lower')
         plt.scatter(aunp_clusters['faCoordinateX'], aunp_clusters['faCoordinateY'],
                     c=colors, s=40, edgecolor='k', linewidth=0.5, alpha=0.9, label='AuNPs (clustered)')
         plt.title(f"{tomo_name} - Combined Overlay with AuNP Clusters")

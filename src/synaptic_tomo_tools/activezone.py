@@ -4,83 +4,9 @@ from pathlib import Path
 from typing import Dict, Any, List, Tuple
 import numpy as np
 from scipy.spatial.distance import cdist
-from scipy.spatial import ConvexHull
 from scipy.spatial import KDTree
 
 
-def calculate_membrane_volume(coordinates: np.ndarray) -> float:
-    """
-    Calculate volume of membrane segmentation using convex hull.
-    
-    Args:
-        coordinates: Nx3 array of (x, y, z) coordinates in nm
-        
-    Returns:
-        Volume in µm³
-    """
-    if len(coordinates) < 4:
-        return 0.0  # Need at least 4 points for 3D volume
-    
-    try:
-        # Calculate convex hull volume (in nm³)
-        hull = ConvexHull(coordinates)
-        volume_nm3 = hull.volume
-        
-        # Convert to µm³ (1 µm³ = 10^9 nm³)
-        volume_um3 = volume_nm3 / 1e9
-        
-        return volume_um3
-    except Exception as e:
-        print(f"Error calculating volume: {e}")
-        return 0.0
-
-
-def save_membrane_volumes(membranes: Dict[str, List[np.ndarray]], tomogram_path):
-    """
-    Calculate and save volumes for each membrane segmentation.
-    
-    Args:
-        membranes: Dictionary containing membrane coordinate arrays
-        tomogram_path: Path to tomogram directory (str or Path)
-    """
-    tomogram_path = Path(tomogram_path)
-    stt_results_dir = tomogram_path / "best_alignment" / "STT_results"
-    
-    # Create volumes directory
-    volumes_dir = stt_results_dir / "volumes"
-    volumes_dir.mkdir(parents=True, exist_ok=True)
-    
-    volumes_data = {}
-    
-    # Calculate presynaptic membrane volumes
-    for i, coords in enumerate(membranes['presynaptic']):
-        volume = calculate_membrane_volume(coords)
-        membrane_name = f"presynaptic_membrane_{i+1}"
-        volumes_data[membrane_name] = {
-            'volume_um3': volume,
-            'point_count': len(coords),
-            'coordinates_file': f"presynapticmembranes_{i+1}.txt"
-        }
-        print(f"Presynaptic membrane {i+1} volume: {volume:.6f} µm³ ({len(coords)} points)")
-    
-    # Calculate postsynaptic membrane volumes
-    for i, coords in enumerate(membranes['postsynaptic']):
-        volume = calculate_membrane_volume(coords)
-        membrane_name = f"postsynaptic_membrane_{i+1}"
-        volumes_data[membrane_name] = {
-            'volume_um3': volume,
-            'point_count': len(coords),
-            'coordinates_file': f"postsynapticmembranes_{i+1}.txt"
-        }
-        print(f"Postsynaptic membrane {i+1} volume: {volume:.6f} µm³ ({len(coords)} points)")
-    
-    # Save volumes to JSON file
-    import json
-    volumes_file = volumes_dir / "membrane_volumes.json"
-    with open(volumes_file, 'w') as f:
-        json.dump(volumes_data, f, indent=2, default=str)
-    
-    return volumes_data
 
 
 def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]], tomogram_path):
@@ -122,16 +48,8 @@ def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarra
             print(f"Presynaptic membrane {i+1} volume: {volume_um3:.6f} µm³ ({len(mesh_data['vertices'])} vertices, {len(mesh_data['faces'])} faces)")
         except Exception as e:
             print(f"Error calculating volume for presynaptic membrane {i+1}: {e}")
-            # Fallback to convex hull method
-            volume = calculate_membrane_volume(mesh_data['vertices'])
-            membrane_name = f"presynaptic_membrane_{i+1}"
-            volumes_data[membrane_name] = {
-                'volume_um3': volume,
-                'vertex_count': len(mesh_data['vertices']),
-                'face_count': len(mesh_data['faces']),
-                'source': 'convex_hull_fallback'
-            }
-            print(f"Presynaptic membrane {i+1} volume (fallback): {volume:.6f} µm³")
+            # Skip this membrane if mesh calculation fails
+            continue
     
     # Calculate postsynaptic membrane volumes from meshes
     for i, mesh_data in enumerate(membranes['postsynaptic']):
@@ -153,16 +71,8 @@ def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarra
             print(f"Postsynaptic membrane {i+1} volume: {volume_um3:.6f} µm³ ({len(mesh_data['vertices'])} vertices, {len(mesh_data['faces'])} faces)")
         except Exception as e:
             print(f"Error calculating volume for postsynaptic membrane {i+1}: {e}")
-            # Fallback to convex hull method
-            volume = calculate_membrane_volume(mesh_data['vertices'])
-            membrane_name = f"postsynaptic_membrane_{i+1}"
-            volumes_data[membrane_name] = {
-                'volume_um3': volume,
-                'vertex_count': len(mesh_data['vertices']),
-                'face_count': len(mesh_data['faces']),
-                'source': 'convex_hull_fallback'
-            }
-            print(f"Postsynaptic membrane {i+1} volume (fallback): {volume:.6f} µm³")
+            # Skip this membrane if mesh calculation fails
+            continue
     
     # Save volumes to JSON file
     import json
@@ -577,42 +487,8 @@ def define_active_zone(tomogram_path) -> Dict[str, Any]:
                 active_zone_areas.append(zone_data['active_presynaptic_area'])
                 print(f"Active zone area {zone_name}: {zone_data['active_presynaptic_area']:.6f} µm²")
             else:
-                # Fallback to convex hull calculation if mesh area not available
-                presynaptic_points = zone_data['active_presynaptic_points']
-                
-                if len(presynaptic_points) >= 4:  # Need at least 4 points for 3D convex hull
-                    try:
-                        # Calculate 3D convex hull surface area of presynaptic points
-                        hull = ConvexHull(presynaptic_points)
-                        surface_area_nm2 = hull.area  # Surface area in nm²
-                        
-                        # Divide by 2 to estimate presynaptic area
-                        presynaptic_area_nm2 = surface_area_nm2 / 2.0
-                        
-                        # Convert to µm² (1 µm² = 10^6 nm²)
-                        presynaptic_area_um2 = presynaptic_area_nm2 / 1e6
-                        
-                        active_zone_areas.append(presynaptic_area_um2)
-                        print(f"Active zone area {zone_name} (convex hull): {presynaptic_area_um2:.6f} µm²")
-                        
-                    except Exception as e:
-                        print(f"Error calculating convex hull for {zone_name}: {e}")
-                        # Fallback to 2D convex hull area
-                        try:
-                            coords_2d = presynaptic_points[:, :2]  # Use only X and Y
-                            hull_2d = ConvexHull(coords_2d)
-                            area_nm2 = hull_2d.area
-                            area_um2 = area_nm2 / 1e6
-                            active_zone_areas.append(area_um2)
-                            print(f"Active zone {zone_name} (2D fallback): {area_um2:.6f} µm²")
-                        except Exception as e2:
-                            print(f"Error with 2D fallback for {zone_name}: {e2}")
-                            # Final fallback to bounding box
-                            bbox_size = np.max(presynaptic_points[:, :2], axis=0) - np.min(presynaptic_points[:, :2], axis=0)
-                            area_nm2 = bbox_size[0] * bbox_size[1]
-                            area_um2 = area_nm2 / 1e6
-                            active_zone_areas.append(area_um2)
-                            print(f"Active zone {zone_name} (bbox fallback): {area_um2:.6f} µm²")
+                # Skip active zones without mesh area data
+                print(f"Warning: No mesh area data available for {zone_name}, skipping area calculation")
         
         avg_active_zone_area = np.mean(active_zone_areas) if active_zone_areas else 0.0
         

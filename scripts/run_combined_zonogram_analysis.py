@@ -650,14 +650,14 @@ def main():
                     plt.close(fig)
                     print(f"  Saved {png_filename} to both locations")
                     
-                    # Extract active zone ID from zone_name (e.g., "active_zone_pre1_post1" -> 0, "active_zone_pre2_post1" -> 1)
+                    # Extract active zone ID from zone_name (e.g., "active_zone_pre1_post1" -> 1, "active_zone_pre2_post1" -> 1)
                     # For now, we'll use a simple mapping since the zone names don't contain numeric IDs
                     if 'pre1_post1' in zone_name:
-                        active_zone_id = 0
+                        active_zone_id = 1
                     elif 'pre2_post1' in zone_name:
-                        active_zone_id = 0  # Both zones map to active_zone 0 in the data
+                        active_zone_id = 1  # Both zones map to active_zone 1 in the data
                     else:
-                        active_zone_id = 0  # Default fallback
+                        active_zone_id = 1  # Default fallback
                     
                     # Generate AuNP visualization
                     selected_aunps = select_aunps_findingampa_style(zonogram_findingampa, None, tomogram_path, active_zone_id, original_zone_data)
@@ -727,8 +727,83 @@ def main():
                         cluster_filename = f"{tomogram_name}_active_zonogram_{zone_name}_selected_aunps_by_cluster.png"
                         fig.savefig(results_activezonograms_dir / cluster_filename)
                         fig.savefig(tomogram_activezonograms_dir / cluster_filename)
-                        plt.close(fig)
                         print(f"  Saved {cluster_filename} to both locations")
+                        
+                        # Add fusion points to the same figure
+                        try:
+                            # Load fusion points using the same method as run_zonogram.py
+                            from synaptic_tomo_tools.aunps import compute_fusion_points
+                            
+                            # Try to load cached fusion points first
+                            fusion_points_cache_path = Path(tomogram_path) / "best_alignment" / "STT_results" / "vesicles" / "fusion_points.npy"
+                            fusion_points = None
+                            
+                            if fusion_points_cache_path.exists():
+                                try:
+                                    fusion_points = np.load(fusion_points_cache_path)
+                                    print(f"  Loaded {len(fusion_points)} cached fusion points")
+                                except Exception as e:
+                                    print(f"  Could not load cached fusion points: {e}")
+                            
+                            # Compute fusion points if not cached
+                            if fusion_points is None:
+                                print(f"  Computing fusion points for {tomogram_name}...")
+                                fusion_points = compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0)
+                                print(f"  Computed {len(fusion_points)} fusion points")
+                                
+                                # Cache the fusion points for future use
+                                if len(fusion_points) > 0:
+                                    try:
+                                        fusion_points_cache_path.parent.mkdir(parents=True, exist_ok=True)
+                                        np.save(fusion_points_cache_path, fusion_points)
+                                        print(f"  Cached fusion points to {fusion_points_cache_path}")
+                                    except Exception as e:
+                                        print(f"  Could not cache fusion points: {e}")
+                            
+                            if len(fusion_points) > 0:
+                                # Transform fusion points to the same coordinate system as AuNPs
+                                center = original_zone_data['center']
+                                coordinate_system = original_zone_data['transformation_matrix'][:3, :3]
+                                
+                                fusion_points_transformed = (fusion_points - center) @ coordinate_system.T
+                                fusion_points_transformed += np.floor(np.array(zone_data['transformed_tomogram'].shape)[[2,1,0]]/2)
+                                
+                                # Filter points within the volume
+                                valid_mask = np.all(fusion_points_transformed > 0, axis=1) & np.all(fusion_points_transformed < np.array(zone_data['transformed_tomogram'].shape)[[2,1,0]], axis=1)
+                                fusion_points_transformed = fusion_points_transformed[valid_mask]
+                                
+                                # Plot fusion points as orange stars on all three views
+                                for fp in fusion_points_transformed:
+                                    axxy.scatter(fp[0], fp[1], color='orange', s=100, alpha=0.9, marker='*', 
+                                               edgecolors='darkorange', linewidth=0.5)
+                                    axxz.scatter(fp[2], fp[1], color='orange', s=100, alpha=0.9, marker='*', 
+                                               edgecolors='darkorange', linewidth=0.5)
+                                    axyz.scatter(fp[0], fp[2], color='orange', s=100, alpha=0.9, marker='*', 
+                                               edgecolors='darkorange', linewidth=0.5)
+                                
+                                # Add fusion points to legend
+                                fusion_handle = plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='orange', 
+                                                         markeredgecolor='darkorange', markersize=10, linewidth=0.5)
+                                if legend_handles:
+                                    legend_handles.append(fusion_handle)
+                                    legend_labels.append('Fusion Sites')
+                                    # Update the legend
+                                    fig.legend(legend_handles, legend_labels, loc='lower right', bbox_to_anchor=(1.0, 0.0), 
+                                              fontsize=8, frameon=True, fancybox=True, shadow=True)
+                                else:
+                                    fig.legend([fusion_handle], ['Fusion Sites'], loc='lower right', bbox_to_anchor=(1.0, 0.0), 
+                                              fontsize=8, frameon=True, fancybox=True, shadow=True)
+                                
+                                print(f"  Added {len(fusion_points)} fusion points to zonogram visualization")
+                        except Exception as e:
+                            print(f"  Warning: Could not add fusion points: {e}")
+                        
+                        # Save the version with fusion points
+                        cluster_fusion_filename = f"{tomogram_name}_active_zonogram_{zone_name}_selected_aunps_by_cluster_with_fusion_points.png"
+                        fig.savefig(results_activezonograms_dir / cluster_fusion_filename)
+                        fig.savefig(tomogram_activezonograms_dir / cluster_fusion_filename)
+                        plt.close(fig)
+                        print(f"  Saved {cluster_fusion_filename} to both locations")
         else:
             print("No active zonograms found")
             

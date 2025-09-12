@@ -28,3 +28,8 @@ results/summary_pdfs/*.pdf
 **/*.glb
 # Ignore all scripts/utilities (standalone utilities)
 scripts/utilities/
+
+# Ignore everything in data folder except CSV files
+data/
+!data/*.csv
+!data/**/*.csv
