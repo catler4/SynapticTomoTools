@@ -11,7 +11,8 @@ from scipy.spatial import KDTree
 
 def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]], tomogram_path):
     """
-    Calculate and save volumes for each membrane segmentation from GLB mesh data.
+    Calculate and save volumes for each membrane segmentation from GLB mesh data using convex hull.
+    This method is more robust for non-watertight meshes that may extend beyond tomogram boundaries.
     
     Args:
         membranes: Dictionary containing membrane mesh data from GLB
@@ -28,14 +29,15 @@ def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarra
     
     volumes_data = {}
     
-    # Calculate presynaptic membrane volumes from meshes
+    # Calculate presynaptic membrane volumes from meshes using convex hull
     for i, mesh_data in enumerate(membranes['presynaptic']):
         try:
             # Create trimesh object from vertices and faces
             mesh = trimesh.Trimesh(vertices=mesh_data['vertices'], faces=mesh_data['faces'])
             
-            # Calculate volume (trimesh gives volume in nm³, convert to µm³)
-            volume_um3 = mesh.volume / 1e9  # Convert nm³ to µm³
+            # Calculate convex hull volume (more robust for non-watertight meshes)
+            convex_hull = mesh.convex_hull
+            volume_um3 = convex_hull.volume / 1e9  # Convert nm³ to µm³
             
             membrane_name = f"presynaptic_membrane_{i+1}"
             volumes_data[membrane_name] = {
@@ -43,22 +45,24 @@ def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarra
                 'vertex_count': len(mesh_data['vertices']),
                 'face_count': len(mesh_data['faces']),
                 'surface_area_um2': mesh.area / 1e6,  # Convert nm² to µm²
-                'source': 'glb_mesh'
+                'convex_hull_volume_um3': volume_um3,
+                'source': 'convex_hull'
             }
-            print(f"Presynaptic membrane {i+1} volume: {volume_um3:.6f} µm³ ({len(mesh_data['vertices'])} vertices, {len(mesh_data['faces'])} faces)")
+            print(f"Presynaptic membrane {i+1} volume (convex hull): {volume_um3:.6f} µm³ ({len(mesh_data['vertices'])} vertices, {len(mesh_data['faces'])} faces)")
         except Exception as e:
             print(f"Error calculating volume for presynaptic membrane {i+1}: {e}")
             # Skip this membrane if mesh calculation fails
             continue
     
-    # Calculate postsynaptic membrane volumes from meshes
+    # Calculate postsynaptic membrane volumes from meshes using convex hull
     for i, mesh_data in enumerate(membranes['postsynaptic']):
         try:
             # Create trimesh object from vertices and faces
             mesh = trimesh.Trimesh(vertices=mesh_data['vertices'], faces=mesh_data['faces'])
             
-            # Calculate volume (trimesh gives volume in nm³, convert to µm³)
-            volume_um3 = mesh.volume / 1e9  # Convert nm³ to µm³
+            # Calculate convex hull volume (more robust for non-watertight meshes)
+            convex_hull = mesh.convex_hull
+            volume_um3 = convex_hull.volume / 1e9  # Convert nm³ to µm³
             
             membrane_name = f"postsynaptic_membrane_{i+1}"
             volumes_data[membrane_name] = {
@@ -66,9 +70,10 @@ def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarra
                 'vertex_count': len(mesh_data['vertices']),
                 'face_count': len(mesh_data['faces']),
                 'surface_area_um2': mesh.area / 1e6,  # Convert nm² to µm²
-                'source': 'glb_mesh'
+                'convex_hull_volume_um3': volume_um3,
+                'source': 'convex_hull'
             }
-            print(f"Postsynaptic membrane {i+1} volume: {volume_um3:.6f} µm³ ({len(mesh_data['vertices'])} vertices, {len(mesh_data['faces'])} faces)")
+            print(f"Postsynaptic membrane {i+1} volume (convex hull): {volume_um3:.6f} µm³ ({len(mesh_data['vertices'])} vertices, {len(mesh_data['faces'])} faces)")
         except Exception as e:
             print(f"Error calculating volume for postsynaptic membrane {i+1}: {e}")
             # Skip this membrane if mesh calculation fails
