@@ -68,30 +68,43 @@ def load_postsynaptic_coordinates(tomo_path):
     if not postsynaptic_glb_path.exists():
         raise FileNotFoundError(f"Postsynaptic membrane GLB file not found: {postsynaptic_glb_path}")
     
+    print(f"    Loading GLB file: {postsynaptic_glb_path.name}")
+    
     # Load the GLB file using trimesh
     loaded = trimesh.load(str(postsynaptic_glb_path))
+    print(f"    📦 GLB file loaded successfully")
     
     # Handle both Mesh and Scene objects
     if hasattr(loaded, 'vertices'):
         # It's a Mesh object
+        print(f"    🔍 Processing single mesh...")
         mesh = loaded
         vertices = mesh.vertices
+        print(f"    📊 Found {len(vertices)} vertices in single mesh")
     else:
         # It's a Scene object - combine all meshes
+        print(f"    🔍 Processing scene with {len(loaded.geometry)} meshes...")
         vertices_list = []
-        for mesh in loaded.geometry.values():
+        for i, (name, mesh) in enumerate(loaded.geometry.items(), 1):
             if hasattr(mesh, 'vertices'):
                 vertices_list.append(mesh.vertices)
+                print(f"      Mesh {i}/{len(loaded.geometry)}: {name} ({len(mesh.vertices)} vertices)")
+            else:
+                print(f"      ⚠️  Mesh {i}/{len(loaded.geometry)}: {name} (no vertices)")
         
         if not vertices_list:
             raise ValueError("No valid meshes found in the GLB file")
         
         # Combine all vertices
+        print(f"    🔗 Combining {len(vertices_list)} meshes...")
         vertices = np.vstack(vertices_list)
+        print(f"    📊 Combined total: {len(vertices)} vertices")
     
     # Get vertex coordinates and transform them
     # The transformation from findingampa: [0,2,1] * [10,-10,10]
+    print(f"    🔄 Applying coordinate transformation...")
     vertices_transformed = vertices[:, [0, 2, 1]] * np.array([10, -10, 10])
+    print(f"    ✅ Transformation complete")
     
     return vertices_transformed
 
@@ -220,6 +233,12 @@ def estimate_ampa_poses(
         rot, _ = R.align_vectors([[-0.5, 0, 1], [0.5, 0, 1]], [vector_aunp1, vector_aunp2])
         eulers = rot.as_euler("ZYZ", degrees=True)
         
+        # Calculate detailed distance measurements
+        aunp_separation = np.linalg.norm(aunp_coordinates[int(pair[0])] - aunp_coordinates[int(pair[1])])
+        ampa_membrane_distance = np.linalg.norm(vector_center)
+        aunp1_membrane_distance = np.linalg.norm(vector_aunp1)
+        aunp2_membrane_distance = np.linalg.norm(vector_aunp2)
+        
         # Add to RELION results
         results_relion.append({
             "rlnTomoName": tomo_name,
@@ -229,8 +248,10 @@ def estimate_ampa_poses(
             "rlnAngleRot": eulers[0],
             "rlnAngleTilt": eulers[1],
             "rlnAnglePsi": eulers[2],
-            "faAuNPSeparation": np.linalg.norm(aunp_coordinates[int(pair[0])] - aunp_coordinates[int(pair[1])]),
-            "faAuNPMembraneDistance": np.linalg.norm(vector_center),
+            "faAuNPSeparation": aunp_separation,
+            "faAuNPMembraneDistance": ampa_membrane_distance,
+            "faAuNP1MembraneDistance": aunp1_membrane_distance,
+            "faAuNP2MembraneDistance": aunp2_membrane_distance,
         })
     
     # Save RELION star file
@@ -240,7 +261,7 @@ def estimate_ampa_poses(
     }, output_path / f"{output_filename}.star")
     print(f"Saved RELION star file of AMPA poses to {output_path / f'{output_filename}.star'}")
     
-    # Save AuNPs used in analysis
+    # Save AuNPs used in analysis with distance measurements
     aunps_used_data = []
     for i, result in enumerate(results_relion):
         # Get the pair indices for this AMPA pose
@@ -250,6 +271,12 @@ def estimate_ampa_poses(
             aunp1_idx = int(pair[0])
             aunp2_idx = int(pair[1])
             
+            # Get distance measurements from the result
+            aunp_separation = result['faAuNPSeparation']
+            ampa_membrane_distance = result['faAuNPMembraneDistance']
+            aunp1_membrane_distance = result['faAuNP1MembraneDistance']
+            aunp2_membrane_distance = result['faAuNP2MembraneDistance']
+            
             # Add AuNP 1
             aunps_used_data.append({
                 'rlnTomoName': tomo_name,
@@ -258,7 +285,10 @@ def estimate_ampa_poses(
                 'rlnCoordinateZ': aunp_coordinates[aunp1_idx][2],
                 'faAMPA_ID': i + 1,
                 'faAuNP_Type': 'AuNP_1',
-                'faAuNP_Pair_Index': pair_idx + 1
+                'faAuNP_Pair_Index': pair_idx + 1,
+                'faAuNPSeparation': aunp_separation,
+                'faAuNPMembraneDistance': aunp1_membrane_distance,
+                'faAMPA_MembraneDistance': ampa_membrane_distance
             })
             
             # Add AuNP 2
@@ -269,7 +299,10 @@ def estimate_ampa_poses(
                 'rlnCoordinateZ': aunp_coordinates[aunp2_idx][2],
                 'faAMPA_ID': i + 1,
                 'faAuNP_Type': 'AuNP_2',
-                'faAuNP_Pair_Index': pair_idx + 1
+                'faAuNP_Pair_Index': pair_idx + 1,
+                'faAuNPSeparation': aunp_separation,
+                'faAuNPMembraneDistance': aunp2_membrane_distance,
+                'faAMPA_MembraneDistance': ampa_membrane_distance
             })
     
     # Save AuNPs star file (only those used for AMPA poses)
@@ -277,8 +310,36 @@ def estimate_ampa_poses(
         starfile.write({
             'particles': pd.DataFrame(aunps_used_data),
             'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
-        }, output_path / f"{output_filename}_aunps.star")
-        print(f"Saved AuNPs used in AMPA poses analysis to {output_path / f'{output_filename}_aunps.star'}")
+        }, output_path / f"{output_filename}_paired_aunps.star")
+        print(f"Saved AuNPs used in AMPA poses analysis to {output_path / f'{output_filename}_paired_aunps.star'}")
+    
+    # Save unpaired AuNPs (AuNPs that were not used in any AMPA poses)
+    unpaired_aunps_data = []
+    used_aunp_indices = set()
+    
+    # Collect indices of AuNPs that were used in pairs
+    for pair in pairs:
+        used_aunp_indices.add(int(pair[0]))
+        used_aunp_indices.add(int(pair[1]))
+    
+    # Find AuNPs that were not used in any pairs
+    for i, coord in enumerate(aunp_coordinates):
+        if i not in used_aunp_indices:
+            unpaired_aunps_data.append({
+                'rlnTomoName': tomo_name,
+                'rlnCoordinateX': coord[0],
+                'rlnCoordinateY': coord[1],
+                'rlnCoordinateZ': coord[2],
+                'faAuNP_ID': i + 1,
+                'faStatus': 'unpaired'
+            })
+    
+    if unpaired_aunps_data:
+        starfile.write({
+            'particles': pd.DataFrame(unpaired_aunps_data),
+            'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
+        }, output_path / f"{output_filename}_unpaired_aunps.star")
+        print(f"Saved {len(unpaired_aunps_data)} unpaired AuNPs to {output_path / f'{output_filename}_unpaired_aunps.star'}")
     
     # Save ALL AuNPs from chosen active zones
     all_aunps_data = []
@@ -311,7 +372,9 @@ def estimate_ampa_poses(
             'Tilt': result['rlnAngleTilt'],
             'Psi': result['rlnAnglePsi'],
             'AuNP_Separation_nm': result['faAuNPSeparation'],
-            'Membrane_Distance_nm': result['faAuNPMembraneDistance']
+            'AMPA_Membrane_Distance_nm': result['faAuNPMembraneDistance'],
+            'AuNP1_Membrane_Distance_nm': result['faAuNP1MembraneDistance'],
+            'AuNP2_Membrane_Distance_nm': result['faAuNP2MembraneDistance']
         })
     
     summary_df = pd.DataFrame(summary_data)
