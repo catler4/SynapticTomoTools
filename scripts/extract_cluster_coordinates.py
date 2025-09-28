@@ -71,9 +71,9 @@ def generate_selected_clusters_pdf(successful_clusters, output_path):
             
             # Find mini zonogram comparison files for this tomogram
             tomogram_path = clusters[0]['tomogram_path']
-            activezonograms_dir = tomogram_path / "best_alignment" / "STT_results" / "activezonograms"
+            active_zonograms_dir = tomogram_path / "best_alignment" / "STT_results" / "active_zonograms"
             
-            if not activezonograms_dir.exists():
+            if not active_zonograms_dir.exists():
                 story.append(Paragraph(f"Warning: No active zonogram directory found for {tomogram_name}", styles['Normal']))
                 story.append(Spacer(1, 10))
                 continue
@@ -83,7 +83,7 @@ def generate_selected_clusters_pdf(successful_clusters, output_path):
             for cluster_info in clusters:
                 cluster_number = cluster_info['cluster_number']
                 pattern = f"*_mini_zonogram_cluster_{cluster_number}_comparison.png"
-                matching_files = list(activezonograms_dir.glob(pattern))
+                matching_files = list(active_zonograms_dir.glob(pattern))
                 if matching_files:
                     selected_cluster_files.extend(matching_files)
             

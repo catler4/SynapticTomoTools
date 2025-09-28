@@ -15,8 +15,7 @@ import numpy as np
 # Add the src directory to the Python path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from synaptic_tomo_tools.ampa_poses import run_ampa_poses_analysis
-from synaptic_tomo_tools.ampa_poses_optimized import run_ampa_poses_analysis_optimized
+from synaptic_tomo_tools.ampa_poses import run_ampa_poses_analysis_optimized
 
 
 def compare_results(original_results, optimized_results, output_dir):
@@ -188,38 +187,41 @@ Examples:
         print(f"Output directory: {args.output_dir}")
         print()
         
-        # Run original method
+        # Run greedy method
         print("=" * 60)
-        print("RUNNING ORIGINAL METHOD")
+        print("RUNNING GREEDY METHOD")
         print("=" * 60)
-        original_results = run_ampa_poses_analysis(
+        greedy_results = run_ampa_poses_analysis_optimized(
             tomo_path=args.tomogram_path,
-            output_dir=Path(args.output_dir) / "original",
-            aunp_active_zones=args.aunp_active_zones,
-            inter_aunp_distance=inter_aunp_distance,
-            aunp_membrane_distance=aunp_membrane_distance
-        )
-        
-        print("\n" + "=" * 60)
-        print("RUNNING OPTIMIZED METHOD")
-        print("=" * 60)
-        optimized_results = run_ampa_poses_analysis_optimized(
-            tomo_path=args.tomogram_path,
-            output_dir=Path(args.output_dir) / "optimized",
+            output_dir=Path(args.output_dir) / "greedy",
             aunp_active_zones=args.aunp_active_zones,
             inter_aunp_distance=inter_aunp_distance,
             aunp_membrane_distance=aunp_membrane_distance,
-            ampa_steric_radius=args.steric_radius
+            ampa_steric_radius=args.steric_radius,
+            method="greedy"
+        )
+        
+        print("\n" + "=" * 60)
+        print("RUNNING ILP METHOD")
+        print("=" * 60)
+        ilp_results = run_ampa_poses_analysis_optimized(
+            tomo_path=args.tomogram_path,
+            output_dir=Path(args.output_dir) / "ilp",
+            aunp_active_zones=args.aunp_active_zones,
+            inter_aunp_distance=inter_aunp_distance,
+            aunp_membrane_distance=aunp_membrane_distance,
+            ampa_steric_radius=args.steric_radius,
+            method="ilp"
         )
         
         print("\n" + "=" * 60)
         print("COMPARISON RESULTS")
         print("=" * 60)
-        comparison_df = compare_results(original_results, optimized_results, args.output_dir)
+        comparison_df = compare_results(greedy_results, ilp_results, args.output_dir)
         
         # Additional analysis if both methods succeeded
-        if (original_results.get("status") == "success" and 
-            optimized_results.get("status") == "success"):
+        if (greedy_results.get("status") == "success" and 
+            ilp_results.get("status") == "success"):
             
             print("\n" + "=" * 60)
             print("DETAILED ANALYSIS")

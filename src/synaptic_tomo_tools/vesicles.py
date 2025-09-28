@@ -418,9 +418,9 @@ def import_presynaptic_membranes_and_active_zones(tomogram_path) -> Dict[str, Di
                     'active_zone_points': combined_active_zone_points,
                     'individual_active_zones': all_active_zone_points  # Keep individual zones for detailed analysis
                 }
-                print(f"Loaded {membrane_name}: {len(membrane_points)} membrane points, {len(combined_active_zone_points)} total active zone points from {len(active_zone_files)} active zone files")
+                # Loaded membrane with active zone points
             else:
-                print(f"Warning: No active zone files found for {membrane_name}")
+                # Warning: No active zone files found
                 # Use empty active zone if none found
                 membrane_active_zone_pairs[membrane_name] = {
                     'membrane_points': membrane_points,

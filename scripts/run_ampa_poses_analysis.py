@@ -13,7 +13,7 @@ from pathlib import Path
 # Add the src directory to the Python path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from synaptic_tomo_tools.ampa_poses import run_ampa_poses_analysis
+from synaptic_tomo_tools.ampa_poses import run_ampa_poses_analysis_optimized
 
 
 def main():
@@ -86,6 +86,13 @@ Examples:
         help="Specific active zone indices to analyze (default: all active zones)"
     )
     
+    parser.add_argument(
+        "--method",
+        choices=["greedy", "ilp"],
+        default="greedy",
+        help="Optimization method: 'greedy' for fast heuristic solution (saves to greedy/), 'ilp' for exact optimal solution using integer linear programming (saves to ilp/) (default: greedy)"
+    )
+    
     args = parser.parse_args()
     
     # Validate arguments only if cutoffs are enabled
@@ -116,6 +123,7 @@ Examples:
             print(f"Active zones: {args.aunp_active_zones}")
         else:
             print("Active zones: all")
+        print(f"Method: {args.method}")
         print()
         
         # Set distance parameters based on cutoff flags
@@ -129,12 +137,14 @@ Examples:
         else:
             aunp_membrane_distance = (args.membrane_min_distance, args.membrane_max_distance)
         
-        results = run_ampa_poses_analysis(
+        results = run_ampa_poses_analysis_optimized(
             tomo_path=args.tomogram_path,
             output_dir=args.output_dir,
             aunp_active_zones=args.aunp_active_zones,
             inter_aunp_distance=inter_aunp_distance,
-            aunp_membrane_distance=aunp_membrane_distance
+            aunp_membrane_distance=aunp_membrane_distance,
+            ampa_steric_radius=5.0,
+            method=args.method
         )
         
         if results["status"] == "success":

@@ -23,9 +23,9 @@ def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarra
     tomogram_path = Path(tomogram_path)
     stt_results_dir = tomogram_path / "best_alignment" / "STT_results"
     
-    # Create volumes directory
-    volumes_dir = stt_results_dir / "volumes"
-    volumes_dir.mkdir(parents=True, exist_ok=True)
+    # Create active_zones directory
+    active_zones_dir = stt_results_dir / "active_zones"
+    active_zones_dir.mkdir(parents=True, exist_ok=True)
     
     volumes_data = {}
     
@@ -48,7 +48,7 @@ def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarra
                 'convex_hull_volume_um3': volume_um3,
                 'source': 'convex_hull'
             }
-            print(f"Presynaptic membrane {i+1} volume (convex hull): {volume_um3:.6f} µm³ ({len(mesh_data['vertices'])} vertices, {len(mesh_data['faces'])} faces)")
+            # Presynaptic membrane volume calculated
         except Exception as e:
             print(f"Error calculating volume for presynaptic membrane {i+1}: {e}")
             # Skip this membrane if mesh calculation fails
@@ -73,7 +73,7 @@ def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarra
                 'convex_hull_volume_um3': volume_um3,
                 'source': 'convex_hull'
             }
-            print(f"Postsynaptic membrane {i+1} volume (convex hull): {volume_um3:.6f} µm³ ({len(mesh_data['vertices'])} vertices, {len(mesh_data['faces'])} faces)")
+            # Postsynaptic membrane volume calculated
         except Exception as e:
             print(f"Error calculating volume for postsynaptic membrane {i+1}: {e}")
             # Skip this membrane if mesh calculation fails
@@ -81,7 +81,7 @@ def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarra
     
     # Save volumes to JSON file
     import json
-    volumes_file = volumes_dir / "membrane_volumes.json"
+    volumes_file = active_zones_dir / "membrane_volumes.json"
     with open(volumes_file, 'w') as f:
         json.dump(volumes_data, f, indent=2, default=str)
     
@@ -99,7 +99,7 @@ def load_membrane_volumes(tomogram_path) -> Dict[str, Any]:
         Dictionary containing volume statistics with averages for pre and post
     """
     tomogram_path = Path(tomogram_path)
-    volumes_file = tomogram_path / "best_alignment" / "STT_results" / "volumes" / "membrane_volumes.json"
+    volumes_file = tomogram_path / "best_alignment" / "STT_results" / "active_zones" / "membrane_volumes.json"
     
     if not volumes_file.exists():
         print(f"Warning: Membrane volumes file not found: {volumes_file}")
@@ -312,7 +312,7 @@ def find_active_zones(membranes: Dict[str, List[np.ndarray]], distance_threshold
                     'active_post_count': len(active_post_indices)
                 }
                 
-                print(f"Found active zone: {zone_name} with {len(active_pre_indices)} presynaptic and {len(active_post_indices)} postsynaptic points")
+                # Found active zone with presynaptic and postsynaptic points
             else:
                 print(f"No active zone found between presynaptic {pre_idx+1} and postsynaptic {post_idx+1}")
     
@@ -426,7 +426,7 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
                     'active_post_count': len(active_post_indices)
                 }
                 #
-                print(f"Found active zone: {zone_name} with {len(active_pre_indices)} presynaptic and {len(active_post_indices)} postsynaptic points")
+                # Found active zone with presynaptic and postsynaptic points
             else:
                 print(f"No active zone found between presynaptic {pre_idx+1} and postsynaptic {post_idx+1}")
     return {
@@ -797,7 +797,7 @@ def define_active_zonogram(active_zones):
     Returns:
         Dictionary containing active zonogram results.
     """
-    print("Defining active zonogram")
+    # Defining active zonogram
     from torch_affine_utils.transforms_3d import T
     from torch_affine_utils.utils import homogenise_coordinates
     import torch
@@ -873,7 +873,7 @@ def extract_active_zonogram(active_zonograms, active_zones, tomo_path, tomo_type
     from torch_transform_image import affine_transform_image_3d
     from torch_affine_utils.transforms_3d import T
     
-    print("Rendering active zonogram")
+    # Rendering active zonogram
     
     if not active_zonograms or 'zonogram_data' not in active_zonograms:
         print("No active zonograms found for rendering")

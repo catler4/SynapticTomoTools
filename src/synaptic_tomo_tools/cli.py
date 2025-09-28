@@ -208,7 +208,7 @@ def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True, cal
             }
             results_manager.store_tomogram_results(tomogram_name, 'vesicles', error_results, overwrite=True, set_name=set_name)
 
-def generate_visualizations(tomo_paths, results_manager, rerun=False, print_ascii=True):
+def generate_visualizations(tomo_paths, results_manager, rerun=False, print_ascii=True, csv_path=None):
     """Generate visualization images for each tomogram after analysis is complete."""
     if print_ascii:
         print_synapse_ascii_art()
@@ -217,14 +217,11 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
         print("Skipping visualization generation (visualization module not available)")
         return
         
-    print("\n" + "="*80)
-    print("GENERATING VISUALIZATIONS")
-    print("="*80)
+    print("\nGenerating visualizations...")
     
     # Create combined visualization directory in results
     combined_viz_dir = Path(results_manager.results_dir) / 'visualizations' / 'aunps_and_vesicles'
     combined_viz_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Combined visualizations will be saved to: {combined_viz_dir}")
     
     for i, (tomo, set_name, aunp_active_zones) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
@@ -234,18 +231,27 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
         viz_output_dir.mkdir(parents=True, exist_ok=True)
 
         # Check if all expected visualization files exist and skip_completed is True
-        expected_files = [
+        # Basic visualization files
+        basic_files = [
             viz_output_dir / f"{tomogram_name}_vesicles_active_zones.png",
             viz_output_dir / f"{tomogram_name}_vesicles_aunps.png",
             viz_output_dir / f"{tomogram_name}_combined.png",
             viz_output_dir / f"{tomogram_name}_vesicles_signal.png",
         ]
-        if all(f.exists() for f in expected_files) and not rerun:
+        
+        # Active zonogram files (check for at least one of each type)
+        active_zonogram_files = list(viz_output_dir.glob(f"{tomogram_name}_active_zonogram_*.png"))
+        mini_zonogram_files = list(viz_output_dir.glob(f"{tomogram_name}_mini_zonogram_*.png"))
+        
+        # Check if we have the minimum required files
+        basic_files_exist = all(f.exists() for f in basic_files)
+        zonogram_files_exist = len(active_zonogram_files) > 0 and len(mini_zonogram_files) > 0
+        
+        if basic_files_exist and zonogram_files_exist and not rerun:
             print(f"Skipping visualization for {tomogram_name} (already completed)")
             continue
         
-        print(f"\nGenerating visualizations for {tomogram_name}")
-        print(f"Individual output directory: {viz_output_dir}")
+        print(f"[{i+1}/{len(tomo_paths)}] Processing {tomogram_name}...", end=" ", flush=True)
         
         try:
             # Parse aunp_active_zones string to list of ints or None
@@ -253,7 +259,14 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
             if az_str.strip() == "" or az_str.lower() == "nan":
                 az_indices = None
             else:
-                az_indices = [int(x) for x in az_str.split(",") if x.strip().isdigit()]
+                # Handle both integer strings and float strings (e.g., "0.0" -> 0)
+                az_indices = []
+                for x in az_str.split(","):
+                    x = x.strip()
+                    if x.isdigit():
+                        az_indices.append(int(x))
+                    elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
+                        az_indices.append(int(float(x)))
             # Generate the three visualization types in the tomogram's directory
             plot_tomogram_overlays(tomo, viz_output_dir, az_indices, rerun=rerun)
             
@@ -262,11 +275,11 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
                 combined_file = combined_viz_dir / viz_file.name
                 import shutil
                 shutil.copy2(viz_file, combined_file)
-                print(f"  Copied {viz_file.name} to combined directory")
             
-            print(f"✓ Successfully generated visualizations for {tomogram_name}")
+            print("✅")
         except Exception as e:
-            print(f"✗ Failed to generate visualizations for {tomogram_name}: {e}")
+            print("❌")
+            print(f"    Error: {e}")
             continue
     
     print(f"\nAll visualizations saved to:")
@@ -274,11 +287,69 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
     print(f"  Combined: {combined_viz_dir}")
 
     # Generate summary figures for all sets/metrics
-    print("\nGenerating summary figures by set...")
-    generate_summary_figures()
-    print("Summary figures generated.")
+    summary_dir = Path("results/summary_pdfs")
+    summary_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Check if summary figures already exist
+    expected_summary_files = [
+        "aunp_aunp_count_by_set.png",
+        "aunp_nearest_neighbor_distance_mean_by_set.png", 
+        "aunp_cluster_count_by_set.png",
+        "aunp_cluster_cluster_area_by_set.png",
+        "aunp_cluster_cluster_density_by_set.png",
+        "aunp_cluster_n_aunps_by_set.png",
+        "vesicle_vesicle_detection_vesicle_count_by_set.png",
+        "vesicle_vesicle_detection_nearby_vesicle_count_by_set.png",
+        "vesicle_vesicle_detection_average_vesicle_diameter_by_set.png",
+        "activezone_active_zone_count_by_set.png",
+        "activezone_avg_active_zone_area_by_set.png",
+        "activezone_average_cleft_width_by_set.png"
+    ]
+    
+    summary_files_exist = all((summary_dir / f).exists() for f in expected_summary_files)
+    
+    if summary_files_exist and not rerun:
+        print("\nSkipping summary figures (already completed)")
+    else:
+        print("\nGenerating summary figures...")
+        generate_summary_figures()
+        print("✓ Summary figures generated.")
+    
+    # Run active zonogram analysis for all tomograms
+    print("\n" + "="*60)
+    print("RUNNING ACTIVE ZONOGRAM ANALYSIS")
+    print("="*60)
+    try:
+        # Import the active zonogram analysis function using absolute import
+        import sys
+        from pathlib import Path as PathLib
+        
+        # Add the src directory to the path if not already there
+        src_path = PathLib(__file__).parent.parent
+        if str(src_path) not in sys.path:
+            sys.path.insert(0, str(src_path))
+        
+        from synaptic_tomo_tools.visualization import run_zonogram_analysis_for_all_tomograms
+        
+        # Create output directory for active zonogram analysis
+        output_dir = Path("results")
+        # Extract root directory from tomogram paths for PDF generation
+        root_dir = None
+        if tomo_paths:
+            # Get the root directory from the first tomogram path
+            first_tomo_path = Path(tomo_paths[0][0])
+            # Go up to find the root (assuming structure: root/set/TOP_TOMOS/tomogram)
+            if first_tomo_path.parent.name == "TOP_TOMOS":
+                root_dir = str(first_tomo_path.parent.parent.parent)
+        
+        run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=csv_path, root_dir=root_dir, rerun=rerun)
+        print("Active zonogram analysis completed successfully!")
+    except Exception as e:
+        print(f"Error in active zonogram analysis: {e}")
+        import traceback
+        traceback.print_exc()
 
-def run_all_analyses(tomo_paths, results_manager, rerun=False, calculate_signals=False):
+def run_all_analyses(tomo_paths, results_manager, rerun=False, calculate_signals=False, csv_path=None):
     """Run all analyses in the correct order: activezone, vesicles, aunps, visualizations."""
     print_synapse_ascii_art()
     print("="*80)
@@ -311,7 +382,7 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, calculate_signals
     print("\n" + "="*80)
     print("STEP 4: VISUALIZATION GENERATION")
     print("="*80)
-    generate_visualizations(tomo_paths, results_manager, rerun, print_ascii=False)
+    generate_visualizations(tomo_paths, results_manager, rerun, print_ascii=False, csv_path=csv_path)
     
     print("\n" + "="*80)
     print("ALL ANALYSES COMPLETED!")
@@ -349,7 +420,14 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True):
             if az_str.strip() == "" or az_str.lower() == "nan":
                 az_indices = None
             else:
-                az_indices = [int(x) for x in az_str.split(",") if x.strip().isdigit()]
+                # Handle both integer strings and float strings (e.g., "0.0" -> 0)
+                az_indices = []
+                for x in az_str.split(","):
+                    x = x.strip()
+                    if x.isdigit():
+                        az_indices.append(int(x))
+                    elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
+                        az_indices.append(int(float(x)))
             # Run analyses and collect results
             aunp_results = analyze_aunps(tomo, az_indices, set_name=set_name)
             
@@ -669,9 +747,9 @@ def main():
     elif args.analysis == "aunps":
         run_aunps(tomos, results_manager, rerun=args.rerun)
     elif args.analysis == "visualizations":
-        generate_visualizations(tomos, results_manager, rerun=args.rerun)
+        generate_visualizations(tomos, results_manager, rerun=args.rerun, csv_path=args.csv)
     elif args.analysis == "all":
-        run_all_analyses(tomos, results_manager, rerun=args.rerun, calculate_signals=args.calculate_vesicle_signals)
+        run_all_analyses(tomos, results_manager, rerun=args.rerun, calculate_signals=args.calculate_vesicle_signals, csv_path=args.csv)
 
     # Always export summary CSVs at the end
     print("\nExporting all summary CSVs from stored results...")
@@ -680,7 +758,7 @@ def main():
     # If requested, generate PDF summary at the end
     if args.generate_pdf_summary:
         import subprocess
-        print("\nGenerating PDF summary for all tomograms...")
+        print("\nGenerating PDF summary...")
         subprocess.run([
             sys.executable, "scripts/generate_tomogram_summary_pdf.py",
             "--vis-dir", "results/visualizations/aunps_and_vesicles",

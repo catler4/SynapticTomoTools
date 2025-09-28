@@ -14,7 +14,7 @@ from pathlib import Path
 # Add the src directory to the Python path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from synaptic_tomo_tools.ampa_poses_optimized import run_ampa_poses_analysis_optimized
+from synaptic_tomo_tools.ampa_poses import run_ampa_poses_analysis_optimized
 
 
 def main():
@@ -31,9 +31,6 @@ Examples:
   
   # Disable distance cutoffs (use all pairs)
   python scripts/run_ampa_poses_analysis_optimized.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --output-dir results/ampa_poses_optimized --no-aunp-distance-cutoff --no-membrane-distance-cutoff
-  
-  # Use NetworkX exact optimization method (saves to networkx/ subdirectory)
-  python scripts/run_ampa_poses_analysis_optimized.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --output-dir results/ampa_poses_optimized --method networkx
   
   # Use ILP exact optimization method (saves to ilp/ subdirectory)
   python scripts/run_ampa_poses_analysis_optimized.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --output-dir results/ampa_poses_optimized --method ilp
@@ -101,9 +98,9 @@ Examples:
     
     parser.add_argument(
         "--method",
-        choices=["greedy", "networkx", "ilp"],
+        choices=["greedy", "ilp"],
         default="greedy",
-        help="Optimization method: 'greedy' for fast heuristic solution (saves to optimized/), 'networkx' for exact optimal solution using graph theory (saves to networkx/), 'ilp' for exact optimal solution using integer linear programming (saves to ilp/) (default: greedy)"
+        help="Optimization method: 'greedy' for fast heuristic solution (saves to greedy/), 'ilp' for exact optimal solution using integer linear programming (saves to ilp/) (default: greedy)"
     )
     
     parser.add_argument(

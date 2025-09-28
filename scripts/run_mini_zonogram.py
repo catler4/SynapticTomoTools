@@ -343,7 +343,7 @@ def main():
     
     # Step 4: Create mini zonograms directory
     print("Step 4: Creating mini zonograms...")
-    mini_zonogram_dir = Path(tomogram_path) / "best_alignment" / "active_zonograms" / "aunp_cluster_mini_activezonograms"
+    mini_zonogram_dir = Path(tomogram_path) / "best_alignment" / "active_zonograms" / "aunp_cluster_mini_active_zonograms"
     mini_zonogram_dir.mkdir(parents=True, exist_ok=True)
     
     # Step 5: Generate mini zonograms for each small cluster

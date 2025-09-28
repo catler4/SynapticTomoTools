@@ -12,6 +12,7 @@ FIG_HOME = "figures/synaptictomotools_fig_gui_home-01.png"
 FIG_AZ = "figures/synaptictomotools_fig_gui_AZ-01.png"
 FIG_VESICLES = "figures/synaptictomotools_fig_gui_vesicles-01.png"
 FIG_AUNPS = "figures/synaptictomotools_fig_gui_aunps-01.png"
+FIG_POSES = "figures/synaptictomotools_fig_gui_poses-01.png"
 
 class ToolTip:
     def __init__(self, widget, text):
@@ -213,10 +214,10 @@ class AnalysisPipelineGUI(tk.Tk):
             self.tabs[step] = tab
             self._build_tab_content(tab, step)
         
-        # AMPA Poses Analysis tab (dedicated tab)
+        # Pose Prediction tab (dedicated tab)
         ampa_poses_tab = ttk.Frame(notebook)
-        notebook.add(ampa_poses_tab, text="AMPA Poses Analysis")
-        self.tabs["AMPA Poses Analysis"] = ampa_poses_tab
+        notebook.add(ampa_poses_tab, text="Pose Prediction")
+        self.tabs["Pose Prediction"] = ampa_poses_tab
         self._build_ampa_poses_tab_content(ampa_poses_tab)
         
         # Post-Analysis Tools tab (moved to the far right)
@@ -438,7 +439,6 @@ Do you want to continue?"""
             img_label = ttk.Label(img_frame, image=img)
             img_label.pack()
             self._img_refs.append(img)
-        ttk.Label(controls_frame, text=f"Run {step} analysis").pack(anchor=tk.W, pady=10)
         if step == "Full Pipeline":
             ttk.Label(controls_frame, text="Active Zone -> Vesicles -> AuNPs -> Visualization").pack(anchor=tk.W, pady=(0, 10))
         run_btn = ttk.Button(controls_frame, text=f"Run {step}", command=lambda s=step: self._run_analysis(s, tab))
@@ -479,8 +479,7 @@ Do you want to continue?"""
         if step in ["Visualization", "Full Pipeline"]:
             pdf_frame = ttk.Frame(controls_frame)
             pdf_frame.pack(anchor=tk.W, pady=10)
-            pdf_btn = ttk.Button(pdf_frame, text="Generate PDF Summary", command=self._run_pdf_summary)
-            pdf_btn.pack(anchor=tk.W, pady=(0, 4))
+            # PDF generation now runs automatically, only keep the view button
             view_btn = ttk.Button(pdf_frame, text="View PDF Summary", command=self._view_pdf_summary)
             view_btn.pack(anchor=tk.W)
         if step == "Full Pipeline":
@@ -707,7 +706,7 @@ Do you want to continue?"""
         self.log_text.insert(tk.END, msg)
         self.log_text.see(tk.END)
         self.log_text.config(state=tk.NORMAL)
-    
+
     def _clear_last_line(self):
         """Clear the last line in the log text widget."""
         self.log_text.config(state=tk.NORMAL)
@@ -728,27 +727,6 @@ Do you want to continue?"""
         
         self.log_text.config(state=tk.NORMAL)
 
-    def _run_pdf_summary(self):
-        cli = ["python", "-u", "scripts/generate_tomogram_summary_pdf.py"]
-        if self.root_dir.get():
-            cli += ["--data-dir", self.root_dir.get()]
-        if self.csv_path.get():
-            # Always use the original CSV for PDF generation to include all tomograms
-            cli += ["--tomocsv", self.csv_path.get()]
-            
-            # Add starting tomogram if specified
-            processing_mode = self.processing_mode.get()
-            selected_tomogram = self.start_tomogram.get()
-            
-            if processing_mode in ["Single tomogram", "Start from"] and selected_tomogram:
-                cli += ["--start-from", selected_tomogram]
-                self._log(f"PDF generation will start from tomogram: {selected_tomogram}\n")
-                self._log("Note: Final PDF will still include all tomograms from the original CSV file\n")
-            else:
-                self._log("Note: PDF generation will include all tomograms from the original CSV file\n")
-                
-        self._log(f"Running: {' '.join(cli)}\n")
-        threading.Thread(target=self._run_subprocess, args=(cli, os.environ.copy())).start()
 
     def _view_pdf_summary(self):
         pdf_path = os.path.abspath("results/summary_pdfs/all_tomograms_summary.pdf")
@@ -770,11 +748,6 @@ Do you want to continue?"""
         notebook = ttk.Notebook(frame)
         notebook.pack(fill=tk.BOTH, expand=True)
         
-        # Zonogram Analysis tab
-        zonogram_tab = ttk.Frame(notebook)
-        notebook.add(zonogram_tab, text="Zonogram Analysis")
-        self._build_zonogram_tab_content(zonogram_tab)
-        
         # Cluster Analysis tab
         cluster_tab = ttk.Frame(notebook)
         notebook.add(cluster_tab, text="Cluster Analysis")
@@ -784,46 +757,6 @@ Do you want to continue?"""
         vesicle_tab = ttk.Frame(notebook)
         notebook.add(vesicle_tab, text="Vesicle Analysis")
         self._build_vesicle_tab_content(vesicle_tab)
-    
-    def _build_zonogram_tab_content(self, tab):
-        """Build the content for the zonogram analysis tab."""
-        frame = ttk.Frame(tab)
-        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-        
-        # Combined Zonogram Analysis section
-        zonogram_frame = ttk.LabelFrame(frame, text="Combined Zonogram Analysis", padding=10)
-        zonogram_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # Description
-        zonogram_desc_label = ttk.Label(zonogram_frame, text="Run both regular active zonogram analysis and mini zonogram analysis for small clusters.\nGenerates 3-view active zonograms and XY-only mini zonograms for clusters with <11 AuNPs.\nAll output images are saved to results/visualizations/activezonograms/ with tomogram name prefixes.")
-        zonogram_desc_label.pack(pady=(0, 10))
-        
-        # Delete previous results checkbox
-        self.delete_zonogram_results_var = tk.BooleanVar()
-        delete_zonogram_cb = ttk.Checkbutton(zonogram_frame, text="Delete previous zonogram results before running", variable=self.delete_zonogram_results_var)
-        delete_zonogram_cb.pack(anchor=tk.W, pady=(0, 10))
-        ToolTip(delete_zonogram_cb, "Delete all previous active zonogram and mini zonogram results before running new analysis.")
-        
-        # Run button
-        zonogram_btn = ttk.Button(zonogram_frame, text="Run Combined Zonogram Analysis", command=self._run_combined_zonogram_analysis)
-        zonogram_btn.pack(pady=(0, 10))
-        
-        # Add tooltip
-        ToolTip(zonogram_btn, "Run combined zonogram analysis on all tomograms in the CSV. Creates regular active zonograms and mini zonograms for small clusters. Requires membrane segmentation and AuNP analysis to be completed first.")
-        
-        # Generate PDF button
-        zonogram_pdf_btn = ttk.Button(zonogram_frame, text="Generate Zonogram PDF", command=self._generate_zonogram_pdf)
-        zonogram_pdf_btn.pack(pady=(0, 10))
-        
-        # Add tooltip
-        ToolTip(zonogram_pdf_btn, "Generate a comprehensive PDF showing all zonogram images from all tomograms. Shows regular active zonograms and mini zonograms in a two-column layout.")
-        
-        # Generate Mini Zonogram PDF button
-        mini_zonogram_pdf_btn = ttk.Button(zonogram_frame, text="Generate Mini Zonogram PDF", command=self._generate_mini_zonogram_pdf)
-        mini_zonogram_pdf_btn.pack(pady=(0, 10))
-        
-        # Add tooltip
-        ToolTip(mini_zonogram_pdf_btn, "Generate a PDF showing only the mini zonogram comparison images from all tomograms. Shows small cluster analysis in a two-column layout.")
     
     def _build_vesicle_tab_content(self, tab):
         """Build the content for the vesicle analysis tab."""
@@ -867,33 +800,28 @@ Do you want to continue?"""
     
     def _build_ampa_poses_tab_content(self, tab):
         """Build the content for the dedicated AMPA poses analysis tab."""
-        frame = ttk.Frame(tab)
-        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        # Use the same horizontal layout as other tabs
+        content_frame = ttk.Frame(tab)
+        content_frame.pack(fill=tk.BOTH, expand=True)
+        controls_frame = ttk.Frame(content_frame)
+        controls_frame.pack(side=tk.LEFT, anchor=tk.N, padx=10, pady=10)
+        img_frame = ttk.Frame(content_frame)
+        img_frame.pack(side=tk.RIGHT, anchor=tk.N, padx=10, pady=10)
         
-        # Title
-        title_label = ttk.Label(frame, text="AMPA Receptor Poses Analysis", font=("Arial", 16, "bold"))
-        title_label.pack(pady=(0, 20))
+        # Add figure to the right, same size as other tabs
+        img = self._load_and_display_image(FIG_POSES, img_frame, max_width=525, max_height=240)
+        if img:
+            img_label = ttk.Label(img_frame, image=img)
+            img_label.pack()
+            self._img_refs.append(img)
         
-        # Description
-        desc_text = """Estimate AMPA receptor poses based on AuNP pair analysis.
-
-This analysis finds AuNP pairs within specified distance ranges and estimates AMPA receptor positions and orientations.
-It generates RELION star files and summary CSV files for further analysis.
-
-Two methods are run by default:
-• Method #1: Uses all valid AuNP pairs that meet distance criteria (no optimization)
-• Method #2: Uses optimization algorithm to minimize unpaired AuNPs and avoid clashes with steric constraints
-  - Greedy: Fast heuristic solution (default)
-  - NetworkX: Exact optimal solution using graph theory (slower but guaranteed optimal)
-  - ILP: Exact optimal solution using integer linear programming (alternative exact method)
-
-"""
-        
-        desc_label = ttk.Label(frame, text=desc_text, justify=tk.LEFT, wraplength=700)
-        desc_label.pack(pady=(0, 20))
+        # Run Analysis button at the top
+        ampa_run_btn = ttk.Button(controls_frame, text="Run Pose Prediction", command=self._run_ampa_poses_analysis_optimized)
+        ampa_run_btn.pack(anchor=tk.W, pady=5)
+        ToolTip(ampa_run_btn, "Run optimized AMPA poses analysis with maximum matching and steric constraints. Uses greedy or ILP optimization methods.")
         
         # AMPA Poses Analysis section
-        ampa_frame = ttk.LabelFrame(frame, text="Analysis Parameters", padding=15)
+        ampa_frame = ttk.LabelFrame(controls_frame, text="Analysis Parameters", padding=15)
         ampa_frame.pack(fill=tk.X, pady=(0, 20))
         
         # Parameters frame
@@ -937,19 +865,8 @@ Two methods are run by default:
         method_frame.grid(row=3, column=1, columnspan=4, sticky=tk.W, pady=(10, 0))
         
         ttk.Radiobutton(method_frame, text="Greedy (fast, heuristic)", variable=self.ampa_optimization_method, value="greedy").pack(side=tk.LEFT, padx=(0, 15))
-        ttk.Radiobutton(method_frame, text="NetworkX (exact, graph)", variable=self.ampa_optimization_method, value="networkx").pack(side=tk.LEFT, padx=(0, 15))
         ttk.Radiobutton(method_frame, text="ILP (exact, linear)", variable=self.ampa_optimization_method, value="ilp").pack(side=tk.LEFT)
         
-        # Output directory
-        self.ampa_output_dir = tk.StringVar(value="STT_results/ampa_poses")
-        ttk.Label(ampa_frame, text="Output directory (relative to each tomogram):").pack(anchor=tk.W, pady=(10, 0))
-        ampa_output_entry = ttk.Entry(ampa_frame, textvariable=self.ampa_output_dir, width=50)
-        ampa_output_entry.pack(fill=tk.X, pady=(0, 15))
-        
-        # Run Analysis button
-        ampa_run_btn = ttk.Button(ampa_frame, text="Run AMPA Poses Analysis", command=self._run_ampa_poses_analysis_both)
-        ampa_run_btn.pack(pady=(0, 10))
-        ToolTip(ampa_run_btn, "Run both original and optimized AMPA poses analysis methods and generate a comparison report. The original method uses all valid pairs, while the optimized method uses maximum matching with steric constraints.")
         
         # Add Stop button in bottom right of tab
         stop_btn = ttk.Button(tab, text="Stop", command=self._stop_current_process)
@@ -1077,154 +994,6 @@ Two methods are run by default:
         self._log("Note: This will extract XYZ coordinates for specified clusters and save them as text files.\n")
         threading.Thread(target=self._run_subprocess, args=(cli, os.environ.copy())).start()
 
-    def _run_combined_zonogram_analysis(self):
-        """Run the combined zonogram analysis script on all tomograms."""
-        if not self.csv_path.get():
-            messagebox.showerror("Error", "Please select a CSV file first.")
-            return
-        
-        # Check if root directory is specified
-        if not self.root_dir.get():
-            messagebox.showerror("Error", "Please specify the root directory for tomogram sets.")
-            return
-        
-        # Use default output directory (same as script default)
-        output_dir = "results"
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Read CSV to get tomogram names and sets
-        try:
-            df = pd.read_csv(self.csv_path.get())
-            
-            # Handle processing mode and starting tomogram selection
-            processing_mode = self.processing_mode.get()
-            selected_tomogram = self.start_tomogram.get()
-            
-            if processing_mode == "Single tomogram" and selected_tomogram:
-                # Filter to only the selected tomogram
-                tomogram_row = df[df['tomoname'] == selected_tomogram]
-                if not tomogram_row.empty:
-                    df = tomogram_row
-                    self._log(f"Processing single tomogram: {selected_tomogram}\n")
-                else:
-                    self._log(f"Warning: Tomogram {selected_tomogram} not found in CSV\n")
-                    
-            elif processing_mode == "Start from" and selected_tomogram:
-                # Filter to the selected tomogram and all tomograms after it
-                tomogram_indices = df[df['tomoname'] == selected_tomogram].index
-                if len(tomogram_indices) > 0:
-                    start_index = tomogram_indices[0]
-                    df = df.iloc[start_index:]
-                    self._log(f"Processing from tomogram {selected_tomogram} onwards ({len(df)} tomograms)\n")
-                else:
-                    self._log(f"Warning: Tomogram {selected_tomogram} not found in CSV\n")
-            
-            # Check for different possible column names for tomogram names
-            if 'tomogram_name' in df.columns:
-                tomogram_names = df['tomogram_name'].tolist()
-            elif 'tomoname' in df.columns:
-                tomogram_names = df['tomoname'].tolist()
-            elif 'tomogram' in df.columns:
-                tomogram_names = df['tomogram'].tolist()
-            else:
-                # Try to find any column that might contain tomogram names
-                possible_columns = [col for col in df.columns if 'tom' in col.lower() or 'name' in col.lower()]
-                if possible_columns:
-                    tomogram_names = df[possible_columns[0]].tolist()
-                    self._log(f"Using column '{possible_columns[0]}' for tomogram names\n")
-                else:
-                    messagebox.showerror("Error", "Could not find tomogram name column in CSV. Expected 'tomogram_name', 'tomoname', or 'tomogram'")
-                    return
-            
-            # Get the set column for path construction
-            if 'set' in df.columns:
-                tomogram_sets = df['set'].tolist()
-            else:
-                # Default to '15F1' if no set column found
-                tomogram_sets = ['15F1'] * len(tomogram_names)
-                self._log("No 'set' column found, defaulting to '15F1' for all tomograms\n")
-                    
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not read CSV file: {e}")
-            return
-        
-        self._log(f"Starting combined zonogram analysis for {len(tomogram_names)} tomograms...\n")
-        self._log(f"Output directory: {output_dir}\n")
-        
-        # Process all tomograms using the same approach as other analyses
-        all_commands = []
-        
-        for i, (tomogram_name, tomogram_set) in enumerate(zip(tomogram_names, tomogram_sets), 1):
-            self._log(f"\nPreparing tomogram {i}/{len(tomogram_names)}: {tomogram_name} (set: {tomogram_set})\n")
-            
-            # Build tomogram path using the correct structure
-            # All sets follow the pattern: data/{set_name}/TOP_TOMOS/{tomogram_name}
-            tomogram_path = os.path.join(self.root_dir.get(), tomogram_set, 'TOP_TOMOS', tomogram_name)
-            
-            if not os.path.exists(tomogram_path):
-                self._log(f"Warning: Tomogram directory not found: {tomogram_path}\n")
-                continue
-            
-            # Build command for this tomogram
-            cli = ["python", "-u", "scripts/run_combined_zonogram_analysis.py"]
-            cli += ["--tomogram-path", tomogram_path]
-            cli += ["--output-dir", output_dir]
-            cli += ["--tomogram-name", tomogram_name]
-            
-            all_commands.append((tomogram_name, cli))
-        
-        # Delete previous results if checkbox is checked (only for tomograms that will be processed)
-        if self.delete_zonogram_results_var.get():
-            self._log("Deleting previous zonogram results for selected tomograms...\n")
-            try:
-                # Delete results from individual tomogram directories (only for tomograms that will be processed)
-                for tomogram_name, tomogram_set in zip(tomogram_names, tomogram_sets):
-                    tomogram_path = os.path.join(self.root_dir.get(), tomogram_set, 'TOP_TOMOS', tomogram_name)
-                    activezonograms_dir = os.path.join(tomogram_path, 'best_alignment', 'STT_results', 'activezonograms')
-                    if os.path.exists(activezonograms_dir):
-                        import shutil
-                        shutil.rmtree(activezonograms_dir)
-                        self._log(f"Deleted active zonogram results for {tomogram_name}\n")
-                
-                # Delete results from global results directory (only for tomograms that will be processed)
-                results_activezonograms_dir = os.path.join(output_dir, 'visualizations', 'activezonograms')
-                if os.path.exists(results_activezonograms_dir):
-                    # Only delete files that match the tomogram names that will be processed
-                    import glob
-                    for tomogram_name in tomogram_names:
-                        pattern = os.path.join(results_activezonograms_dir, f"{tomogram_name}_*")
-                        for file_path in glob.glob(pattern):
-                            os.remove(file_path)
-                            self._log(f"Deleted global zonogram file: {os.path.basename(file_path)}\n")
-                
-                self._log("Previous zonogram results deleted successfully for selected tomograms.\n")
-            except Exception as e:
-                self._log(f"Warning: Error deleting previous results: {e}\n")
-        
-        if not all_commands:
-            self._log("No valid tomograms found to process.\n")
-            return
-        
-        # Run all commands sequentially with real-time output
-        self._log(f"\nStarting combined zonogram analysis for {len(all_commands)} tomograms...\n")
-        
-        # Use threading to run the entire sequence in background while maintaining real-time output
-        def run_sequential_analysis():
-            for i, (tomogram_name, cli) in enumerate(all_commands, 1):
-                self._log(f"\n{'='*60}\n")
-                self._log(f"Processing tomogram {i}/{len(all_commands)}: {tomogram_name}\n")
-                self._log(f"Command: {' '.join(cli)}\n")
-                self._log(f"{'='*60}\n")
-                
-                # Run the subprocess and wait for completion
-                self._run_subprocess(cli, os.environ.copy())
-            
-            self._log(f"\nCombined zonogram analysis completed for {len(all_commands)} tomograms.\n")
-            self._log(f"Results saved to: {output_dir}\n")
-        
-        # Start the sequential analysis in a background thread
-        threading.Thread(target=run_sequential_analysis).start()
-
     def _run_ampa_poses_analysis(self):
         """Run the AMPA poses analysis on all tomograms."""
         if not self.csv_path.get():
@@ -1260,7 +1029,7 @@ Two methods are run by default:
             return
         
         # Get output directory (will be constructed per tomogram)
-        output_dir_relative = self.ampa_output_dir.get()
+        output_dir_relative = "STT_results/ampa_poses"
         
         # Read CSV to get tomogram names and sets
         try:
@@ -1417,7 +1186,7 @@ Two methods are run by default:
                 
                 # Run the subprocess and wait for completion
                 self._run_subprocess(cli, os.environ.copy())
-                
+            
                 # Try to load the results for combining
                 try:
                     import starfile
@@ -1564,7 +1333,7 @@ Two methods are run by default:
             return
         
         # Get output directory (will be constructed per tomogram)
-        output_dir_relative = self.ampa_output_dir.get()
+        output_dir_relative = "STT_results/ampa_poses"
         
         # Read CSV to get tomogram names and sets
         try:
@@ -1691,32 +1460,30 @@ Two methods are run by default:
                 cli_original = ["python", "-u", "scripts/run_ampa_poses_analysis.py"]
                 cli_original += ["--tomogram-path", tomogram_path]
                 cli_original += ["--output-dir", original_output_dir]
+            
+            # Add distance parameters only if cutoffs are enabled
+            if not aunp_no_cutoff:
+                cli_original += ["--aunp-min-distance", str(aunp_min_dist)]
+                cli_original += ["--aunp-max-distance", str(aunp_max_dist)]
+            else:
+                cli_original += ["--no-aunp-distance-cutoff"]
                 
-                # Add distance parameters only if cutoffs are enabled
-                if not aunp_no_cutoff:
-                    cli_original += ["--aunp-min-distance", str(aunp_min_dist)]
-                    cli_original += ["--aunp-max-distance", str(aunp_max_dist)]
-                else:
-                    cli_original += ["--no-aunp-distance-cutoff"]
-                    
-                if not membrane_no_cutoff:
-                    cli_original += ["--membrane-min-distance", str(membrane_min_dist)]
-                    cli_original += ["--membrane-max-distance", str(membrane_max_dist)]
-                else:
-                    cli_original += ["--no-membrane-distance-cutoff"]
-                
-                # Add active zones if specified
-                if aunp_active_zones is not None:
-                    cli_original += ["--aunp-active-zones"] + [str(az) for az in aunp_active_zones]
-                
-                tomogram_commands.append(("all_poses", cli_original))
+            if not membrane_no_cutoff:
+                cli_original += ["--membrane-min-distance", str(membrane_min_dist)]
+                cli_original += ["--membrane-max-distance", str(membrane_max_dist)]
+            else:
+                cli_original += ["--no-membrane-distance-cutoff"]
+            
+            # Add active zones if specified
+            if aunp_active_zones is not None:
+                cli_original += ["--aunp-active-zones"] + [str(az) for az in aunp_active_zones]
+            
+            tomogram_commands.append(("all_poses", cli_original))
             
             if method in ["optimized", "both"]:
                 # Optimized method - determine output directory based on method
                 optimization_method = self.ampa_optimization_method.get()
-                if optimization_method == "networkx":
-                    method_output_dir_name = "networkx"
-                elif optimization_method == "ilp":
+                if optimization_method == "ilp":
                     method_output_dir_name = "ilp"
                 else:
                     method_output_dir_name = "greedy"
@@ -1724,7 +1491,7 @@ Two methods are run by default:
                 optimized_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative, method_output_dir_name)
                 os.makedirs(optimized_output_dir, exist_ok=True)
                 
-                cli_optimized = ["python", "-u", "scripts/run_ampa_poses_analysis_optimized.py"]
+                cli_optimized = ["python", "-u", "scripts/run_ampa_poses_analysis.py"]
                 cli_optimized += ["--tomogram-path", tomogram_path]
                 cli_optimized += ["--output-dir", optimized_output_dir]
                 cli_optimized += ["--steric-radius", str(steric_radius)]
@@ -1779,69 +1546,67 @@ Two methods are run by default:
                 for method_type, cli in tomogram_commands:
                     self._log(f"\nRunning {method_type} method for {tomogram_name}...\n")
                     self._log(f"Command: {' '.join(cli)}\n")
+                
+                # Run the subprocess and wait for completion
+                self._run_subprocess(cli, os.environ.copy())
+                
+                # Try to load the results for combining
+                try:
+                    import starfile
+                    import pandas as pd
                     
-                    # Run the subprocess and wait for completion
-                    self._run_subprocess(cli, os.environ.copy())
-                    
-                    # Try to load the results for combining
-                    try:
-                        import starfile
-                        import pandas as pd
+                    # Determine output directory based on method
+                    if method_type == "all_poses":
+                        individual_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative, "all_poses")
+                    else:  # optimized method - use the actual method directory
+                        optimization_method = self.ampa_optimization_method.get()
+                        if optimization_method == "ilp":
+                            method_dir = "ilp"
+                        else:
+                            method_dir = "greedy"
+                        individual_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative, method_dir)
                         
-                        # Determine output directory based on method
-                        if method_type == "all_poses":
-                            individual_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative, "all_poses")
-                        else:  # optimized method - use the actual method directory
-                            optimization_method = self.ampa_optimization_method.get()
-                            if optimization_method == "networkx":
-                                method_dir = "networkx"
-                            elif optimization_method == "ilp":
-                                method_dir = "ilp"
+                    # Load the particles file
+                    particles_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and 'ampa_poses' in f and '_aunps' not in f and '_unpaired' not in f and '_all_aunps' not in f]
+                    if particles_files:
+                        particles_file_path = os.path.join(individual_output_dir, particles_files[0])
+                        particles_data = starfile.read(particles_file_path)
+                        if 'particles' in particles_data:
+                            particles_df = particles_data['particles'].copy()
+                            particles_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
+                            if method_type == "all_poses":
+                                all_particles_data_original.append(particles_df)
                             else:
-                                method_dir = "greedy"
-                            individual_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative, method_dir)
+                                all_particles_data_optimized.append(particles_df)
                         
-                        # Load the particles file
-                        particles_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and 'ampa_poses' in f and '_aunps' not in f and '_unpaired' not in f and '_all_aunps' not in f]
-                        if particles_files:
-                            particles_file_path = os.path.join(individual_output_dir, particles_files[0])
-                            particles_data = starfile.read(particles_file_path)
-                            if 'particles' in particles_data:
-                                particles_df = particles_data['particles'].copy()
-                                particles_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
-                                if method_type == "all_poses":
-                                    all_particles_data_original.append(particles_df)
-                                else:
-                                    all_particles_data_optimized.append(particles_df)
-                        
-                        # Load the AuNPs file
-                        aunps_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and 'ampa_poses' in f and '_paired_aunps' in f]
-                        if aunps_files:
-                            aunps_file_path = os.path.join(individual_output_dir, aunps_files[0])
-                            aunps_data = starfile.read(aunps_file_path)
-                            if 'particles' in aunps_data:
-                                aunps_df = aunps_data['particles'].copy()
-                                aunps_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
-                                if method_type == "all_poses":
-                                    all_aunps_data_original.append(aunps_df)
-                                else:
-                                    all_aunps_data_optimized.append(aunps_df)
-                        
-                        # Load unpaired AuNPs file (both methods now have this)
-                        unpaired_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and '_unpaired_aunps' in f]
-                        if unpaired_files:
-                            unpaired_file_path = os.path.join(individual_output_dir, unpaired_files[0])
-                            unpaired_data = starfile.read(unpaired_file_path)
-                            if 'particles' in unpaired_data:
-                                unpaired_df = unpaired_data['particles'].copy()
-                                unpaired_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
-                                if method_type == "all_poses":
-                                    all_unpaired_data_original.append(unpaired_df)
-                                else:
-                                    all_unpaired_data_optimized.append(unpaired_df)
+                    # Load the AuNPs file
+                    aunps_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and 'ampa_poses' in f and '_paired_aunps' in f]
+                    if aunps_files:
+                        aunps_file_path = os.path.join(individual_output_dir, aunps_files[0])
+                        aunps_data = starfile.read(aunps_file_path)
+                        if 'particles' in aunps_data:
+                            aunps_df = aunps_data['particles'].copy()
+                            aunps_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
+                            if method_type == "all_poses":
+                                all_aunps_data_original.append(aunps_df)
+                            else:
+                                all_aunps_data_optimized.append(aunps_df)
                     
-                    except Exception as e:
-                        self._log(f"Warning: Could not load results for {tomogram_name} ({method_type}): {e}\n")
+                    # Load unpaired AuNPs file (both methods now have this)
+                    unpaired_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and '_unpaired_aunps' in f]
+                    if unpaired_files:
+                        unpaired_file_path = os.path.join(individual_output_dir, unpaired_files[0])
+                        unpaired_data = starfile.read(unpaired_file_path)
+                        if 'particles' in unpaired_data:
+                            unpaired_df = unpaired_data['particles'].copy()
+                            unpaired_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
+                            if method_type == "all_poses":
+                                all_unpaired_data_original.append(unpaired_df)
+                            else:
+                                all_unpaired_data_optimized.append(unpaired_df)
+                
+                except Exception as e:
+                    self._log(f"Warning: Could not load results for {tomogram_name} ({method_type}): {e}\n")
                 
                 successful_tomograms.append(tomogram_name)
             
@@ -1873,7 +1638,7 @@ Two methods are run by default:
                     combined_particles_optimized = pd.concat(all_particles_data_optimized, ignore_index=True)
                     # Determine the method name for file naming
                     optimization_method = self.ampa_optimization_method.get()
-                    method_suffix = optimization_method if optimization_method in ["greedy", "networkx", "ilp"] else "optimized"
+                    method_suffix = optimization_method if optimization_method in ["greedy", "ilp"] else "optimized"
                     
                     starfile.write({
                         'particles': combined_particles_optimized,
@@ -1918,7 +1683,7 @@ Two methods are run by default:
                         combined_unpaired_original if all_unpaired_data_original else None,
                         combined_unpaired_optimized if all_unpaired_data_optimized else None
                     )
-                
+                    
             except Exception as e:
                 self._log(f"Error saving combined results: {e}\n")
             
@@ -1961,7 +1726,7 @@ Two methods are run by default:
             
             # Create comparison summary
             optimization_method = self.ampa_optimization_method.get()
-            method_display_name = optimization_method.upper() if optimization_method in ["greedy", "networkx", "ilp"] else "Optimized"
+            method_display_name = optimization_method.upper() if optimization_method in ["greedy", "ilp"] else "Optimized"
             comparison_data = {
                 'Method': ['All Poses', method_display_name],
                 'Total_AMPA_Poses': [
@@ -2003,7 +1768,7 @@ Two methods are run by default:
                 self._log(f"All poses method: {len(original_particles)} poses with {all_poses_steric_clashes} steric clashes\n")
                 # Get the actual method name for display
                 optimization_method = self.ampa_optimization_method.get()
-                method_display_name = optimization_method.upper() if optimization_method in ["greedy", "networkx", "ilp"] else "Optimized"
+                method_display_name = optimization_method.upper() if optimization_method in ["greedy", "ilp"] else "Optimized"
                 self._log(f"{method_display_name} method: {len(optimized_particles)} high-quality poses with 0 steric clashes\n")
                 if all_poses_steric_clashes > 0:
                     self._log(f"Steric clashes eliminated: {all_poses_steric_clashes} (biologically impossible poses removed)\n")
@@ -2017,7 +1782,6 @@ Two methods are run by default:
         except Exception as e:
             self._log(f"Error generating comparison report: {e}\n")
 
-    def _generate_zonogram_pdf(self):
         """Generate a comprehensive PDF showing all zonogram images from all tomograms."""
         if not self.csv_path.get():
             messagebox.showerror("Error", "Please select a CSV file first.")
@@ -2083,7 +1847,7 @@ Two methods are run by default:
                     self._log("No 'set' column found, defaulting to '15F1' for all tomograms\n")
                 
                 # Create output directory
-                output_dir = Path("results/visualizations/activezonograms")
+                output_dir = Path("results/visualizations/active_zonograms")
                 output_dir.mkdir(parents=True, exist_ok=True)
                 pdf_path = output_dir / "all_zonograms_summary.pdf"
                 
@@ -2116,10 +1880,10 @@ Two methods are run by default:
                     
                     # Build tomogram path
                     tomogram_path = Path(self.root_dir.get()) / tomogram_set / "TOP_TOMOS" / tomogram_name
-                    activezonograms_dir = tomogram_path / "best_alignment" / "STT_results" / "activezonograms"
+                    active_zonograms_dir = tomogram_path / "best_alignment" / "STT_results" / "active_zonograms"
                     
-                    if not activezonograms_dir.exists():
-                        self._log(f"Warning: Active zonograms directory not found: {activezonograms_dir}\n")
+                    if not active_zonograms_dir.exists():
+                        self._log(f"Warning: Active zonograms directory not found: {active_zonograms_dir}\n")
                         continue
                     
                     # Add tomogram name as title
@@ -2127,7 +1891,7 @@ Two methods are run by default:
                     story.append(Spacer(1, 10))
                     
                     # Find regular active zonogram files (aunps_by_cluster.png)
-                    regular_zonogram_files = list(activezonograms_dir.glob("*_active_zonogram_*_selected_aunps_by_cluster.png"))
+                    regular_zonogram_files = list(active_zonograms_dir.glob("*_active_zonogram_*_selected_aunps_by_cluster.png"))
                     
                     # Add regular active zonograms first
                     for zonogram_file in sorted(regular_zonogram_files):
@@ -2175,7 +1939,7 @@ Two methods are run by default:
                             self._log(f"  Error adding regular zonogram {zonogram_file}: {e}\n")
                     
                     # Find mini zonogram comparison files
-                    mini_zonogram_files = list(activezonograms_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
+                    mini_zonogram_files = list(active_zonograms_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
                     
                     if mini_zonogram_files:
                         # Add mini zonograms section title
@@ -2339,7 +2103,7 @@ Two methods are run by default:
                     self._log("No 'set' column found, defaulting to '15F1' for all tomograms\n")
                 
                 # Create output directory
-                output_dir = Path("results/visualizations/activezonograms")
+                output_dir = Path("results/visualizations/active_zonograms")
                 output_dir.mkdir(parents=True, exist_ok=True)
                 pdf_path = output_dir / "mini_zonograms_summary.pdf"
                 pdf_path_4aunps = output_dir / "mini_zonograms_4aunps_summary.pdf"
@@ -2375,14 +2139,14 @@ Two methods are run by default:
                     
                     # Build tomogram path
                     tomogram_path = Path(self.root_dir.get()) / tomogram_set / "TOP_TOMOS" / tomogram_name
-                    activezonograms_dir = tomogram_path / "best_alignment" / "STT_results" / "activezonograms"
+                    active_zonograms_dir = tomogram_path / "best_alignment" / "STT_results" / "active_zonograms"
                     
-                    if not activezonograms_dir.exists():
-                        self._log(f"Warning: Active zonograms directory not found: {activezonograms_dir}\n")
+                    if not active_zonograms_dir.exists():
+                        self._log(f"Warning: Active zonograms directory not found: {active_zonograms_dir}\n")
                         continue
                     
                     # Find mini zonogram comparison files
-                    mini_zonogram_files = list(activezonograms_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
+                    mini_zonogram_files = list(active_zonograms_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
                     
                     # Get cluster data to identify clusters with 4 AuNPs
                     cluster_data_path = tomogram_path / "best_alignment" / "STT_results" / "aunps" / "aunp_clusters.star"

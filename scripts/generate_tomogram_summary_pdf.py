@@ -48,32 +48,17 @@ def check_file_corruption(file_path):
     except Exception as e:
         return f"Error reading file: {e}"
 
-def get_stats(tomo_name, base_data_dir):
+def get_stats(tomo_name, base_data_dir, selected_az_indices=None):
     # Find vesicle_results.json and aunp data for this tomogram
     vesicle_json = list(Path(base_data_dir).glob(f"**/{tomo_name}/best_alignment/STT_results/vesicles/vesicle_results.json"))
-    aunp_csv = list(Path(base_data_dir).glob(f"**/{tomo_name}/best_alignment/STT_results/aunps/aunp_clusters.csv"))
+    aunp_star = list(Path(base_data_dir).glob(f"**/{tomo_name}/best_alignment/STT_results/aunps/aunp_clusters.star"))
     
-    # Try to get AuNP count from the results CSV first
-    aunp_results_csv = Path("results/aunps_results.csv")
     stats = {
         'total_vesicles': 'N/A',
         'az_adjacent_vesicles': 'N/A',
         'total_aunps': 'N/A',
         'aunp_clusters': 'N/A',
     }
-    
-    # Get AuNP count from results CSV
-    if aunp_results_csv.exists():
-        try:
-            import pandas as pd
-            df = pd.read_csv(aunp_results_csv)
-            tomo_row = df[df['tomogram_name'] == tomo_name]
-            if not tomo_row.empty:
-                aunp_count = tomo_row['aunp_analysis_aunp_count'].iloc[0]
-                if pd.notna(aunp_count):
-                    stats['total_aunps'] = int(aunp_count)
-        except Exception as e:
-            print(f"Warning: Error reading AuNP results CSV for {tomo_name}: {e}")
     # Vesicle stats
     if vesicle_json:
         try:
@@ -101,23 +86,28 @@ def get_stats(tomo_name, base_data_dir):
     
 
     
-    # AuNP cluster stats
-    if aunp_csv:
+    # AuNP stats - use the .star file for both total count and cluster count
+    if aunp_star:
         try:
-            with open(aunp_csv[0], 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                clusters = 0
-                for row in reader:
-                    clusters += 1
-                stats['aunp_clusters'] = clusters
-        except UnicodeDecodeError as e:
-            print(f"Warning: Unicode decode error reading AuNP cluster results for {tomo_name}: {e}")
-            print(f"File: {aunp_csv[0]}")
-            print(f"File analysis: {check_file_corruption(aunp_csv[0])}")
+            import starfile
+            df = starfile.read(aunp_star[0])
+            
+            # Filter by selected active zones if specified
+            if selected_az_indices is not None:
+                df = df[df['active_zone'].isin(selected_az_indices)]
+            
+            # Total AuNPs: count all AuNPs (including noise cluster -1)
+            stats['total_aunps'] = len(df)
+            
+            # AuNP clusters: count unique valid clusters (excluding noise cluster -1)
+            valid_df = df[(df['aunp_cluster'] != -1) & (df['aunp_cluster'].notna())]
+            unique_clusters = valid_df['aunp_cluster'].unique()
+            stats['aunp_clusters'] = len(unique_clusters)
+                
         except Exception as e:
             print(f"Warning: Error reading AuNP cluster results for {tomo_name}: {e}")
-            print(f"File: {aunp_csv[0]}")
-            print(f"File analysis: {check_file_corruption(aunp_csv[0])}")
+            print(f"File: {aunp_star[0]}")
+            print(f"File analysis: {check_file_corruption(aunp_star[0])}")
     return stats
 
 def get_active_zonogram_images(tomo_name, base_data_dir, selected_az_indices=None):
@@ -138,9 +128,12 @@ def get_active_zonogram_images(tomo_name, base_data_dir, selected_az_indices=Non
         # Filter position images to only include selected indices
         filtered_position_imgs = []
         for pos_img in position_imgs:
+            # Extract index from filename like: active_zonogram_0_position.png
             m = re.search(r'active_zonogram_(\d+)_position.png', pos_img.name)
-            if m and int(m.group(1)) in selected_indices:
-                filtered_position_imgs.append(pos_img)
+            if m:
+                idx = int(m.group(1))
+                if idx in selected_indices:
+                    filtered_position_imgs.append(pos_img)
         position_imgs = filtered_position_imgs
     
     # Pair by index (assuming same numbering)
@@ -154,9 +147,9 @@ def get_active_zonogram_images(tomo_name, base_data_dir, selected_az_indices=Non
         # Find corresponding selected_aunps image
         sel_img = az_dir / f"active_zonogram_{idx}_selected_aunps.png"
         if sel_img.exists():
-            pairs.append((pos_img, sel_img, int(idx)))
+            pairs.append((pos_img, sel_img))
         else:
-            pairs.append((pos_img, None, int(idx)))
+            pairs.append((pos_img, None))
     return pairs
 
 def load_tomo_set_map(tomocsv_path):
@@ -172,9 +165,15 @@ def load_tomo_set_map(tomocsv_path):
             az = (row.get('aunp_active_zones') or '').strip()
             if az:
                 tomo_az_map[row['tomoname']] = az
-                # Parse active zone indices
+                # Parse active zone indices (handle floats like "2.0")
                 try:
-                    az_indices = [int(x.strip()) for x in az.split(',') if x.strip()]
+                    az_indices = []
+                    for x in az.split(','):
+                        x = x.strip()
+                        if x.isdigit():
+                            az_indices.append(int(x))
+                        elif x.replace(".", "").isdigit():  # Handle floats like "2.0"
+                            az_indices.append(int(float(x)))
                     tomo_az_indices_map[row['tomoname']] = az_indices
                 except ValueError:
                     print(f"Warning: Could not parse active zone indices for {row['tomoname']}: {az}")
@@ -246,7 +245,12 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
         c.setFont("Helvetica", 12)
         c.drawString(margin, info_y, f"Active zones included: {az_info}")
         info_y -= 16
-    stats = get_stats(tomo_name, base_data_dir)
+    # Get selected active zone indices for this tomogram
+    selected_az_indices = None
+    if tomo_az_indices_map is not None:
+        selected_az_indices = tomo_az_indices_map.get(tomo_name, None)
+    
+    stats = get_stats(tomo_name, base_data_dir, selected_az_indices)
     c.setFont("Helvetica", 12)
     c.drawString(margin, info_y, f"Total vesicles: {stats['total_vesicles']}")
     info_y -= 18
@@ -259,119 +263,189 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
     y -= info_box_height
     # Add a consistent gap before the first figure
     y -= 16
-    # --- Add active zonogram images next ---
     # Get selected active zone indices for this tomogram
     selected_az_indices = None
     if tomo_az_indices_map is not None:
         selected_az_indices = tomo_az_indices_map.get(tomo_name, None)
-    
-    az_pairs = get_active_zonogram_images(tomo_name, base_data_dir, selected_az_indices)
-    if az_pairs:
-        # Place the first pair on the first page, stacked, using as much vertical space as possible
-        pos_img, sel_img, az_id = az_pairs[0]
-        gap = 28
-        available_height = y - margin  # space left on first page
-        img_height = (available_height - gap) // 2
-        img_width = width - 2*margin
-        # Position image 1
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(margin, y, f"Active Zonogram {az_id} - Position")
-        y -= 6
-        used_height1 = add_image(c, pos_img, margin, y-img_height, img_width, img_height)
-        y -= used_height1
-        y -= gap
-        # Position image 2
-        if sel_img:
-            c.setFont("Helvetica-Bold", 14)
-            c.drawString(margin, y, f"Active Zonogram {az_id} - Selected AuNPs")
-            y -= 6
-            used_height2 = add_image(c, sel_img, margin, y-img_height, img_width, img_height)
-            y -= used_height2
-            y -= 12
-        else:
-            c.setFont("Helvetica", 12)
-            c.drawString(margin, y, "[Selected AuNPs image not found]")
-            y -= 20
-        # Remove the first pair from az_pairs
-        az_pairs = az_pairs[1:]
-    # The rest as before
-    for pos_img, sel_img, az_id in az_pairs:
-        if y < (2*400 + 40):
-            c.showPage()
-            y = height - margin
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(margin, y, f"Active Zonogram {az_id} - Position")
-        y -= 6
-        used_height = add_image(c, pos_img, margin, y-400, width-2*margin, 400)
-        y -= used_height
-        y -= 4
-        if sel_img:
-            y -= 16
-            c.setFont("Helvetica-Bold", 14)
-            c.drawString(margin, y, f"Active Zonogram {az_id} - Selected AuNPs")
-            y -= 6
-            used_height = add_image(c, sel_img, margin, y-400, width-2*margin, 400)
-            y -= used_height
-            y -= 4
-    # --- End active zonogram images ---
-    # Add images
-    img_types = [
-        ("Analysis Summary", f"{tomo_name}_combined.png"),
-        ("AuNP Clusters Overlay", f"{tomo_name}_combined_aunpclusters.png"),
-        ("AuNP Clusters 2D Projection", f"{tomo_name}_aunpclusters.png"),
-    ]
-    # Custom layout: first two side-by-side, third below
-    img_paths = [vis_dir / fname for _, fname in img_types]
-    img_labels = [label for label, _ in img_types]
-    # Check if both side-by-side images exist
-    if img_paths[0].exists() and img_paths[1].exists():
-        # Calculate available width and height
-        gap = 16
-        side_width = (width - 2*margin - gap) // 2
-        max_height = 320
-        # Estimate needed height for all three images and titles
-        needed_height = max_height + 16 + max_height + 20  # side-by-side row + gap + below row
-        if img_paths[2].exists():
-            needed_height += max_height + 22  # space for third image and its title
-        if y < needed_height:
-            c.showPage()
-            y = height - margin
-        # Titles above each image
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(margin, y, img_labels[0])
-        c.drawString(margin + side_width + gap, y, img_labels[1])
-        y -= 16
-        # Draw both images side by side
-        nh1 = add_image(c, img_paths[0], margin, y-max_height, side_width, max_height)
-        nh2 = add_image(c, img_paths[1], margin + side_width + gap, y-max_height, side_width, max_height)
-        used_height = max(nh1, nh2)
-        y -= used_height
-        y -= 20
-        # Third image below, if it exists
-        if img_paths[2].exists():
-            c.setFont("Helvetica-Bold", 14)
-            c.drawString(margin, y, img_labels[2])
-            y -= 10
-            nh3 = add_image(c, img_paths[2], margin, y-max_height, width-2*margin, max_height)
-            y -= nh3
-            y -= 12
-    else:
-        # Fallback: show images vertically as before
-        for label, fname in img_types:
-            img_path = vis_dir / fname
-            if img_path.exists():
-                c.setFont("Helvetica-Bold", 14)
-                c.drawString(margin, y, label)
-                y -= 6
-                used_height = add_image(c, img_path, margin, y-400, width-2*margin, 400)
-                y -= used_height
-                y -= 4
+    # Add images - create one set of all visualizations per active zone
+    img_types = []
+    if selected_az_indices is not None and len(selected_az_indices) > 0:
+        # Add all visualizations for each active zone
+        for az_idx in selected_az_indices:
+            # Add active zonogram images for this active zone
+            img_types.append((f"Active Zonogram Position (AZ {az_idx})", f"active_zonogram_{az_idx}_position.png"))
+            img_types.append((f"Active Zonogram Selected AuNPs (AZ {az_idx})", f"active_zonogram_{az_idx}_selected_aunps.png"))
+            # Add main visualizations for this active zone
+            img_types.append((f"Analysis Summary (AZ {az_idx})", f"{tomo_name}_combined_az{az_idx}.png"))
+            img_types.append((f"AuNP Clusters Overlay (AZ {az_idx})", f"{tomo_name}_combined_aunpclusters_az{az_idx}.png"))
+            # Add cluster image for this active zone - need to find the actual zone name
+            # Look for the actual active zonogram cluster file
+            az_dir = vis_dir.parent / "active_zonograms"
+            cluster_pattern = f"{tomo_name}_active_zonogram_*_selected_aunps_by_cluster_az{az_idx}.png"
+            print(f"Looking for cluster files with pattern: {cluster_pattern}")
+            print(f"In directory: {az_dir}")
+            cluster_files = list(az_dir.glob(cluster_pattern))
+            print(f"Found cluster files: {[f.name for f in cluster_files]}")
+            if cluster_files:
+                actual_filename = cluster_files[0].name
+                print(f"Adding cluster image: {actual_filename}")
+                img_types.append((f"Active Zone AuNP Clusters (AZ {az_idx})", actual_filename))
             else:
+                # Fallback to default pattern
+                fallback_filename = f"{tomo_name}_active_zonogram_active_zone_pre1_post1_selected_aunps_by_cluster_az{az_idx}.png"
+                print(f"No cluster files found, using fallback: {fallback_filename}")
+                img_types.append((f"Active Zone AuNP Clusters (AZ {az_idx})", fallback_filename))
+    else:
+        # No active zones specified - use az0 as default
+        img_types = [
+            ("Active Zonogram Position (AZ 0)", f"active_zonogram_0_position.png"),
+            ("Active Zonogram Selected AuNPs (AZ 0)", f"active_zonogram_0_selected_aunps.png"),
+            ("Analysis Summary (AZ 0)", f"{tomo_name}_combined_az0.png"),
+            ("AuNP Clusters Overlay (AZ 0)", f"{tomo_name}_combined_aunpclusters_az0.png"),
+            ("Active Zone AuNP Clusters (AZ 0)", f"{tomo_name}_active_zonogram_active_zone_pre1_post1_selected_aunps_by_cluster_az0.png"),
+        ]
+    # Group images by active zone and render each group
+    img_paths = []
+    for _, fname in img_types:
+        print(f"Processing image: {fname}")
+        if "active_zonogram" in fname and "active_zone_pre1_post1" not in fname and "selected_aunps_by_cluster" not in fname:
+            # Active zonogram position/selected images are in the tomogram's active_zonograms directory
+            # Find the actual tomogram directory (it might be in a subdirectory)
+            tomo_dirs = list(base_data_dir.glob(f"**/{tomo_name}"))
+            if tomo_dirs:
+                az_dir = tomo_dirs[0] / "best_alignment" / "active_zonograms"
+                img_path = az_dir / fname
+                print(f"  Using tomogram directory: {img_path}")
+            else:
+                # Fallback to direct path
+                az_dir = base_data_dir / f"{tomo_name}" / "best_alignment" / "active_zonograms"
+                img_path = az_dir / fname
+                print(f"  Using fallback path: {img_path}")
+            img_paths.append(img_path)
+        elif "active_zonogram" in fname:
+            # Active zonogram cluster images are in the results active_zonograms directory
+            # Also check the tomogram's STT_results/visualizations/active_zonograms directory
+            az_dir = vis_dir.parent / "active_zonograms"
+            img_path = az_dir / fname
+            print(f"  Using results active_zonograms directory: {img_path}")
+            print(f"  File exists: {img_path.exists()}")
+            
+            # Also check tomogram directory
+            tomo_dirs = list(base_data_dir.glob(f"**/{tomo_name}"))
+            if tomo_dirs:
+                tomo_az_dir = tomo_dirs[0] / "best_alignment" / "STT_results" / "visualizations" / "active_zonograms"
+                tomo_img_path = tomo_az_dir / fname
+                print(f"  Also checking tomogram directory: {tomo_img_path}")
+                print(f"  File exists in tomogram: {tomo_img_path.exists()}")
+            
+            img_paths.append(img_path)
+        else:
+            # Regular visualization images are in the aunps_and_vesicles subdirectory
+            img_path = vis_dir / fname
+            print(f"  Using aunps_and_vesicles directory: {img_path}")
+            img_paths.append(img_path)
+    img_labels = [label for label, _ in img_types]
+    
+    # Group images by active zone
+    az_groups = {}
+    for i, (label, path) in enumerate(zip(img_labels, img_paths)):
+        # Extract active zone number from label
+        if "(AZ " in label:
+            az_num = label.split("(AZ ")[1].split(")")[0]
+            if az_num not in az_groups:
+                az_groups[az_num] = []
+            az_groups[az_num].append((label, path))
+    
+    # Render each active zone group across 2 pages
+    for i, az_num in enumerate(sorted(az_groups.keys())):
+        az_images = az_groups[az_num]
+        
+        # Separate different types of images
+        zonogram_imgs = []
+        main_vis = []
+        cluster_img = None
+        for label, path in az_images:
+            if "Active Zonogram Position" in label or "Active Zonogram Selected AuNPs" in label:
+                zonogram_imgs.append((label, path))
+            elif "Active Zone AuNP Clusters" in label:
+                cluster_img = (label, path)
+            else:
+                main_vis.append((label, path))
+        
+        # Check if we have the required main visualization images
+        if len(main_vis) >= 2 and main_vis[0][1].exists() and main_vis[1][1].exists():
+            # Calculate available width and height
+            gap = 16
+            side_width = (width - 2*margin - gap) // 2
+            max_height = 320
+            
+            # PAGE 1: Active zonogram images (stacked vertically)
+            # For the first active zone, put zonogram images on the same page as header
+            # For subsequent active zones, start a new page
+            if zonogram_imgs:
+                if i > 0:  # Not the first active zone
+                    # Check if we need a new page
+                    needed_height = (max_height + 22) * len(zonogram_imgs)
+                    if y < needed_height:
+                        c.showPage()
+                        y = height - margin
+                
+                # Draw active zonogram images (stacked vertically)
+                for label, path in zonogram_imgs:
+                    if path.exists():
+                        c.setFont("Helvetica-Bold", 14)
+                        c.drawString(margin, y, label)
+                        y -= 10
+                        nh = add_image(c, path, margin, y-max_height, width-2*margin, max_height)
+                        y -= nh
+                        y -= 12
+            
+            # PAGE 2: Main visualizations (side-by-side) and cluster image
+            c.showPage()
+            y = height - margin
+            
+            # Titles above each main visualization image
+            c.setFont("Helvetica-Bold", 14)
+            c.drawString(margin, y, main_vis[0][0])
+            c.drawString(margin + side_width + gap, y, main_vis[1][0])
+            y -= 16
+            
+            # Draw both main visualization images side by side
+            nh1 = add_image(c, main_vis[0][1], margin, y-max_height, side_width, max_height)
+            nh2 = add_image(c, main_vis[1][1], margin + side_width + gap, y-max_height, side_width, max_height)
+            used_height = max(nh1, nh2)
+            y -= used_height
+            y -= 20
+            
+            # Draw cluster image below if it exists
+            if cluster_img and cluster_img[1].exists():
+                c.setFont("Helvetica-Bold", 14)
+                c.drawString(margin, y, cluster_img[0])
+                y -= 10
+                nh = add_image(c, cluster_img[1], margin, y-max_height, width-2*margin, max_height)
+                y -= nh
+                y -= 12
+        else:
+            # Required images not found for this active zone - fail with error
+            missing_files = []
+            for label, path in az_images:
+                if not path.exists():
+                    missing_files.append(str(path))
+            
+            if missing_files:
+                error_msg = f"Error: Required image files not found for {tomo_name} Active Zone {az_num}:\n" + "\n".join(missing_files)
+                print(error_msg)
+                c.setFont("Helvetica-Bold", 16)
+                c.drawString(margin, y, f"ERROR: Missing required images for {tomo_name} Active Zone {az_num}")
+                y -= 30
                 c.setFont("Helvetica", 12)
-                c.drawString(margin, y, f"[Image not found: {fname}]")
-                y -= 20
+                for missing_file in missing_files:
+                    c.drawString(margin, y, f"Missing: {missing_file}")
+                    y -= 20
+                c.save()
+                return
     c.save()
-    print(f"Saved PDF: {output_dir / f'{tomo_name}_summary.pdf'}")
+    print("✅")
 
 def main():
     import argparse
@@ -394,10 +468,42 @@ def main():
     
     # Find all combined images as tomogram anchors
     allowed_tomos = set(tomo_set_map.keys())
-    combined_imgs = [img for img in vis_dir.glob('*_combined.png') if img.name.replace('_combined.png', '') in allowed_tomos]
+    # vis_dir is already the aunps_and_vesicles directory, don't append it again
+    aunps_vesicles_dir = vis_dir
     
     # Create a mapping from tomogram name to image path
-    tomo_to_img = {img.name.replace('_combined.png', ''): img for img in combined_imgs}
+    tomo_to_img = {}
+    
+    # Looking for combined images
+    
+    if aunps_vesicles_dir.exists():
+        # Look for combined images with the correct active zone suffix for each tomogram
+        for tomo_name in allowed_tomos:
+            # Get the active zone indices for this tomogram
+            az_indices = tomo_az_indices_map.get(tomo_name, [0])  # Default to [0] if not specified
+            if az_indices is None:
+                az_indices = [0]
+            
+            # Processing tomogram
+            
+            # Use the first active zone index for the combined image
+            az_suffix = az_indices[0] if len(az_indices) > 0 else 0
+            combined_img_path = aunps_vesicles_dir / f"{tomo_name}_combined_az{az_suffix}.png"
+            
+            # Looking for combined image
+            if combined_img_path.exists():
+                tomo_to_img[tomo_name] = combined_img_path
+                # Found combined image
+            else:
+                # Combined image not found
+                pass
+    else:
+        print(f"Directory {aunps_vesicles_dir} does not exist, using fallback")
+        # Fallback to old location
+        combined_imgs = [img for img in vis_dir.glob('*_combined.png') if img.name.replace('_combined.png', '') in allowed_tomos]
+        tomo_to_img = {img.name.replace('_combined.png', ''): img for img in combined_imgs}
+    
+    # Final tomogram mapping completed
     
     pdf_paths = []
     # Process tomograms in CSV order, starting from specified tomogram if given
@@ -413,7 +519,7 @@ def main():
     # Process tomograms starting from the specified index
     for i, tomo_name in enumerate(csv_tomograms[start_index:], start=start_index):
         if tomo_name in tomo_to_img:
-            print(f"Generating PDF for {tomo_name} (CSV order, position {i+1}/{len(csv_tomograms)})")
+            print(f"[{i+1}/{len(csv_tomograms)}] Generating PDF for {tomo_name}...", end=" ", flush=True)
             generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tomo_set_map, tomo_az_map, tomo_az_indices_map)
             pdf_path = output_dir / f"{tomo_name}_summary.pdf"
             if pdf_path.exists():
@@ -424,16 +530,17 @@ def main():
     # For the final combined PDF, we need to include all tomograms from the original CSV
     # So we need to check for existing PDFs for all tomograms, not just the ones we just generated
     all_pdf_paths = []
-    print(f"\nCollecting all available PDFs for combined document...")
+    print(f"\nCollecting PDFs for combined document...")
     for tomo_name in csv_tomograms:
         pdf_path = output_dir / f"{tomo_name}_summary.pdf"
         if pdf_path.exists():
             all_pdf_paths.append(str(pdf_path))
-            print(f"  ✓ Found PDF for {tomo_name}")
+            # Found PDF
         else:
-            print(f"  ✗ No PDF found for {tomo_name} - will be skipped in combined PDF")
+            # No PDF found - will be skipped
+            pass
     
-    print(f"\nFound {len(all_pdf_paths)} PDFs to combine")
+    # Found PDFs to combine
     # Combine all PDFs into a single document
     if all_pdf_paths:
         merger = PdfMerger()
@@ -481,7 +588,6 @@ def main():
         merged_pdf_path = output_dir / "all_tomograms_summary.pdf"
         merger.write(str(merged_pdf_path))
         merger.close()
-        print(f"Combined {len(all_pdf_paths)} PDFs into: {merged_pdf_path}")
-        print(f"Note: Combined PDF includes all available tomogram summaries from the original CSV")
+        print(f"✓ Combined {len(all_pdf_paths)} PDFs into: {merged_pdf_path}")
 if __name__ == "__main__":
     main() 
