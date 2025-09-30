@@ -13,7 +13,7 @@ from pathlib import Path
 # Add the src directory to the Python path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from synaptic_tomo_tools.ampa_poses import run_ampa_poses_analysis_optimized
+from synaptic_tomo_tools.ampa_poses import run_ampa_poses_analysis_original, run_ampa_poses_analysis_optimized
 
 
 def main():
@@ -88,9 +88,22 @@ Examples:
     
     parser.add_argument(
         "--method",
-        choices=["greedy", "ilp"],
+        choices=["original", "greedy", "ilp"],
         default="greedy",
-        help="Optimization method: 'greedy' for fast heuristic solution (saves to greedy/), 'ilp' for exact optimal solution using integer linear programming (saves to ilp/) (default: greedy)"
+        help="Analysis method: 'original' for all poses (no optimization), 'greedy' for fast heuristic solution (saves to greedy/), 'ilp' for exact optimal solution using integer linear programming (saves to ilp/) (default: greedy)"
+    )
+    
+    parser.add_argument(
+        "--steric-radius",
+        type=float,
+        default=5.0,
+        help="Minimum distance between particle positions in nm (default: 5.0)"
+    )
+    
+    parser.add_argument(
+        "--pdb-file",
+        type=str,
+        help="Path to PDB file for structure template. If provided, generates PDB files with AMPA structures at calculated poses. Leave empty to skip PDB generation."
     )
     
     args = parser.parse_args()
@@ -124,6 +137,11 @@ Examples:
         else:
             print("Active zones: all")
         print(f"Method: {args.method}")
+        print(f"Steric radius: {args.steric_radius} nm")
+        if args.pdb_file:
+            print(f"PDB file: {args.pdb_file}")
+        else:
+            print("PDB file: None (skipping PDB generation)")
         print()
         
         # Set distance parameters based on cutoff flags
@@ -137,15 +155,27 @@ Examples:
         else:
             aunp_membrane_distance = (args.membrane_min_distance, args.membrane_max_distance)
         
-        results = run_ampa_poses_analysis_optimized(
-            tomo_path=args.tomogram_path,
-            output_dir=args.output_dir,
-            aunp_active_zones=args.aunp_active_zones,
-            inter_aunp_distance=inter_aunp_distance,
-            aunp_membrane_distance=aunp_membrane_distance,
-            ampa_steric_radius=5.0,
-            method=args.method
-        )
+        # Choose the appropriate analysis method
+        if args.method == "original":
+            results = run_ampa_poses_analysis_original(
+                tomo_path=args.tomogram_path,
+                output_dir=args.output_dir,
+                aunp_active_zones=args.aunp_active_zones,
+                inter_aunp_distance=inter_aunp_distance,
+                aunp_membrane_distance=aunp_membrane_distance,
+                pdb_file=args.pdb_file
+            )
+        else:
+            results = run_ampa_poses_analysis_optimized(
+                tomo_path=args.tomogram_path,
+                output_dir=args.output_dir,
+                aunp_active_zones=args.aunp_active_zones,
+                inter_aunp_distance=inter_aunp_distance,
+                aunp_membrane_distance=aunp_membrane_distance,
+                ampa_steric_radius=args.steric_radius,
+                method=args.method,
+                pdb_file=args.pdb_file
+            )
         
         if results["status"] == "success":
             print(f"AMPA poses analysis completed successfully!")

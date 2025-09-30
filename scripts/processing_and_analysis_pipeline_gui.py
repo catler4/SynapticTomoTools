@@ -504,6 +504,15 @@ Do you want to continue?"""
         if path:
             self.cluster_csv_path.set(path)
     
+    def _browse_ampa_pdb_file(self):
+        """Browse for AMPA PDB file."""
+        file_path = filedialog.askopenfilename(
+            title="Select PDB file for AMPA structure",
+            filetypes=[("PDB files", "*.pdb"), ("All files", "*.*")]
+        )
+        if file_path:
+            self.ampa_pdb_file.set(file_path)
+    
     def _load_tomograms_from_csv(self):
         """Load tomogram names from the selected CSV file and populate the dropdown."""
         csv_path = self.csv_path.get()
@@ -816,9 +825,9 @@ Do you want to continue?"""
             self._img_refs.append(img)
         
         # Run Analysis button at the top
-        ampa_run_btn = ttk.Button(controls_frame, text="Run Pose Prediction", command=self._run_ampa_poses_analysis_optimized)
+        ampa_run_btn = ttk.Button(controls_frame, text="Run Pose Prediction", command=self._run_ampa_poses_analysis_with_selected_method)
         ampa_run_btn.pack(anchor=tk.W, pady=5)
-        ToolTip(ampa_run_btn, "Run optimized AMPA poses analysis with maximum matching and steric constraints. Uses greedy or ILP optimization methods.")
+        ToolTip(ampa_run_btn, "Run AMPA poses analysis using the selected method: All poses (no optimization), Greedy (fast heuristic), or ILP (exact optimal).")
         
         # AMPA Poses Analysis section
         ampa_frame = ttk.LabelFrame(controls_frame, text="Analysis Parameters", padding=15)
@@ -856,16 +865,27 @@ Do you want to continue?"""
         ttk.Label(params_frame, text="Steric Radius (nm):").grid(row=2, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
         self.ampa_steric_radius = tk.StringVar(value="5.0")
         ttk.Entry(params_frame, textvariable=self.ampa_steric_radius, width=10).grid(row=2, column=1, padx=(0, 5), pady=(10, 0))
-        ttk.Label(params_frame, text="(minimum distance between AMPA positions)").grid(row=2, column=2, columnspan=3, sticky=tk.W, padx=(5, 0), pady=(10, 0))
+        ttk.Label(params_frame, text="(minimum distance between particle positions)").grid(row=2, column=2, columnspan=3, sticky=tk.W, padx=(5, 0), pady=(10, 0))
         
-        # Optimization method selection
-        ttk.Label(params_frame, text="Optimization Method:").grid(row=3, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
-        self.ampa_optimization_method = tk.StringVar(value="greedy")
+        # Analysis method selection
+        ttk.Label(params_frame, text="Analysis Method:").grid(row=3, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
+        self.ampa_optimization_method = tk.StringVar(value="original")
         method_frame = ttk.Frame(params_frame)
         method_frame.grid(row=3, column=1, columnspan=4, sticky=tk.W, pady=(10, 0))
         
+        ttk.Radiobutton(method_frame, text="All poses", variable=self.ampa_optimization_method, value="original").pack(side=tk.LEFT, padx=(0, 15))
         ttk.Radiobutton(method_frame, text="Greedy (fast, heuristic)", variable=self.ampa_optimization_method, value="greedy").pack(side=tk.LEFT, padx=(0, 15))
         ttk.Radiobutton(method_frame, text="ILP (exact, linear)", variable=self.ampa_optimization_method, value="ilp").pack(side=tk.LEFT)
+        
+        # PDB file parameter
+        ttk.Label(params_frame, text="PDB File:").grid(row=4, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
+        self.ampa_pdb_file = tk.StringVar()
+        pdb_entry = ttk.Entry(params_frame, textvariable=self.ampa_pdb_file, width=15)
+        pdb_entry.grid(row=4, column=1, padx=(0, 5), pady=(10, 0))
+        pdb_browse_btn = ttk.Button(params_frame, text="Browse...", command=self._browse_ampa_pdb_file)
+        pdb_browse_btn.grid(row=4, column=2, padx=(5, 0), pady=(10, 0))
+        ttk.Label(params_frame, text="(leave empty to skip PDB generation)").grid(row=4, column=3, columnspan=2, sticky=tk.W, padx=(5, 0), pady=(10, 0))
+        ToolTip(pdb_entry, "Select a PDB file to generate PDB files with AMPA structures at calculated poses. Leave empty to skip PDB generation.")
         
         
         # Add Stop button in bottom right of tab
@@ -1124,9 +1144,21 @@ Do you want to continue?"""
                         # Parse active zones (can be comma-separated or space-separated)
                         aunp_active_zones_str = str(aunp_active_zones_str).strip()
                         if ',' in aunp_active_zones_str:
-                            aunp_active_zones = [int(x.strip()) for x in aunp_active_zones_str.split(',')]
+                            aunp_active_zones = []
+                            for x in aunp_active_zones_str.split(','):
+                                x = x.strip()
+                                if x.isdigit():
+                                    aunp_active_zones.append(int(x))
+                                elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
+                                    aunp_active_zones.append(int(float(x)))
                         else:
-                            aunp_active_zones = [int(x.strip()) for x in aunp_active_zones_str.split()]
+                            aunp_active_zones = []
+                            for x in aunp_active_zones_str.split():
+                                x = x.strip()
+                                if x.isdigit():
+                                    aunp_active_zones.append(int(x))
+                                elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
+                                    aunp_active_zones.append(int(float(x)))
                         self._log(f"Using active zones for {tomogram_name}: {aunp_active_zones}\n")
                     except (ValueError, AttributeError):
                         self._log(f"Warning: Could not parse active zones for {tomogram_name}: {aunp_active_zones_str}\n")
@@ -1280,6 +1312,16 @@ Do you want to continue?"""
         
         # Start the sequential analysis in a background thread
         threading.Thread(target=run_sequential_analysis).start()
+
+    def _run_ampa_poses_analysis_with_selected_method(self):
+        """Run AMPA poses analysis using the selected method from radio buttons."""
+        selected_method = self.ampa_optimization_method.get()
+        if selected_method == "original":
+            self._run_ampa_poses_analysis_with_method("original")
+        elif selected_method in ["greedy", "ilp"]:
+            self._run_ampa_poses_analysis_with_method("optimized")
+        else:
+            messagebox.showerror("Error", f"Unknown method selected: {selected_method}")
 
     def _run_ampa_poses_analysis_original(self):
         """Run the original AMPA poses analysis method."""
@@ -1437,9 +1479,21 @@ Do you want to continue?"""
                         # Parse active zones (can be comma-separated or space-separated)
                         aunp_active_zones_str = str(aunp_active_zones_str).strip()
                         if ',' in aunp_active_zones_str:
-                            aunp_active_zones = [int(x.strip()) for x in aunp_active_zones_str.split(',')]
+                            aunp_active_zones = []
+                            for x in aunp_active_zones_str.split(','):
+                                x = x.strip()
+                                if x.isdigit():
+                                    aunp_active_zones.append(int(x))
+                                elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
+                                    aunp_active_zones.append(int(float(x)))
                         else:
-                            aunp_active_zones = [int(x.strip()) for x in aunp_active_zones_str.split()]
+                            aunp_active_zones = []
+                            for x in aunp_active_zones_str.split():
+                                x = x.strip()
+                                if x.isdigit():
+                                    aunp_active_zones.append(int(x))
+                                elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
+                                    aunp_active_zones.append(int(float(x)))
                         self._log(f"Using active zones for {tomogram_name}: {aunp_active_zones}\n")
                     except (ValueError, AttributeError):
                         self._log(f"Warning: Could not parse active zones for {tomogram_name}: {aunp_active_zones_str}\n")
@@ -1460,25 +1514,30 @@ Do you want to continue?"""
                 cli_original = ["python", "-u", "scripts/run_ampa_poses_analysis.py"]
                 cli_original += ["--tomogram-path", tomogram_path]
                 cli_original += ["--output-dir", original_output_dir]
-            
-            # Add distance parameters only if cutoffs are enabled
-            if not aunp_no_cutoff:
-                cli_original += ["--aunp-min-distance", str(aunp_min_dist)]
-                cli_original += ["--aunp-max-distance", str(aunp_max_dist)]
-            else:
-                cli_original += ["--no-aunp-distance-cutoff"]
                 
-            if not membrane_no_cutoff:
-                cli_original += ["--membrane-min-distance", str(membrane_min_dist)]
-                cli_original += ["--membrane-max-distance", str(membrane_max_dist)]
-            else:
-                cli_original += ["--no-membrane-distance-cutoff"]
-            
-            # Add active zones if specified
-            if aunp_active_zones is not None:
-                cli_original += ["--aunp-active-zones"] + [str(az) for az in aunp_active_zones]
-            
-            tomogram_commands.append(("all_poses", cli_original))
+                # Add distance parameters only if cutoffs are enabled
+                if not aunp_no_cutoff:
+                    cli_original += ["--aunp-min-distance", str(aunp_min_dist)]
+                    cli_original += ["--aunp-max-distance", str(aunp_max_dist)]
+                else:
+                    cli_original += ["--no-aunp-distance-cutoff"]
+                    
+                if not membrane_no_cutoff:
+                    cli_original += ["--membrane-min-distance", str(membrane_min_dist)]
+                    cli_original += ["--membrane-max-distance", str(membrane_max_dist)]
+                else:
+                    cli_original += ["--no-membrane-distance-cutoff"]
+                
+                # Add active zones if specified
+                if aunp_active_zones is not None:
+                    cli_original += ["--aunp-active-zones"] + [str(az) for az in aunp_active_zones]
+                
+                # Add PDB file if specified
+                pdb_file = self.ampa_pdb_file.get().strip()
+                if pdb_file:
+                    cli_original += ["--pdb-file", pdb_file]
+                
+                tomogram_commands.append(("all_poses", cli_original))
             
             if method in ["optimized", "both"]:
                 # Optimized method - determine output directory based on method
@@ -1516,6 +1575,11 @@ Do you want to continue?"""
                 # Add optimization method
                 optimization_method = self.ampa_optimization_method.get()
                 cli_optimized += ["--method", optimization_method]
+                
+                # Add PDB file if specified
+                pdb_file = self.ampa_pdb_file.get().strip()
+                if pdb_file:
+                    cli_optimized += ["--pdb-file", pdb_file]
                 
                 tomogram_commands.append((method_output_dir_name, cli_optimized))
             

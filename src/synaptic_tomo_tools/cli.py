@@ -301,7 +301,6 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
         "vesicle_vesicle_detection_vesicle_count_by_set.png",
         "vesicle_vesicle_detection_nearby_vesicle_count_by_set.png",
         "vesicle_vesicle_detection_average_vesicle_diameter_by_set.png",
-        "activezone_active_zone_count_by_set.png",
         "activezone_avg_active_zone_area_by_set.png",
         "activezone_average_cleft_width_by_set.png"
     ]

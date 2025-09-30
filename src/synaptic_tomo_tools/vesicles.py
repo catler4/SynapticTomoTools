@@ -787,11 +787,11 @@ def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Di
             sphericity_fit_quality = [s['sphericity_fit_quality'] for s in sphericities]
             combined_sphericity = [s['combined_sphericity'] for s in sphericities]
             
-            # Count vesicles within 10 nm of active zone using the same logic as save_nearby_vesicles
+            # Count vesicles within 20 nm of active zone using the same logic as save_nearby_vesicles
             nearby_vesicles = []
             for vesicle in vesicles:
                 distance_to_az = vesicle.get('distance_to_az', 0.0)
-                if distance_to_az <= 10.0:
+                if distance_to_az <= 20.0:
                     nearby_vesicles.append(vesicle)
             nearby_vesicle_count = len(nearby_vesicles)
             

@@ -308,11 +308,6 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
     aunps = load_aunps(tomo_path, aunp_active_zone_indices)
     fusion_points = load_fusion_points(tomo_path)
     
-    # Load only the active zone membranes for CSV-specified active zones, matched by distance to AuNPs
-    azs_pre, azs_post = load_specific_active_zone_coords(tomo_path, aunp_active_zone_indices, aunps)
-    
-    # Debug: Check what was loaded (simplified)
-    
     # Process active zones - auto-detect if none specified in CSV
     if aunp_active_zone_indices is None or len(aunp_active_zone_indices) == 0:
         print("No active zones specified in CSV, auto-detecting all available active zones")
@@ -334,6 +329,9 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
         aunp_az_numbers.sort()
         aunp_active_zone_indices = aunp_az_numbers
         print(f"Auto-detected active zones: {aunp_active_zone_indices}")
+    
+    # Load only the active zone membranes for CSV-specified or auto-detected active zones, matched by distance to AuNPs
+    azs_pre, azs_post = load_specific_active_zone_coords(tomo_path, aunp_active_zone_indices, aunps)
     
     if len(aunp_active_zone_indices) == 0:
         print("No active zones found, using middle of tomogram")
@@ -981,6 +979,10 @@ def generate_summary_figures():
         plt.ylabel(ylabel, fontsize=12)
         plt.xticks(rotation=45)
         plt.grid(True, alpha=0.3)
+        
+        # Set Y axis to start at 0 with automatic maximum
+        plt.ylim(bottom=0)
+        
         plt.tight_layout()
         plt.savefig(os.path.join(summary_dir, filename), dpi=300, bbox_inches='tight')
         plt.close()
@@ -992,21 +994,26 @@ def generate_summary_figures():
         if 'set_name' in df_aunp.columns:
             # Define metrics with their units
             aunp_metrics = {
-                'aunp_analysis_aunp_count': 'Count',
-                'aunp_analysis_nearest_neighbor_distance_mean': 'Distance (nm)'
+                'aunp_analysis_aunp_count': 'Number of AuNPs',
+                'aunp_analysis_nearest_neighbor_distance_mean': 'nm'
             }
             
             for metric, unit in aunp_metrics.items():
                 if metric in df_aunp.columns:
-                    title = f'{metric.replace("aunp_analysis_", "").replace("_", " ").title()} by Set'
-                    ylabel = f'{metric.replace("aunp_analysis_", "").replace("_", " ").title()} ({unit})'
+                    # Special case for nearest neighbor distance
+                    if 'nearest_neighbor_distance' in metric:
+                        title = 'AuNP Nearest Neighbor Distance Mean by Set'
+                        ylabel = f'AuNP Nearest Neighbor Distance Mean ({unit})'
+                    else:
+                        title = f'{metric.replace("aunp_analysis_", "").replace("_", " ").title()} by Set'
+                        ylabel = f'{metric.replace("aunp_analysis_", "").replace("_", " ").title()} ({unit})'
                     filename = f'aunp_{metric.replace("aunp_analysis_", "")}_by_set.png'
                     create_colored_boxplot(df_aunp, metric, 'set_name', title, ylabel, filename)
             
             # New: AuNP density and avg distance to AZ center
             aunp_extra_metrics = {
                 'aunp_density': 'AuNPs/μm³',
-                'distance_to_active_zone_center_mean': 'Distance (nm)'
+                'distance_to_active_zone_center_mean': 'nm'
             }
             
             for metric, unit in aunp_extra_metrics.items():
@@ -1023,9 +1030,9 @@ def generate_summary_figures():
         if 'set_name' in df_cluster.columns:
             # Define cluster metrics with their units
             cluster_metrics = {
-                'n_aunps': 'Count',
-                'cluster_area': 'Area (nm²)',
-                'cluster_density': 'Density (AuNPs/nm²)'
+                'n_aunps': 'Number of AuNPs',
+                'cluster_area': 'nm²',
+                'cluster_density': 'AuNPs/nm²'
             }
             
             for metric, unit in cluster_metrics.items():
@@ -1035,9 +1042,46 @@ def generate_summary_figures():
                     filename = f'aunp_cluster_{metric}_by_set.png'
                     create_colored_boxplot(df_cluster, metric, 'set_name', title, ylabel, filename)
             
-            # Also plot number of clusters per tomogram by set
+            # Also plot number of clusters per tomogram by set (from .star files)
             if 'tomogram_name' in df_cluster.columns:
-                cluster_counts = df_cluster.groupby(['set_name', 'tomogram_name']).size().reset_index(name='n_clusters')
+                # Count unique clusters from .star files instead of CSV
+                cluster_counts_list = []
+                for _, row in df_cluster[['set_name', 'tomogram_name']].drop_duplicates().iterrows():
+                    set_name = row['set_name']
+                    tomogram_name = row['tomogram_name']
+                    
+                    # Find the tomogram path and load the .star file
+                    import glob
+                    star_files = glob.glob(f"data/*/TOP_TOMOS/{tomogram_name}/best_alignment/STT_results/aunps/aunp_clusters.star")
+                    if star_files:
+                        try:
+                            import starfile
+                            star_data = starfile.read(star_files[0])
+                            if isinstance(star_data, dict):
+                                df_star = list(star_data.values())[0]
+                            else:
+                                df_star = star_data
+                            
+                            # Count unique valid clusters (excluding noise cluster -1)
+                            if 'aunp_cluster' in df_star.columns:
+                                valid_clusters = df_star[(df_star['aunp_cluster'] != -1) & (df_star['aunp_cluster'].notna())]
+                                unique_clusters = valid_clusters['aunp_cluster'].unique()
+                                n_clusters = len(unique_clusters)
+                            else:
+                                n_clusters = 0
+                        except Exception as e:
+                            print(f"Warning: Could not read cluster data for {tomogram_name}: {e}")
+                            n_clusters = 0
+                    else:
+                        n_clusters = 0
+                    
+                    cluster_counts_list.append({
+                        'set_name': set_name,
+                        'tomogram_name': tomogram_name,
+                        'n_clusters': n_clusters
+                    })
+                
+                cluster_counts = pd.DataFrame(cluster_counts_list)
                 title = 'Number of AuNP Clusters per Tomogram by Set'
                 ylabel = 'Number of Clusters (Count)'
                 filename = 'aunp_cluster_count_by_set.png'
@@ -1050,9 +1094,9 @@ def generate_summary_figures():
         if 'set_name' in df_ves.columns:
             # Define vesicle metrics with their units
             vesicle_metrics = {
-                'vesicle_detection_vesicle_count': 'Count',
-                'vesicle_detection_nearby_vesicle_count': 'Count',
-                'vesicle_detection_average_vesicle_diameter': 'Diameter (nm)'
+                'vesicle_detection_vesicle_count': 'Number of vesicles',
+                'vesicle_detection_nearby_vesicle_count': 'Number of vesicles',
+                'vesicle_detection_average_vesicle_diameter': 'nm'
             }
             
             for metric, unit in vesicle_metrics.items():
@@ -1069,9 +1113,8 @@ def generate_summary_figures():
         if 'set_name' in df_az.columns:
             # Define active zone metrics with their units
             az_metrics = {
-                'active_zone_count': 'Count',
-                'avg_active_zone_area': 'Area (nm²)',
-                'average_cleft_width': 'Width (nm)'
+                'avg_active_zone_area': 'µm²',
+                'average_cleft_width': 'nm'
             }
             
             for metric, unit in az_metrics.items():
@@ -1618,9 +1661,9 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                             (axxy, axxz, axyz) = fig.get_axes()
                             
                             circle_size = 36  # 6nm diameter circles
-                            axxy.scatter(selected_aunps[:,0], selected_aunps[:,1], s=circle_size, c='none', alpha=1.0, edgecolors='red', linewidth=1.5)
-                            axxz.scatter(selected_aunps[:,2], selected_aunps[:,1], s=circle_size, c='none', alpha=1.0, edgecolors='red', linewidth=1.5)
-                            axyz.scatter(selected_aunps[:,0], selected_aunps[:,2], s=circle_size, c='none', alpha=1.0, edgecolors='red', linewidth=1.5)
+                            axxy.scatter(selected_aunps[:,0], selected_aunps[:,1], s=circle_size, c='none', alpha=1.0, edgecolors='gold', linewidth=1.5)
+                            axxz.scatter(selected_aunps[:,2], selected_aunps[:,1], s=circle_size, c='none', alpha=1.0, edgecolors='gold', linewidth=1.5)
+                            axyz.scatter(selected_aunps[:,0], selected_aunps[:,2], s=circle_size, c='none', alpha=1.0, edgecolors='gold', linewidth=1.5)
                             
                             fig.savefig(aunp_path_results)
                             fig.savefig(aunp_path_tomogram)
@@ -1652,6 +1695,78 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                             axxz.scatter(pos[2], pos[1], s=circle_size, c='none', alpha=1.0, edgecolors=color, linewidth=1.5)
                             axyz.scatter(pos[0], pos[2], s=circle_size, c='none', alpha=1.0, edgecolors=color, linewidth=1.5)
                         
+                        # Add fusion points if available
+                        fusion_points = []
+                        fusion_points_transformed = []
+                        try:
+                            # Try to load cached fusion points first
+                            fusion_points_cache_path = Path(tomogram_path) / "best_alignment" / "STT_results" / "vesicles" / "fusion_points.npy"
+                            
+                            if fusion_points_cache_path.exists():
+                                try:
+                                    fusion_points = np.load(fusion_points_cache_path)
+                                except Exception as e:
+                                    print(f"Could not load cached fusion points: {e}")
+                            
+                            # Compute fusion points if not cached
+                            if len(fusion_points) == 0:
+                                try:
+                                    from synaptic_tomo_tools.aunps import compute_fusion_points
+                                    fusion_points = compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0)
+                                except Exception as e:
+                                    print(f"Could not compute fusion points: {e}")
+                                    fusion_points = []
+                            
+                            if len(fusion_points) > 0:
+                                # Transform fusion points to the same coordinate system as AuNPs
+                                from torch_affine_utils.utils import homogenise_coordinates
+                                import einops
+                                
+                                # Convert to homogeneous coordinates
+                                fusion_points_homog = homogenise_coordinates(torch.tensor(fusion_points, dtype=torch.float32))
+                                
+                                # Apply transformation matrix
+                                M = torch.tensor(original_zone_data['transformation_matrix'], dtype=torch.float32)
+                                transformed_fusion_points = M @ einops.rearrange(fusion_points_homog, 'b xyzw -> b xyzw 1')
+                                transformed_fusion_points = einops.rearrange(transformed_fusion_points, 'b xyzw 1 -> b xyzw')[:, :3]
+                                
+                                # Add offset to center in the zonogram
+                                center = original_zone_data['center']
+                                extent = original_zone_data['extent']
+                                new_center = extent // 2
+                                fusion_points_transformed = transformed_fusion_points.numpy() + new_center
+                                
+                                # Filter points within the zonogram
+                                valid_mask = np.all(fusion_points_transformed >= 0, axis=1) & np.all(fusion_points_transformed < extent.reshape(1, -1), axis=1)
+                                fusion_points_transformed = fusion_points_transformed[valid_mask]
+                                
+                                if len(fusion_points_transformed) > 0:
+                                    # Plot fusion points as orange stars with cyan circles on all three views
+                                    for fp in fusion_points_transformed:
+                                        # Plot the orange star
+                                        axxy.scatter(fp[0], fp[1], color='orange', s=100, alpha=0.9, marker='*', 
+                                                   edgecolors='darkorange', linewidth=0.5)
+                                        axxz.scatter(fp[2], fp[1], color='orange', s=100, alpha=0.9, marker='*', 
+                                                   edgecolors='darkorange', linewidth=0.5)
+                                        axyz.scatter(fp[0], fp[2], color='orange', s=100, alpha=0.9, marker='*', 
+                                                   edgecolors='darkorange', linewidth=0.5)
+                                        
+                                        # Add dotted cyan circle (40 nm diameter = 20 nm radius)
+                                        # Note: Assuming 1 pixel = 1 nm for the circle radius
+                                        circle_radius = 20  # 20 nm radius for 40 nm diameter
+                                        circle_xy = plt.Circle((fp[0], fp[1]), circle_radius, fill=False, 
+                                                             color='cyan', linestyle=':', linewidth=1.5, alpha=0.8)
+                                        circle_xz = plt.Circle((fp[2], fp[1]), circle_radius, fill=False, 
+                                                             color='cyan', linestyle=':', linewidth=1.5, alpha=0.8)
+                                        circle_yz = plt.Circle((fp[0], fp[2]), circle_radius, fill=False, 
+                                                             color='cyan', linestyle=':', linewidth=1.5, alpha=0.8)
+                                        
+                                        axxy.add_patch(circle_xy)
+                                        axxz.add_patch(circle_xz)
+                                        axyz.add_patch(circle_yz)
+                        except Exception as e:
+                            print(f"Warning: Could not load fusion points: {e}")
+                        
                         legend_handles = []
                         legend_labels = []
                         if -1 in cluster_color_map:
@@ -1664,10 +1779,25 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                                                        markeredgecolor=cluster_color_map[cluster], markersize=8, linewidth=1.5)
                             legend_handles.append(cluster_handle)
                             legend_labels.append(f'Cluster {cluster}')
+                        
+                        # Add fusion points to legend if they were plotted
+                        if len(fusion_points) > 0 and len(fusion_points_transformed) > 0:
+                            # Create a custom legend entry showing both star and circle
+                            from matplotlib.patches import Circle
+                            from matplotlib.lines import Line2D
+                            
+                            # Create a custom legend handle that shows both elements
+                            fusion_handle = Line2D([0], [0], marker='*', color='w', markerfacecolor='orange', 
+                                                 markeredgecolor='darkorange', markersize=10, linewidth=0.5,
+                                                 linestyle=':', markeredgewidth=1.5)
+                            legend_handles.append(fusion_handle)
+                            legend_labels.append('Fusion Sites (40nm)')
+                        
                         if legend_handles:
                             fig.legend(legend_handles, legend_labels, loc='lower right', bbox_to_anchor=(1.0, 0.0),
                                       fontsize=8, frameon=True, fancybox=True, shadow=True)
                         
+                        # Save the version with fusion points
                         cluster_filename = f"{tomogram_name}_active_zonogram_{zone_name}_selected_aunps_by_cluster{suffix}.png"
                         cluster_path_results = results_active_zonograms_dir / cluster_filename
                         cluster_path_tomogram = tomogram_active_zonograms_dir / cluster_filename
@@ -1678,9 +1808,54 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                         else:
                             fig.savefig(cluster_path_results)
                             fig.savefig(cluster_path_tomogram)
-                            plt.close(fig)
                             print(f"    ✓ Saved PNG: {cluster_filename}")
                             files_created.append(cluster_filename)
+                        
+                        # Create and save a version without fusion points for comparison
+                        fig_no_fusion = render_active_zonograms_findingampa_style(zonogram_findingampa)
+                        (axxy_no_fusion, axxz_no_fusion, axyz_no_fusion) = fig_no_fusion.get_axes()
+                        
+                        # Plot only the cluster-colored AuNPs (no fusion points)
+                        for i, (pos, cluster) in enumerate(zip(selected_aunps, cluster_assignments)):
+                            color = cluster_color_map.get(cluster, 'gray')
+                            axxy_no_fusion.scatter(pos[0], pos[1], s=circle_size, c='none', alpha=1.0, edgecolors=color, linewidth=1.5)
+                            axxz_no_fusion.scatter(pos[2], pos[1], s=circle_size, c='none', alpha=1.0, edgecolors=color, linewidth=1.5)
+                            axyz_no_fusion.scatter(pos[0], pos[2], s=circle_size, c='none', alpha=1.0, edgecolors=color, linewidth=1.5)
+                        
+                        # Add legend without fusion points
+                        legend_handles_no_fusion = []
+                        legend_labels_no_fusion = []
+                        if -1 in cluster_color_map:
+                            noise_handle = plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='none',
+                                                     markeredgecolor=cluster_color_map[-1], markersize=8, linewidth=1.5)
+                            legend_handles_no_fusion.append(noise_handle)
+                            legend_labels_no_fusion.append('Non-clustered')
+                        for cluster in sorted(non_noise_clusters):
+                            cluster_handle = plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='none',
+                                                       markeredgecolor=cluster_color_map[cluster], markersize=8, linewidth=1.5)
+                            legend_handles_no_fusion.append(cluster_handle)
+                            legend_labels_no_fusion.append(f'Cluster {cluster}')
+                        
+                        if legend_handles_no_fusion:
+                            fig_no_fusion.legend(legend_handles_no_fusion, legend_labels_no_fusion, loc='lower right', bbox_to_anchor=(1.0, 0.0),
+                                               fontsize=8, frameon=True, fancybox=True, shadow=True)
+                        
+                        # Save the version without fusion points
+                        cluster_no_fusion_filename = f"{tomogram_name}_active_zonogram_{zone_name}_selected_aunps_by_cluster_no_fusion{suffix}.png"
+                        cluster_no_fusion_path_results = results_active_zonograms_dir / cluster_no_fusion_filename
+                        cluster_no_fusion_path_tomogram = tomogram_active_zonograms_dir / cluster_no_fusion_filename
+                        
+                        if cluster_no_fusion_path_results.exists() and cluster_no_fusion_path_tomogram.exists() and not rerun:
+                            print(f"    Skipping {cluster_no_fusion_filename}, already exists.")
+                            files_created.append(cluster_no_fusion_filename)
+                        else:
+                            fig_no_fusion.savefig(cluster_no_fusion_path_results)
+                            fig_no_fusion.savefig(cluster_no_fusion_path_tomogram)
+                            print(f"    ✓ Saved PNG: {cluster_no_fusion_filename}")
+                            files_created.append(cluster_no_fusion_filename)
+                        
+                        plt.close(fig)
+                        plt.close(fig_no_fusion)
             else:
                 print("No active zonograms found")
         else:
