@@ -159,7 +159,9 @@ class ResultsManager:
                     for i, val in enumerate(data):
                         flattened[f"{prefix}value_{i}"] = val
                 else:
-                    flattened[f"{prefix}first_5_values"] = str(data[:5])
+                    # Create a more CSV-friendly representation of the first 5 values
+                    first_5_str = "[" + ", ".join([f"{val:.6f}" for val in data[:5]]) + "]"
+                    flattened[f"{prefix}first_5_values"] = first_5_str
         
         return flattened
     
