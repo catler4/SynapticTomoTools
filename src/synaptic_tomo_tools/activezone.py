@@ -406,8 +406,44 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
                 active_post_faces_mask = np.isin(postsyn_data['faces'], active_post_indices).all(axis=1)
                 active_post_faces_indices = np.where(active_post_faces_mask)[0]
                 active_post_mesh = post_mesh.submesh([active_post_faces_indices], append=True)
-                # Get area of active presynaptic mesh
-                active_pre_area = active_pre_mesh.area / 1e6  # Convert to µm²
+                
+                # Filter out back-facing faces (those facing away from postsynaptic side)
+                total_faces = len(active_pre_mesh.faces)
+                front_facing_faces = total_faces
+                
+                if len(active_pre_coords) > 0 and len(postsyn_coords[active_post_indices]) > 0:
+                    # Calculate face normals for active presynaptic mesh
+                    face_normals = active_pre_mesh.face_normals
+                    face_centers = active_pre_mesh.triangles_center
+                    
+                    # Calculate vector from face center to postsynaptic center
+                    postsyn_center = np.mean(postsyn_coords[active_post_indices], axis=0)
+                    face_to_postsyn_vectors = postsyn_center - face_centers
+                    
+                    # Normalize vectors
+                    face_to_postsyn_vectors = face_to_postsyn_vectors / np.linalg.norm(face_to_postsyn_vectors, axis=1, keepdims=True)
+                    
+                    # Calculate dot product between face normals and vectors to postsynaptic center
+                    # Positive dot product means face is pointing toward postsynaptic side
+                    dot_products = np.sum(face_normals * face_to_postsyn_vectors, axis=1)
+                    
+                    # Keep only faces pointing toward postsynaptic side (positive dot product)
+                    front_facing_mask = dot_products > 0
+                    front_facing_face_indices = np.where(front_facing_mask)[0]
+                    front_facing_faces = len(front_facing_face_indices)
+                    
+                    if len(front_facing_face_indices) > 0:
+                        # Create mesh with only front-facing faces
+                        front_facing_mesh = active_pre_mesh.submesh([front_facing_face_indices], append=True)
+                        active_pre_area = front_facing_mesh.area / 1e6  # Convert to µm²
+                    else:
+                        # Fallback: use all faces if no front-facing faces found
+                        active_pre_area = active_pre_mesh.area / 1e6  # Convert to µm²
+                        front_facing_faces = total_faces
+                else:
+                    # Fallback: use all faces if no postsynaptic points
+                    active_pre_area = active_pre_mesh.area / 1e6  # Convert to µm²
+                    front_facing_faces = total_faces
                 active_zones[zone_name] = {
                     'presynaptic_membrane_index': pre_idx + 1,
                     'postsynaptic_membrane_index': post_idx + 1,
@@ -415,6 +451,9 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
                     'active_presynaptic_faces': active_pre_mesh.faces,
                     'active_presynaptic_mesh': active_pre_mesh,
                     'active_presynaptic_area': active_pre_area,
+                    'total_faces': total_faces,
+                    'front_facing_faces': front_facing_faces,
+                    'back_facing_faces': total_faces - front_facing_faces,
                     'active_postsynaptic_points': postsyn_coords[active_post_indices] if len(active_post_indices) > 0 else np.array([]),
                     'active_postsynaptic_mesh': active_post_mesh,
                     'active_presynaptic_indices': active_pre_indices,
@@ -497,7 +536,10 @@ def define_active_zone(tomogram_path) -> Dict[str, Any]:
             # Use the active presynaptic area calculated from GLB mesh
             if 'active_presynaptic_area' in zone_data:
                 active_zone_areas.append(zone_data['active_presynaptic_area'])
-                print(f"Active zone area {zone_name}: {zone_data['active_presynaptic_area']:.6f} µm²")
+                total_faces = zone_data.get('total_faces', 0)
+                front_facing_faces = zone_data.get('front_facing_faces', 0)
+                back_facing_faces = zone_data.get('back_facing_faces', 0)
+                print(f"Active zone area {zone_name}: {zone_data['active_presynaptic_area']:.6f} µm² (faces: {front_facing_faces}/{total_faces} front-facing, {back_facing_faces} back-facing)")
             else:
                 # Skip active zones without mesh area data
                 print(f"Warning: No mesh area data available for {zone_name}, skipping area calculation")

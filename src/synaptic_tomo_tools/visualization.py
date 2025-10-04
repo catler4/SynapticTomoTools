@@ -465,15 +465,7 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
     azs_post_in_slice = filter_coords_in_slice(azs_post, z_center, z_thresh_az, None)
     aunps_near = filter_aunps_near_slice(aunps, z_center, z_thresh_aunps_fusion)
     
-    # Filter fusion points near the slice
-    fusion_points_near = None
-    if fusion_points is not None and len(fusion_points) > 0:
-        mask = np.abs(fusion_points[:, 2] - z_center) <= z_thresh_aunps_fusion
-        if np.any(mask):
-            fusion_points_near = fusion_points[mask]
-    
     # Debug output (simplified)
-    # Found fusion points in slice
     
     # Version 1: Vesicles and Active Zones
     output_file1 = output_dir / f"{tomo_name}_vesicles_active_zones_{suffix}.png"
@@ -556,49 +548,36 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
             ax2.scatter(aunps_near['faCoordinateX'], aunps_near['faCoordinateY'], 
                       color='gold', s=30, alpha=0.8, label='AuNPs')
         
-        # Add fusion points for vesicles within 20nm
-        if fusion_points_near is not None and len(fusion_points_near) > 0:
-            ax2.scatter(fusion_points_near[:, 0], fusion_points_near[:, 1], 
-                       color='orange', s=100, alpha=0.9, marker='*', 
-                       label='Fusion Sites' if 'Fusion Sites' not in [l.get_label() for l in ax2.get_legend_handles_labels()[0]] else '')
-            # Plotted fusion points within slice
-        
-        # Only show fusion points for vesicles within 20nm that are also within 10 nm of slice
-        vesicles_within_20nm = [v for v in vesicles_in_slice if v.get('distance_to_az', 99) <= 20]
-        # Found vesicles within 20nm in slice
-        
-        if vesicles_within_20nm and fusion_points is not None and len(fusion_points) > 0:
-            # Showing fusion points for vesicles within 20nm
+        # Show fusion points for membrane-adjacent vesicles that are being displayed
+        if fusion_points is not None and len(fusion_points) > 0 and len(vesicles_in_slice) > 0:
+            # Filter to only membrane-adjacent vesicles (≤20 nm from active zone) that are being displayed
+            membrane_adjacent_vesicles_in_slice = [v for v in vesicles_in_slice if v.get('distance_to_az', 99) <= 20]
             
-            # For each vesicle within 20nm, find its corresponding fusion point
-            from scipy.spatial.distance import cdist
-            vesicle_centers = np.array([v['center'] for v in vesicles_within_20nm])
-            
-            # Find the closest fusion point to each vesicle within 20nm
-            if len(fusion_points) > 0:
+            if len(membrane_adjacent_vesicles_in_slice) > 0:
+                from scipy.spatial.distance import cdist
+                vesicle_centers = np.array([v['center'] for v in membrane_adjacent_vesicles_in_slice])
+                
+                # Find the closest fusion point to each membrane-adjacent vesicle being displayed
                 distances = cdist(vesicle_centers, fusion_points)
                 closest_fusion_indices = np.argmin(distances, axis=1)
                 
-                # Plot the fusion point for each vesicle within 20nm, but only if fusion point is within 10 nm of slice
+                # Plot fusion points for membrane-adjacent vesicles being displayed
                 plotted_fusion_points = set()
-                for i, vesicle in enumerate(vesicles_within_20nm):
+                fusion_points_plotted = 0
+                
+                for i, vesicle in enumerate(membrane_adjacent_vesicles_in_slice):
                     fusion_point = fusion_points[closest_fusion_indices[i]]
                     fusion_point_tuple = tuple(fusion_point)
                     
-                    # Only plot if this fusion point is within 10 nm of the slice and hasn't been plotted yet
-                    if (abs(fusion_point[2] - z_center) <= z_thresh_aunps_fusion and 
-                        fusion_point_tuple not in plotted_fusion_points):
+                    # Plot fusion point if it hasn't been plotted yet
+                    if fusion_point_tuple not in plotted_fusion_points:
                         ax2.scatter(fusion_point[0], fusion_point[1], 
-                                   color='orange', s=100, alpha=0.9, marker='*')
+                                   color='orange', s=100, alpha=0.9, marker='*',
+                                   label='Fusion Sites' if fusion_points_plotted == 0 else '')
                         plotted_fusion_points.add(fusion_point_tuple)
-                
-                # Plotted fusion points for vesicles within 20nm and within 10 nm of slice
-        elif vesicles_within_20nm:
-            # No fusion points available to plot for vesicles within 20nm
-            pass
-        else:
-            # No vesicles within 20nm found in slice
-            pass
+                        fusion_points_plotted += 1
+            
+            # Plotted fusion points for all membrane-adjacent vesicles being displayed and near the slice
         
         # Add note about distance filtering to legend
         legend_elements = [
@@ -656,49 +635,36 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
             ax3.scatter(aunps_near['faCoordinateX'], aunps_near['faCoordinateY'], 
                       color='gold', s=30, alpha=0.8, label='AuNPs')
         
-        # Add fusion points for vesicles within 20nm
-        if fusion_points_near is not None and len(fusion_points_near) > 0:
-            ax3.scatter(fusion_points_near[:, 0], fusion_points_near[:, 1], 
-                       color='orange', s=100, alpha=0.9, marker='*', 
-                       label='Fusion Sites' if 'Fusion Sites' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
-            # Plotted fusion points within slice
-        
-        # Only show fusion points for vesicles within 20nm that are also within 10 nm of slice
-        vesicles_within_20nm = [v for v in vesicles_in_slice if v.get('distance_to_az', 99) <= 20]
-        # Found vesicles within 20nm in slice
-        
-        if vesicles_within_20nm and fusion_points is not None and len(fusion_points) > 0:
-            # Showing fusion points for vesicles within 20nm
+        # Show fusion points for membrane-adjacent vesicles that are being displayed
+        if fusion_points is not None and len(fusion_points) > 0 and len(vesicles_in_slice) > 0:
+            # Filter to only membrane-adjacent vesicles (≤20 nm from active zone) that are being displayed
+            membrane_adjacent_vesicles_in_slice = [v for v in vesicles_in_slice if v.get('distance_to_az', 99) <= 20]
             
-            # For each vesicle within 20nm, find its corresponding fusion point
-            from scipy.spatial.distance import cdist
-            vesicle_centers = np.array([v['center'] for v in vesicles_within_20nm])
-            
-            # Find the closest fusion point to each vesicle within 20nm
-            if len(fusion_points) > 0:
+            if len(membrane_adjacent_vesicles_in_slice) > 0:
+                from scipy.spatial.distance import cdist
+                vesicle_centers = np.array([v['center'] for v in membrane_adjacent_vesicles_in_slice])
+                
+                # Find the closest fusion point to each membrane-adjacent vesicle being displayed
                 distances = cdist(vesicle_centers, fusion_points)
                 closest_fusion_indices = np.argmin(distances, axis=1)
                 
-                # Plot the fusion point for each vesicle within 20nm, but only if fusion point is within 10 nm of slice
+                # Plot fusion points for membrane-adjacent vesicles being displayed
                 plotted_fusion_points = set()
-                for i, vesicle in enumerate(vesicles_within_20nm):
+                fusion_points_plotted = 0
+                
+                for i, vesicle in enumerate(membrane_adjacent_vesicles_in_slice):
                     fusion_point = fusion_points[closest_fusion_indices[i]]
                     fusion_point_tuple = tuple(fusion_point)
                     
-                    # Only plot if this fusion point is within 10 nm of the slice and hasn't been plotted yet
-                    if (abs(fusion_point[2] - z_center) <= z_thresh_aunps_fusion and 
-                        fusion_point_tuple not in plotted_fusion_points):
+                    # Plot fusion point if it hasn't been plotted yet
+                    if fusion_point_tuple not in plotted_fusion_points:
                         ax3.scatter(fusion_point[0], fusion_point[1], 
-                                   color='orange', s=100, alpha=0.9, marker='*')
+                                   color='orange', s=100, alpha=0.9, marker='*',
+                                   label='Fusion Sites' if fusion_points_plotted == 0 else '')
                         plotted_fusion_points.add(fusion_point_tuple)
-                
-                # Plotted fusion points for vesicles within 20nm and within 10 nm of slice
-        elif vesicles_within_20nm:
-            # No fusion points available to plot for vesicles within 20nm
-            pass
-        else:
-            # No vesicles within 20nm found in slice
-            pass
+                        fusion_points_plotted += 1
+            
+            # Plotted fusion points for all membrane-adjacent vesicles being displayed and near the slice
         
         # Add note about distance filtering to legend
         legend_elements = [
