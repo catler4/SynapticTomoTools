@@ -8,11 +8,13 @@ import webbrowser
 import pandas as pd
 from pathlib import Path
 
-FIG_HOME = "figures/synaptictomotools_fig_gui_home-01.png"
-FIG_AZ = "figures/synaptictomotools_fig_gui_AZ-01.png"
-FIG_VESICLES = "figures/synaptictomotools_fig_gui_vesicles-01.png"
-FIG_AUNPS = "figures/synaptictomotools_fig_gui_aunps-01.png"
-FIG_POSES = "figures/synaptictomotools_fig_gui_poses-01.png"
+# Get the repository root directory (parent of scripts/)
+REPO_ROOT = Path(__file__).parent.parent
+FIG_HOME = REPO_ROOT / "figures" / "synaptictomotools_fig_gui_home-01.png"
+FIG_AZ = REPO_ROOT / "figures" / "synaptictomotools_fig_gui_AZ-01.png"
+FIG_VESICLES = REPO_ROOT / "figures" / "synaptictomotools_fig_gui_vesicles-01.png"
+FIG_AUNPS = REPO_ROOT / "figures" / "synaptictomotools_fig_gui_aunps-01.png"
+FIG_POSES = REPO_ROOT / "figures" / "synaptictomotools_fig_gui_poses-01.png"
 
 class ToolTip:
     def __init__(self, widget, text):
