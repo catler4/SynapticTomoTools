@@ -782,10 +782,9 @@ def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Di
             signals = [v.get('average_signal', 0.0) for v in vesicles]
             scaled_signals = [v.get('scaled_signal', 0.0) for v in vesicles]
             
-            # Extract sphericity values
+            # Extract sphericity values (now only volume-based)
             sphericity_volume = [s['sphericity_volume'] for s in sphericities]
-            sphericity_fit_quality = [s['sphericity_fit_quality'] for s in sphericities]
-            combined_sphericity = [s['combined_sphericity'] for s in sphericities]
+            sphericity = [s['sphericity'] for s in sphericities]  # Primary sphericity measure
             
             # Count vesicles within 20 nm of active zone using the same logic as save_nearby_vesicles
             nearby_vesicles = []
@@ -824,8 +823,7 @@ def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Di
                     'average_signal': vesicle.get('average_signal', 0.0),
                     'scaled_signal': vesicle.get('scaled_signal', 0.0),
                     'sphericity_volume': sphericities[i]['sphericity_volume'],
-                    'sphericity_fit_quality': sphericities[i]['sphericity_fit_quality'],
-                    'combined_sphericity': sphericities[i]['combined_sphericity']
+                    'sphericity': sphericities[i]['sphericity']  # Primary sphericity measure
                 }
                 vesicle_rows.append(row)
             
@@ -850,9 +848,8 @@ def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Di
             
             # Print sphericity statistics
             print(f"Sphericity statistics:")
-            print(f"  Volume-based: {np.mean(sphericity_volume):.3f} ± {np.std(sphericity_volume):.3f}")
-            print(f"  Fit quality: {np.mean(sphericity_fit_quality):.3f} ± {np.std(sphericity_fit_quality):.3f}")
-            print(f"  Combined sphericity: {np.mean(combined_sphericity):.3f} ± {np.std(combined_sphericity):.3f}")
+            print(f"  Volume-based (Wadell): {np.mean(sphericity_volume):.3f} ± {np.std(sphericity_volume):.3f}")
+            print(f"  Primary sphericity: {np.mean(sphericity):.3f} ± {np.std(sphericity):.3f}")
             
             results = {
                 'vesicle_count': len(vesicles),
@@ -878,14 +875,10 @@ def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Di
                 'min_sphericity_volume': float(np.min(sphericity_volume)),
                 'max_sphericity_volume': float(np.max(sphericity_volume)),
                 'sphericity_volume_std': float(np.std(sphericity_volume)),
-                'average_sphericity_fit_quality': float(np.mean(sphericity_fit_quality)),
-                'min_sphericity_fit_quality': float(np.min(sphericity_fit_quality)),
-                'max_sphericity_fit_quality': float(np.max(sphericity_fit_quality)),
-                'sphericity_fit_quality_std': float(np.std(sphericity_fit_quality)),
-                'average_combined_sphericity': float(np.mean(combined_sphericity)),
-                'min_combined_sphericity': float(np.min(combined_sphericity)),
-                'max_combined_sphericity': float(np.max(combined_sphericity)),
-                'combined_sphericity_std': float(np.std(combined_sphericity)),
+                'average_sphericity': float(np.mean(sphericity)),
+                'min_sphericity': float(np.min(sphericity)),
+                'max_sphericity': float(np.max(sphericity)),
+                'sphericity_std': float(np.std(sphericity)),
                 'status': 'completed'
             }
         else:
@@ -909,14 +902,10 @@ def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Di
                 'min_sphericity_volume': 0.0,
                 'max_sphericity_volume': 0.0,
                 'sphericity_volume_std': 0.0,
-                'average_sphericity_fit_quality': 0.0,
-                'min_sphericity_fit_quality': 0.0,
-                'max_sphericity_fit_quality': 0.0,
-                'sphericity_fit_quality_std': 0.0,
-                'average_combined_sphericity': 0.0,
-                'min_combined_sphericity': 0.0,
-                'max_combined_sphericity': 0.0,
-                'combined_sphericity_std': 0.0,
+                'average_sphericity': 0.0,
+                'min_sphericity': 0.0,
+                'max_sphericity': 0.0,
+                'sphericity_std': 0.0,
                 'status': 'completed'
             }
         
@@ -1044,37 +1033,9 @@ def measure_distances_to_az(tomogram_path) -> Dict[str, Any]:
         }
 
 
-def calculate_combined_sphericity(sphericity_data: Dict[str, float]) -> float:
-    """
-    Calculate a combined sphericity score from volume-based and fit quality sphericity measures.
-    
-    Args:
-        sphericity_data: Dictionary containing individual sphericity measures
-        
-    Returns:
-        Combined sphericity score (0-1)
-    """
-    # Extract individual sphericity values
-    volume_sphericity = sphericity_data.get('sphericity_volume', 0.0)
-    fit_quality_sphericity = sphericity_data.get('sphericity_fit_quality', 0.0)
-    
-    # Weighted average with equal emphasis on both measures
-    weights = {
-        'volume': 0.5,      # Volume vs surface area ratio
-        'fit_quality': 0.5  # How well points fit the sphere
-    }
-    
-    weighted_average = (
-        weights['volume'] * volume_sphericity +
-        weights['fit_quality'] * fit_quality_sphericity
-    )
-    
-    return float(weighted_average)
-
-
 def calculate_vesicle_sphericity(vesicle_data: Dict[str, Any]) -> Dict[str, float]:
     """
-    Calculate sphericity of a vesicle using volume-based and fit quality methods.
+    Calculate sphericity of a vesicle using volume-based method (Wadell sphericity).
     
     Args:
         vesicle_data: Dictionary containing vesicle data with coordinates and fitted sphere
@@ -1089,8 +1050,9 @@ def calculate_vesicle_sphericity(vesicle_data: Dict[str, Any]) -> Dict[str, floa
     if len(coordinates) < 4:
         return {
             'sphericity_volume': 0.0,
-            'sphericity_fit_quality': 0.0,
-            'combined_sphericity': 0.0
+            'actual_volume': 0.0,
+            'actual_surface_area': 0.0,
+            'sphericity': 0.0
         }
     
     # Method 1: Volume-based sphericity using fitted sphere
@@ -1110,27 +1072,15 @@ def calculate_vesicle_sphericity(vesicle_data: Dict[str, Any]) -> Dict[str, floa
         # Fallback if convex hull fails
         sphericity_volume = 0.0
     
-    # Method 2: Fit quality (how well the sphere fits the points)
-    distances_to_center = np.linalg.norm(coordinates - fitted_center, axis=1)
-    mean_distance = np.mean(distances_to_center)
-    std_distance = np.std(distances_to_center)
-    
-    # Sphericity based on how well points fit the sphere
-    # Lower std/mean ratio indicates more spherical shape
-    sphericity_fit_quality = 1.0 - (std_distance / mean_distance) if mean_distance > 0 else 0.0
-    
-    # Calculate combined sphericity
+    # Calculate sphericity data using only volume-based metric
     sphericity_data = {
         'sphericity_volume': float(sphericity_volume),
-        'sphericity_fit_quality': float(sphericity_fit_quality),
-        'mean_distance_to_center': float(mean_distance),
-        'std_distance_to_center': float(std_distance),
         'actual_volume': float(actual_volume) if 'actual_volume' in locals() else 0.0,
         'actual_surface_area': float(actual_surface_area) if 'actual_surface_area' in locals() else 0.0
     }
     
-    # Add combined sphericity score
-    sphericity_data['combined_sphericity'] = calculate_combined_sphericity(sphericity_data)
+    # Use volume-based sphericity as the primary sphericity measure
+    sphericity_data['sphericity'] = float(sphericity_volume)
     
     return sphericity_data
 
