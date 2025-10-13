@@ -1649,8 +1649,8 @@ def run_ampa_poses_analysis_original(tomo_path, output_dir, aunp_active_zones=No
             if star_file.exists():
                 aunp_files.append(star_file)
     else:
-        # Load all active zone files
-        aunp_files = list(aunps_dir.glob("aunp_tm_BP_active_zone_*.star"))
+        # Load all numerically named active zone files (aunp_tm_BP_active_zone_0.star, _1.star, etc.)
+        aunp_files = sorted(aunps_dir.glob("aunp_tm_BP_active_zone_[0-9]*.star"))
     
     if not aunp_files:
         print(f"❌ No AuNP files found in {aunps_dir}")
@@ -1974,18 +1974,14 @@ def run_ampa_poses_analysis_optimized(tomo_path, output_dir, aunp_active_zones=N
     print("📁 Loading AuNP data...")
     aunps_dir = tomo_path / "best_alignment" / "aunps"
     
-    if aunp_active_zones is None:
-        # Load all AuNPs
-        aunp_file = aunps_dir / "aunp_tm_BP_active_zone_all.star"
-        if not aunp_file.exists():
-            raise FileNotFoundError(f"AuNP file not found: {aunp_file}")
-        print(f"  Loading from: {aunp_file.name}")
-        aunp_data = starfile.read(aunp_file)
-        print(f"  ✅ Loaded {len(aunp_data)} AuNPs from all active zones")
-    else:
+    if not aunps_dir.exists():
+        raise FileNotFoundError(f"AuNPs directory not found: {aunps_dir}")
+    
+    # Load AuNP files
+    aunp_files = []
+    if aunp_active_zones is not None:
         # Load specific active zones
         print(f"  Loading active zones: {aunp_active_zones}")
-        aunp_files = []
         for az_id in aunp_active_zones:
             az_file = aunps_dir / f"aunp_tm_BP_active_zone_{az_id}.star"
             if az_file.exists():
@@ -1993,20 +1989,44 @@ def run_ampa_poses_analysis_optimized(tomo_path, output_dir, aunp_active_zones=N
                 print(f"    Found: {az_file.name}")
             else:
                 print(f"    ⚠️  Missing: {az_file.name}")
-        
-        if not aunp_files:
-            raise FileNotFoundError(f"No AuNP files found for active zones: {aunp_active_zones}")
-        
-        # Load and combine AuNP data
-        print(f"  Loading {len(aunp_files)} AuNP files...")
-        aunp_data_list = []
-        for i, aunp_file in enumerate(aunp_files, 1):
-            print(f"    Loading file {i}/{len(aunp_files)}: {aunp_file.name}")
-            aunp_data = starfile.read(aunp_file)
-            aunp_data_list.append(aunp_data)
-        
-        aunp_data = pd.concat(aunp_data_list, ignore_index=True)
-        print(f"  ✅ Combined {len(aunp_data)} AuNPs from {len(aunp_files)} files")
+    else:
+        # Load all numerically named active zone files (aunp_tm_BP_active_zone_0.star, _1.star, etc.)
+        print("  Loading all numerically named active zone files...")
+        aunp_files = sorted(aunps_dir.glob("aunp_tm_BP_active_zone_[0-9]*.star"))
+        if aunp_files:
+            print(f"    Found {len(aunp_files)} active zone files:")
+            for aunp_file in aunp_files:
+                print(f"      - {aunp_file.name}")
+        else:
+            print("    ⚠️  No numerically named active zone files found")
+    
+    if not aunp_files:
+        raise FileNotFoundError(f"No AuNP files found in {aunps_dir}")
+    
+    # Load and combine AuNP data
+    print(f"  Loading {len(aunp_files)} AuNP files...")
+    aunp_data_list = []
+    for i, aunp_file in enumerate(aunp_files, 1):
+        print(f"    Loading file {i}/{len(aunp_files)}: {aunp_file.name}")
+        try:
+            star_data = starfile.read(aunp_file)
+            if isinstance(star_data, dict):
+                # Handle dictionary format (with 'particles' or similar keys)
+                for df in star_data.values():
+                    if isinstance(df, pd.DataFrame):
+                        aunp_data_list.append(df)
+                        break
+            elif isinstance(star_data, pd.DataFrame):
+                aunp_data_list.append(star_data)
+        except Exception as e:
+            print(f"    ⚠️  Warning: Could not read {aunp_file.name}: {e}")
+            continue
+    
+    if not aunp_data_list:
+        raise ValueError("No valid AuNP data found in the loaded files")
+    
+    aunp_data = pd.concat(aunp_data_list, ignore_index=True)
+    print(f"  ✅ Combined {len(aunp_data)} AuNPs from {len(aunp_files)} files")
     
     aunp_coordinates = aunp_data[["faCoordinateX", "faCoordinateY", "faCoordinateZ"]].values
     print(f"  📊 Extracted {len(aunp_coordinates)} AuNP coordinates")
