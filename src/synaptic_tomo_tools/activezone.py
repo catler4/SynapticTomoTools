@@ -768,19 +768,21 @@ def calculate_cleft_width(tomogram_path) -> Dict[str, Any]:
                     set_name = part.replace("_tomograms", "")
                     break
             
-            # Prepare individual cleft distance data for CSV
+            # Prepare average cleft distance data for CSV (one row per tomogram)
             import pandas as pd
-            cleft_rows = []
-            for distance in all_distances:
-                row = {
-                    'tomogram_name': tomogram_name,
-                    'set_name': set_name,
-                    'cleft_width': distance
-                }
-                cleft_rows.append(row)
+            
+            # Calculate average cleft width for this tomogram
+            avg_cleft_width = np.mean(all_distances) if all_distances else np.nan
+            
+            cleft_row = {
+                'tomogram_name': tomogram_name,
+                'set_name': set_name,
+                'average_cleft_width': avg_cleft_width,
+                'n_measurements': len(all_distances)
+            }
             
             # Save to global CSV
-            df_cleft = pd.DataFrame(cleft_rows)
+            df_cleft = pd.DataFrame([cleft_row])
             global_csv = Path("results/all_cleft_distances.csv")
             global_csv.parent.mkdir(parents=True, exist_ok=True)
             if global_csv.exists():
@@ -795,7 +797,7 @@ def calculate_cleft_width(tomogram_path) -> Dict[str, Any]:
                     df_cleft.to_csv(global_csv, index=False)
             else:
                 df_cleft.to_csv(global_csv, index=False)
-            print(f"Appended {len(cleft_rows)} cleft measurements to {global_csv}")
+            print(f"Saved average cleft width for {tomogram_name} to {global_csv}")
             # --- End global results ---
         else:
             overall_stats = {

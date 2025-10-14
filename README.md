@@ -166,7 +166,7 @@ python -m src.synaptic_tomo_tools.cli --help
 
 - **Active zone results:**
   - `results/activezone_results.csv` — summary statistics for all tomograms
-  - `results/all_cleft_distances.csv` — all individual cleft width measurements for all tomograms
+  - `results/all_cleft_distances.csv` — average cleft width per tomogram (one row per tomogram)
   - Per-tomogram results in each tomogram's `best_alignment/STT_results/active_zones/`
 - **Vesicle results:**
   - `results/vesicle_results.csv` — summary statistics for all tomograms
@@ -175,6 +175,8 @@ python -m src.synaptic_tomo_tools.cli --help
 - **AuNP results:**
   - `results/aunp_results.csv` — summary statistics for all tomograms
   - `results/all_aunp_distances.csv` — all per-AuNP distances for all tomograms
+  - `results/close_vesicles_aunp_histograms.csv` — AuNP distance histograms from fusion points for close vesicles (<20 nm from active zone)
+  - `results/fusing_vesicles_aunp_histograms.csv` — AuNP distance histograms from fusion points for fusing vesicles (spherical perimeter within 5 nm of active zone)
   - Per-tomogram results in each tomogram's `best_alignment/aunps/` (e.g., `aunp_nearest_neighbor_distances.csv`)
 - **AuNP cluster analysis outputs:**
   - `best_alignment/STT_results/aunps/aunp_clusters.csv`: Per-cluster summary (cluster label, number of AuNPs, area, max dimension, density)
