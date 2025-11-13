@@ -13,7 +13,6 @@ from datetime import datetime
 import json
 from .vesicles import import_presynaptic_membranes_and_active_zones
 import re
-import sys
 
 # CSV export functions removed - now handled by ResultsManager
 
@@ -225,17 +224,8 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
     
     try:
         aunps_dir = Path(tomogram_path) / "best_alignment" / "aunps"
-        
-        # Check if aunps directory exists
-        if not aunps_dir.exists():
-            print(f"Error: AuNPs directory not found: {aunps_dir}")
-            return {
-                'aunp_count': 0,
-                'status': 'error',
-                'error': f'AuNPs directory not found: {aunps_dir}'
-            }
-        
-        print(f"Looking for AuNP files in: {aunps_dir}")
+        import glob
+        import os
         star_dfs = []
         if active_zone_indices is not None:
             for idx in active_zone_indices:
@@ -252,51 +242,22 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
                         star_dfs.append(star_data)
         else:
             # Load all aunp_tm_BP_active_zone_*.star files with numeric suffix (not _all.star)
-            # Use Path.glob() for better path handling
-            all_star_files = list(aunps_dir.glob("aunp_tm_BP_active_zone_*.star"))
-            print(f"[DEBUG] Found {len(all_star_files)} files matching pattern aunp_tm_BP_active_zone_*.star", flush=True)
-            sys.stdout.flush()
-            for file in all_star_files:
-                fname = file.name
-                print(f"[DEBUG] Checking file: {fname}", flush=True)
+            pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
+            for file in glob.glob(pattern):
+                fname = Path(file).name
                 m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
                 if m:
-                    print(f"[DEBUG]   Regex matched! Active zone number: {m.group(1)}", flush=True)
-                    print(f"[DEBUG] Loading numeric file: {fname}", flush=True)
-                    try:
-                        star_data = starfile.read(file)
-                        print(f"[DEBUG]   starfile.read() returned type: {type(star_data)}", flush=True)
-                        if isinstance(star_data, dict):
-                            print(f"[DEBUG]   It's a dict with keys: {list(star_data.keys())}", flush=True)
-                            for v in star_data.values():
-                                if isinstance(v, pd.DataFrame):
-                                    print(f"[DEBUG]   Successfully loaded DataFrame from {fname} (dict format, shape: {v.shape})", flush=True)
-                                    star_dfs.append(v)
-                                    break
-                        elif isinstance(star_data, pd.DataFrame):
-                            print(f"[DEBUG]   Successfully loaded DataFrame from {fname} (direct format, shape: {star_data.shape})", flush=True)
-                            star_dfs.append(star_data)
-                        else:
-                            print(f"[DEBUG]   Warning: {fname} returned unexpected type: {type(star_data)}", flush=True)
-                    except Exception as e:
-                        import traceback
-                        print(f"[DEBUG]   Error reading {fname}: {e}", flush=True)
-                        print(f"[DEBUG]   Traceback: {traceback.format_exc()}", flush=True)
-                else:
-                    print(f"[DEBUG] Skipping non-numeric file: {fname} (regex did not match)", flush=True)
-            print(f"[DEBUG] Total DataFrames loaded: {len(star_dfs)}", flush=True)
-            sys.stdout.flush()
+                    star_data = starfile.read(Path(file))
+                    if isinstance(star_data, dict):
+                        for v in star_data.values():
+                            if isinstance(v, pd.DataFrame):
+                                star_dfs.append(v)
+                                break
+                    elif isinstance(star_data, pd.DataFrame):
+                        star_dfs.append(star_data)
         
         if not star_dfs:
-            print(f"No numeric aunp_tm_BP_active_zone_*.star files found in {aunps_dir}")
-            # List what files are actually in the directory
-            all_files = list(aunps_dir.glob("*"))
-            if all_files:
-                print(f"Files found in {aunps_dir}:")
-                for f in all_files:
-                    print(f"  - {f.name}")
-            else:
-                print(f"Directory is empty or does not exist: {aunps_dir}")
+            print("No numeric aunp_tm_BP_active_zone_*.star files found and _all.star fallback is disabled.")
             return {
                 'aunp_count': 0,
                 'status': 'completed',
