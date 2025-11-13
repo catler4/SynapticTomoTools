@@ -19,23 +19,16 @@ except ImportError:
 from src.synaptic_tomo_tools.visualization import generate_summary_figures
 
 # Map each tomogram set name to its specific root directory
+# Uses TOMO_ROOT_BASE environment variable if set (same approach as GUI)
+# Otherwise defaults to "data" directory relative to current working directory
 TOMO_ROOT_BASE = os.environ.get("TOMO_ROOT_BASE")
-if TOMO_ROOT_BASE:
-    # Dynamically construct SET_ROOTS from TOMO_ROOT_BASE, with TOP_TOMOS subdir
-    SET_ROOTS = {}
-    SET_NAMES = ["15F1", "5F11", "15F1and5F11", "15F1and5F11dimer", "11B8", "unlabeled"]
-    for set_name in SET_NAMES:
-        SET_ROOTS[set_name] = Path(TOMO_ROOT_BASE) / set_name / "TOP_TOMOS"
-else:
-    SET_ROOTS = {
-        "15F1": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1_tomograms/TOP_TOMOS"),
-        "5F11": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/5F11_tomograms/TOP_TOMOS"),
-        "15F1and5F11": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1and5F11_tomograms/TOP_TOMOS"),
-        "15F1and5F11dimer": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/15F1and5F11dimer_tomograms/TOP_TOMOS"),
-        "11B8": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/11B8_tomograms/TOP_TOMOS"),
-        "unlabeled": Path("/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms/unlabeled_tomograms/TOP_TOMOS"),
-        # Add more sets here if needed
-    }
+if not TOMO_ROOT_BASE:
+    # Default to "data" directory if TOMO_ROOT_BASE is not set
+    TOMO_ROOT_BASE = "data"
+
+# SET_ROOTS will be dynamically constructed as needed in load_tomograms
+# This allows any set name from the CSV to work without hardcoding
+SET_ROOTS = {}
 
 def load_tomograms(csv_path, analysis_type, set_name=None):
     """
@@ -70,15 +63,15 @@ def load_tomograms(csv_path, analysis_type, set_name=None):
     # type: ignore[union-attr]
 
     # Construct full paths based on set-specific root
+    # Dynamically construct paths using TOMO_ROOT_BASE (same approach as GUI)
     paths = []
     for _, row in filtered.iterrows():
         row: pd.Series  # type hint for linter
         set_name = str(row["set"])
-        root = SET_ROOTS.get(set_name)
-        if root is None:
-            print(f"Warning: No root path defined for set: {set_name}. Using default path.")
-            # Use a default path structure for missing sets
-            root = Path("data") / f"{set_name}_tomograms" / "TOP_TOMOS"
+        # Dynamically construct path if not already in SET_ROOTS
+        if set_name not in SET_ROOTS:
+            SET_ROOTS[set_name] = Path(TOMO_ROOT_BASE) / set_name / "TOP_TOMOS"
+        root = SET_ROOTS[set_name]
         full_path = root / row["tomoname"]
         # Get aunp_active_zones if present, else empty string
         aunp_active_zones = row.get("aunp_active_zones", "") if "aunp_active_zones" in row else ""
@@ -627,18 +620,12 @@ def main():
 
     args = parser.parse_args()
 
-    # Handle test mode
-    global SET_ROOTS
+    # Handle test mode - set TOMO_ROOT_BASE to repo's data directory
+    global TOMO_ROOT_BASE, SET_ROOTS
     if args.test:
         repo_root = Path(__file__).parent.parent.parent.resolve()
-        SET_ROOTS = {
-            "15F1": repo_root / "data" / "15F1_tomograms" / "TOP_TOMOS",
-            "5F11": repo_root / "data" / "5F11_tomograms" / "TOP_TOMOS",
-            "15F1and5F11": repo_root / "data" / "15F1and5F11_tomograms" / "TOP_TOMOS",
-            "15F1and5F11dimer": repo_root / "data" / "15F1and5F11dimer_tomograms" / "TOP_TOMOS",
-            "11B8": repo_root / "data" / "11B8_tomograms" / "TOP_TOMOS",
-            "unlabeled": repo_root / "data" / "unlabeled_tomograms" / "TOP_TOMOS",
-        }
+        TOMO_ROOT_BASE = str(repo_root / "data")
+        SET_ROOTS = {}  # Will be dynamically constructed as needed
         if args.csv is None:
             args.csv = str(repo_root / "data" / "tomograms-test.csv")
     else:
