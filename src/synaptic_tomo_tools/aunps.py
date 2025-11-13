@@ -224,8 +224,17 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
     
     try:
         aunps_dir = Path(tomogram_path) / "best_alignment" / "aunps"
-        import glob
-        import os
+        
+        # Check if aunps directory exists
+        if not aunps_dir.exists():
+            print(f"Error: AuNPs directory not found: {aunps_dir}")
+            return {
+                'aunp_count': 0,
+                'status': 'error',
+                'error': f'AuNPs directory not found: {aunps_dir}'
+            }
+        
+        print(f"Looking for AuNP files in: {aunps_dir}")
         star_dfs = []
         if active_zone_indices is not None:
             for idx in active_zone_indices:
@@ -242,12 +251,15 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
                         star_dfs.append(star_data)
         else:
             # Load all aunp_tm_BP_active_zone_*.star files with numeric suffix (not _all.star)
-            pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
-            for file in glob.glob(pattern):
-                fname = Path(file).name
+            # Use Path.glob() for better path handling
+            all_star_files = list(aunps_dir.glob("aunp_tm_BP_active_zone_*.star"))
+            print(f"Found {len(all_star_files)} files matching pattern aunp_tm_BP_active_zone_*.star")
+            for file in all_star_files:
+                fname = file.name
                 m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
                 if m:
-                    star_data = starfile.read(Path(file))
+                    print(f"Loading numeric file: {fname}")
+                    star_data = starfile.read(file)
                     if isinstance(star_data, dict):
                         for v in star_data.values():
                             if isinstance(v, pd.DataFrame):
@@ -255,9 +267,19 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
                                 break
                     elif isinstance(star_data, pd.DataFrame):
                         star_dfs.append(star_data)
+                else:
+                    print(f"Skipping non-numeric file: {fname}")
         
         if not star_dfs:
-            print("No numeric aunp_tm_BP_active_zone_*.star files found and _all.star fallback is disabled.")
+            print(f"No numeric aunp_tm_BP_active_zone_*.star files found in {aunps_dir}")
+            # List what files are actually in the directory
+            all_files = list(aunps_dir.glob("*"))
+            if all_files:
+                print(f"Files found in {aunps_dir}:")
+                for f in all_files:
+                    print(f"  - {f.name}")
+            else:
+                print(f"Directory is empty or does not exist: {aunps_dir}")
             return {
                 'aunp_count': 0,
                 'status': 'completed',
