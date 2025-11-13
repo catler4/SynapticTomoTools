@@ -2062,6 +2062,30 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
             plt.close(fig)
             print(f"    ✓ Saved PNG: {png_filename}")
         
+        # Transform cluster AuNPs to mini zonogram coordinates using the same transformation as the tomogram
+        # (Calculate this once for use in both aunp visualization and comparison figure)
+        cluster_positions = cluster_data[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values
+        
+        # Apply the same transformation matrix that was used for the tomogram
+        from torch_affine_utils.utils import homogenise_coordinates
+        import einops
+        
+        # Convert to homogeneous coordinates
+        cluster_positions_homog = homogenise_coordinates(torch.tensor(cluster_positions, dtype=torch.float32))
+        
+        # Apply transformation matrix
+        M = torch.tensor(transformation_matrix, dtype=torch.float32)
+        transformed_cluster_positions = M @ einops.rearrange(cluster_positions_homog, 'b xyzw -> b xyzw 1')
+        transformed_cluster_positions = einops.rearrange(transformed_cluster_positions, 'b xyzw 1 -> b xyzw')[:, :3]
+        
+        # Add offset to center in the mini zonogram
+        new_center = extent // 2
+        cluster_positions_transformed = transformed_cluster_positions.numpy() + new_center
+        
+        # Filter points within the mini zonogram
+        valid_mask = np.all(cluster_positions_transformed >= 0, axis=1) & np.all(cluster_positions_transformed < extent.reshape(1, -1), axis=1)
+        cluster_positions_transformed = cluster_positions_transformed[valid_mask]
+        
         # 4. Generate AuNP visualization and save to both locations
         aunp_filename = f"{mini_filename_base}_aunps.png"
         aunp_path_tomogram = tomogram_azograms_dir / aunp_filename
@@ -2072,29 +2096,6 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
         else:
             # Create AuNP visualization
             fig, axxy = render_mini_zonogram_xy_only(mini_zonogram_findingampa)
-            
-            # Transform cluster AuNPs to mini zonogram coordinates using the same transformation as the tomogram
-            cluster_positions = cluster_data[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values
-            
-            # Apply the same transformation matrix that was used for the tomogram
-            from torch_affine_utils.utils import homogenise_coordinates
-            import einops
-            
-            # Convert to homogeneous coordinates
-            cluster_positions_homog = homogenise_coordinates(torch.tensor(cluster_positions, dtype=torch.float32))
-            
-            # Apply transformation matrix
-            M = torch.tensor(transformation_matrix, dtype=torch.float32)
-            transformed_cluster_positions = M @ einops.rearrange(cluster_positions_homog, 'b xyzw -> b xyzw 1')
-            transformed_cluster_positions = einops.rearrange(transformed_cluster_positions, 'b xyzw 1 -> b xyzw')[:, :3]
-            
-            # Add offset to center in the mini zonogram
-            new_center = extent // 2
-            cluster_positions_transformed = transformed_cluster_positions.numpy() + new_center
-            
-            # Filter points within the mini zonogram
-            valid_mask = np.all(cluster_positions_transformed >= 0, axis=1) & np.all(cluster_positions_transformed < extent.reshape(1, -1), axis=1)
-            cluster_positions_transformed = cluster_positions_transformed[valid_mask]
             
             if len(cluster_positions_transformed) > 0:
                 # Plot AuNPs with cluster colors
@@ -2108,7 +2109,7 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
             plt.close(fig)
             print(f"    ✓ Saved AuNPs: {aunp_filename}")
         
-        # 5. Generate side-by-side comparison PNG using exact same format as original run_mini_zonogram.py
+        # 5. Generate three-panel comparison PNG: mini zonogram, mini zonogram with AuNPs, and mini zonogram with distances
         comparison_filename = f"{mini_filename_base}_comparison.png"
         comparison_path_tomogram = tomogram_azograms_dir / comparison_filename
         comparison_path_results = results_azograms_dir / comparison_filename
@@ -2119,23 +2120,101 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
             # Generate left panel (mini zonogram only) using the same function
             fig_left, axxy_left = render_mini_zonogram_xy_only(mini_zonogram_findingampa)
             
-            # Generate right panel (mini zonogram with AuNPs) using the same function
-            fig_right, axxy_right = render_mini_zonogram_xy_only(mini_zonogram_findingampa)
+            # Generate middle panel (mini zonogram with AuNPs) using the same function
+            fig_middle, axxy_middle = render_mini_zonogram_xy_only(mini_zonogram_findingampa)
             
-            # Add AuNPs to right panel
+            # Generate right panel (mini zonogram with AuNPs and distances) using the same function with extra legend space
+            fig_right, axxy_right = render_mini_zonogram_xy_only(mini_zonogram_findingampa, include_legend_space=True, extra_width_multiplier=2.2)
+            
+            # Add AuNPs to middle panel
+            if len(cluster_positions_transformed) > 0:
+                circle_size = 36  # 6nm diameter circles
+                cluster_color = cluster_color_map.get(cluster_id, 'red')  # Default to red if cluster not in map
+                axxy_middle.scatter(cluster_positions_transformed[:,0], cluster_positions_transformed[:,1],
+                                  s=circle_size, c='none', alpha=1.0, edgecolors=cluster_color, linewidth=1.5)
+            
+            # Add legend to the middle panel (top left)
+            legend_text = f"Cluster {cluster_id}"
+            cluster_color = cluster_color_map.get(cluster_id, 'red')
+            legend_handle = plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='none',
+                                     markeredgecolor=cluster_color, markersize=8, linewidth=1.5)
+            axxy_middle.legend([legend_handle], [legend_text], loc='upper left', 
+                             fontsize=10, frameon=True, fancybox=True, shadow=True)
+            
+            # Add AuNPs and distance lines to right panel
             if len(cluster_positions_transformed) > 0:
                 circle_size = 36  # 6nm diameter circles
                 cluster_color = cluster_color_map.get(cluster_id, 'red')  # Default to red if cluster not in map
                 axxy_right.scatter(cluster_positions_transformed[:,0], cluster_positions_transformed[:,1],
                                   s=circle_size, c='none', alpha=1.0, edgecolors=cluster_color, linewidth=1.5)
-            
-            # Add legend to the right panel (top left)
-            legend_text = f"Cluster {cluster_id}"
-            cluster_color = cluster_color_map.get(cluster_id, 'red')
-            legend_handle = plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='none',
-                                     markeredgecolor=cluster_color, markersize=8, linewidth=1.5)
-            axxy_right.legend([legend_handle], [legend_text], loc='upper left', 
-                             fontsize=10, frameon=True, fancybox=True, shadow=True)
+                
+                # Calculate distances between all pairs of AuNPs and draw lines for those < 15 nm apart
+                from scipy.spatial.distance import pdist, squareform
+                
+                # Calculate pairwise distances in the original coordinate system (nm)
+                # Use all original positions for distance calculation (before filtering)
+                original_positions = cluster_data[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values
+                distances = pdist(original_positions)
+                distance_matrix = squareform(distances)
+                
+                # Define a set of distinct colors for the distance lines
+                line_colors = ['yellow', 'cyan', 'magenta', 'orange', 'lime', 'red', 'blue', 'green',
+                              'pink', 'purple', 'brown', 'gray', 'olive', 'navy', 'teal', 'maroon']
+                
+                # Find pairs of AuNPs that are less than 15 nm apart and collect distance info
+                # Only include pairs where both positions are valid (within zonogram bounds)
+                distance_pairs = []
+                color_idx = 0
+                
+                # Build a mapping from original index to filtered index
+                # valid_mask is a boolean array where True means the position is valid
+                valid_indices_map = {}
+                filtered_idx = 0
+                for orig_idx in range(len(valid_mask)):
+                    if valid_mask[orig_idx]:
+                        valid_indices_map[orig_idx] = filtered_idx
+                        filtered_idx += 1
+                
+                for orig_i in range(len(original_positions)):
+                    for orig_j in range(orig_i+1, len(original_positions)):
+                        if distance_matrix[orig_i, orig_j] < 15.0:  # Less than 15 nm apart
+                            # Only include if both positions are valid (within zonogram bounds)
+                            if valid_mask[orig_i] and valid_mask[orig_j]:
+                                distance_pairs.append({
+                                    'i': valid_indices_map[orig_i], 'j': valid_indices_map[orig_j],
+                                    'orig_i': orig_i, 'orig_j': orig_j,  # Store original indices for legend
+                                    'distance': distance_matrix[orig_i, orig_j],
+                                    'color': line_colors[color_idx % len(line_colors)]
+                                })
+                                color_idx += 1
+                
+                # Draw lines for each distance pair
+                for pair in distance_pairs:
+                    # Get the transformed positions for these two AuNPs
+                    pos1 = cluster_positions_transformed[pair['i']]
+                    pos2 = cluster_positions_transformed[pair['j']]
+                    
+                    # Draw a line between them with unique color
+                    axxy_right.plot([pos1[0], pos2[0]], [pos1[1], pos2[1]], 
+                                 color=pair['color'], linewidth=1.5, alpha=0.8)
+                
+                # Create distance legend in top right corner
+                if distance_pairs:
+                    legend_text_distances = []
+                    legend_colors_distances = []
+                    for idx, pair in enumerate(distance_pairs):
+                        # Use original indices (1-indexed) for legend
+                        legend_text_distances.append(f"AuNP {pair['orig_i']+1}-{pair['orig_j']+1}: {pair['distance']:.1f}nm")
+                        legend_colors_distances.append(pair['color'])
+                    
+                    # Create custom legend handles with matching colors
+                    from matplotlib.lines import Line2D
+                    legend_handles_distances = [Line2D([0], [0], color=color, linewidth=2) for color in legend_colors_distances]
+                    
+                    # Add legend to the right of the figure (outside the plot area)
+                    axxy_right.legend(legend_handles_distances, legend_text_distances, loc='center left',
+                                     fontsize=6, frameon=True, fancybox=True, shadow=True,
+                                     bbox_to_anchor=(1.05, 0.5), framealpha=0.9)
             
             # Save individual figures to memory
             import io
@@ -2143,28 +2222,39 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
             fig_left.savefig(left_buffer, format='png', bbox_inches='tight', pad_inches=0)
             left_buffer.seek(0)
             
+            middle_buffer = io.BytesIO()
+            fig_middle.savefig(middle_buffer, format='png', bbox_inches='tight', pad_inches=0)
+            middle_buffer.seek(0)
+            
+            # Adjust subplot to create space only on the right for the legend
+            plt.figure(fig_right.number)
+            plt.subplots_adjust(right=0.7)  # Create space on right side only
+            
             right_buffer = io.BytesIO()
             fig_right.savefig(right_buffer, format='png', bbox_inches='tight', pad_inches=0)
             right_buffer.seek(0)
             
             # Close the individual figures
             plt.close(fig_left)
+            plt.close(fig_middle)
             plt.close(fig_right)
             
-            # Load the images and combine them (original approach from run_mini_zonogram.py)
+            # Load the images and combine them into a three-panel layout
             from PIL import Image
             left_img = Image.open(left_buffer)
+            middle_img = Image.open(middle_buffer)
             right_img = Image.open(right_buffer)
             
-            # Create combined image with white background, spacer, and border (reduced dimensions)
-            spacer_width = 12  # 12 pixel white spacer (quarter of original 50)
-            border_width = 10  # 10 pixel white border around entire image (half of original 20)
-            total_width = left_img.width + spacer_width + right_img.width + (2 * border_width)
-            max_height = max(left_img.height, right_img.height) + (2 * border_width)
+            # Create combined image with white background, spacers, and border
+            spacer_width = 12  # 12 pixel white spacer between panels
+            border_width = 10  # 10 pixel white border around entire image
+            total_width = left_img.width + spacer_width + middle_img.width + spacer_width + right_img.width + (2 * border_width)
+            max_height = max(left_img.height, middle_img.height, right_img.height) + (2 * border_width)
             
             combined_img = Image.new('RGB', (total_width, max_height), 'white')
             combined_img.paste(left_img, (border_width, border_width))
-            combined_img.paste(right_img, (left_img.width + spacer_width + border_width, border_width))
+            combined_img.paste(middle_img, (left_img.width + spacer_width + border_width, border_width))
+            combined_img.paste(right_img, (left_img.width + spacer_width + middle_img.width + spacer_width + border_width, border_width))
             
             # Save the combined image to both locations
             combined_img.save(comparison_path_tomogram)
