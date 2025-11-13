@@ -256,19 +256,28 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
             print(f"Found {len(all_star_files)} files matching pattern aunp_tm_BP_active_zone_*.star")
             for file in all_star_files:
                 fname = file.name
+                print(f"Checking file: {fname}")
                 m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
                 if m:
+                    print(f"  Regex matched! Active zone number: {m.group(1)}")
                     print(f"Loading numeric file: {fname}")
-                    star_data = starfile.read(file)
-                    if isinstance(star_data, dict):
-                        for v in star_data.values():
-                            if isinstance(v, pd.DataFrame):
-                                star_dfs.append(v)
-                                break
-                    elif isinstance(star_data, pd.DataFrame):
-                        star_dfs.append(star_data)
+                    try:
+                        star_data = starfile.read(file)
+                        if isinstance(star_data, dict):
+                            for v in star_data.values():
+                                if isinstance(v, pd.DataFrame):
+                                    print(f"  Successfully loaded DataFrame from {fname} (dict format)")
+                                    star_dfs.append(v)
+                                    break
+                        elif isinstance(star_data, pd.DataFrame):
+                            print(f"  Successfully loaded DataFrame from {fname} (direct format)")
+                            star_dfs.append(star_data)
+                        else:
+                            print(f"  Warning: {fname} returned unexpected type: {type(star_data)}")
+                    except Exception as e:
+                        print(f"  Error reading {fname}: {e}")
                 else:
-                    print(f"Skipping non-numeric file: {fname}")
+                    print(f"Skipping non-numeric file: {fname} (regex did not match)")
         
         if not star_dfs:
             print(f"No numeric aunp_tm_BP_active_zone_*.star files found in {aunps_dir}")
