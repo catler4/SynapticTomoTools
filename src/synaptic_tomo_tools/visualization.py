@@ -917,10 +917,14 @@ def generate_summary_figures():
         sets = df[by_column].unique()
         data_by_set = [df[df[by_column] == set_name][column].dropna() for set_name in sets]
         
-        # Convert to Angstroms if this is a distance metric
-        if 'nearest_neighbor_distance' in column or 'distance' in column:
+        # Convert to Angstroms if this is a nearest neighbor distance metric
+        # Keep membrane distances in nm (biological convention)
+        if 'nearest_neighbor_distance' in column:
             data_by_set = [data * 10 for data in data_by_set]  # Convert nm to Angstroms
             ylabel += ' (Å)'
+        elif 'distance' in column:
+            # For other distance metrics (membrane distances), keep in nm
+            ylabel += ' (nm)'
         
         # Create box plot with custom colors
         bp = plt.boxplot(data_by_set, labels=sets, patch_artist=True)
@@ -961,15 +965,23 @@ def generate_summary_figures():
             # Define metrics with their units
             aunp_metrics = {
                 'aunp_analysis_aunp_count': 'Number of AuNPs',
-                'aunp_analysis_nearest_neighbor_distance_mean': 'nm'
+                'aunp_analysis_nearest_neighbor_distance_mean': 'nm',
+                'aunp_analysis_distance_to_presynaptic_mean': 'nm',
+                'aunp_analysis_distance_to_postsynaptic_mean': 'nm'
             }
             
             for metric, unit in aunp_metrics.items():
                 if metric in df_aunp.columns:
-                    # Special case for nearest neighbor distance
+                    # Special cases for specific metrics
                     if 'nearest_neighbor_distance' in metric:
                         title = 'AuNP Nearest Neighbor Distance Mean by Set'
-                        ylabel = f'AuNP Nearest Neighbor Distance Mean ({unit})'
+                        ylabel = 'AuNP Nearest Neighbor Distance Mean'  # Unit (Å) will be added by create_colored_boxplot
+                    elif 'distance_to_presynaptic' in metric:
+                        title = 'AuNP-Presynaptic Membrane Distance Mean by Set'
+                        ylabel = 'AuNP-Presynaptic Membrane Distance Mean'  # Unit (nm) will be added by create_colored_boxplot
+                    elif 'distance_to_postsynaptic' in metric:
+                        title = 'AuNP-Postsynaptic Membrane Distance Mean by Set'
+                        ylabel = 'AuNP-Postsynaptic Membrane Distance Mean'  # Unit (nm) will be added by create_colored_boxplot
                     else:
                         title = f'{metric.replace("aunp_analysis_", "").replace("_", " ").title()} by Set'
                         ylabel = f'{metric.replace("aunp_analysis_", "").replace("_", " ").title()} ({unit})'
@@ -977,17 +989,23 @@ def generate_summary_figures():
                     create_colored_boxplot(df_aunp, metric, 'set_name', title, ylabel, filename)
             
             # New: AuNP density and avg distance to AZ center
+            # These metrics use the aunp_analysis_ prefix in the CSV
             aunp_extra_metrics = {
-                'aunp_density': 'AuNPs/μm³',
-                'distance_to_active_zone_center_mean': 'nm'
+                'aunp_analysis_aunp_density': ('AuNPs/μm³', 'aunp_density'),
+                'aunp_analysis_distance_to_active_zone_center_mean': ('nm', 'distance_to_active_zone_center_mean')
             }
             
-            for metric, unit in aunp_extra_metrics.items():
-                if metric in df_aunp.columns:
-                    title = f'{metric.replace("_", " ").title()} by Set'
-                    ylabel = f'{metric.replace("_", " ").title()} ({unit})'
-                    filename = f'aunp_{metric}_by_set.png'
-                    create_colored_boxplot(df_aunp, metric, 'set_name', title, ylabel, filename)
+            for column_name, (unit, metric_key) in aunp_extra_metrics.items():
+                if column_name in df_aunp.columns:
+                    # For distance metrics, let create_colored_boxplot add the unit
+                    if 'distance' in metric_key:
+                        title = f'{metric_key.replace("_", " ").title()} by Set'
+                        ylabel = f'{metric_key.replace("_", " ").title()}'  # Unit will be added by create_colored_boxplot
+                    else:
+                        title = f'{metric_key.replace("_", " ").title()} by Set'
+                        ylabel = f'{metric_key.replace("_", " ").title()} ({unit})'
+                    filename = f'aunp_{metric_key}_by_set.png'
+                    create_colored_boxplot(df_aunp, column_name, 'set_name', title, ylabel, filename)
 
     # --- AuNP Cluster Results ---
     cluster_path = os.path.join('results', 'aunp_cluster_results.csv')

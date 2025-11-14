@@ -286,7 +286,9 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
     # Check if summary figures already exist
     expected_summary_files = [
         "aunp_aunp_count_by_set.png",
-        "aunp_nearest_neighbor_distance_mean_by_set.png", 
+        "aunp_nearest_neighbor_distance_mean_by_set.png",
+        "aunp_distance_to_presynaptic_mean_by_set.png",
+        "aunp_distance_to_postsynaptic_mean_by_set.png",
         "aunp_cluster_count_by_set.png",
         "aunp_cluster_cluster_area_by_set.png",
         "aunp_cluster_cluster_density_by_set.png",
