@@ -911,51 +911,79 @@ def generate_summary_figures():
     
     def create_colored_boxplot(df, column, by_column, title, ylabel, filename):
         """Create a box plot with colored, transparent boxes for each set."""
-        plt.figure(figsize=(10, 6))
-        
-        # Get unique sets and their data
-        sets = df[by_column].unique()
-        data_by_set = [df[df[by_column] == set_name][column].dropna() for set_name in sets]
-        
-        # Convert to Angstroms if this is a nearest neighbor distance metric
-        # Keep membrane distances in nm (biological convention)
-        if 'nearest_neighbor_distance' in column:
-            data_by_set = [data * 10 for data in data_by_set]  # Convert nm to Angstroms
-            ylabel += ' (Å)'
-        elif 'distance' in column:
-            # For other distance metrics (membrane distances), keep in nm
-            ylabel += ' (nm)'
-        
-        # Create box plot with custom colors
-        bp = plt.boxplot(data_by_set, labels=sets, patch_artist=True)
-        
-        # Color the boxes with transparency
-        for i, patch in enumerate(bp['boxes']):
-            color = colors[i % len(colors)]
-            patch.set_facecolor(color)
-            patch.set_alpha(0.7)  # Transparency
-            patch.set_edgecolor('black')
-            patch.set_linewidth(1.5)
-        
-        # Style the other elements
-        for element in ['whiskers', 'caps', 'medians']:
-            plt.setp(bp[element], color='black', linewidth=1.5)
-        
-        for flier in bp['fliers']:
-            flier.set(marker='o', markerfacecolor='red', markersize=4, alpha=0.7)
-        
-        plt.title(title, fontsize=14, fontweight='bold')
-        plt.xlabel('Set', fontsize=12)
-        plt.ylabel(ylabel, fontsize=12)
-        plt.xticks(rotation=45)
-        plt.grid(True, alpha=0.3)
-        
-        # Set Y axis to start at 0 with automatic maximum
-        plt.ylim(bottom=0)
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(summary_dir, filename), dpi=300, bbox_inches='tight')
-        plt.close()
+        try:
+            # Check if column exists and has data
+            if column not in df.columns:
+                print(f"  Warning: Column '{column}' not found in dataframe, skipping plot: {filename}")
+                return
+            
+            # Get unique sets and their data
+            sets = df[by_column].unique() if by_column in df.columns else []
+            if len(sets) == 0:
+                print(f"  Warning: No sets found in '{by_column}' column, skipping plot: {filename}")
+                return
+            
+            data_by_set = [df[df[by_column] == set_name][column].dropna() for set_name in sets]
+            
+            # Filter out empty datasets
+            valid_data = []
+            valid_labels = []
+            for i, data in enumerate(data_by_set):
+                if len(data) > 0:
+                    valid_data.append(data)
+                    valid_labels.append(sets[i])
+            
+            if len(valid_data) == 0:
+                print(f"  Warning: No valid data for '{column}', skipping plot: {filename}")
+                return
+            
+            plt.figure(figsize=(10, 6))
+            
+            # Convert to Angstroms if this is a nearest neighbor distance metric
+            # Keep membrane distances in nm (biological convention)
+            if 'nearest_neighbor_distance' in column:
+                valid_data = [data * 10 for data in valid_data]  # Convert nm to Angstroms
+                ylabel += ' (Å)'
+            elif 'distance' in column:
+                # For other distance metrics (membrane distances), keep in nm
+                ylabel += ' (nm)'
+            
+            # Create box plot with custom colors
+            bp = plt.boxplot(valid_data, labels=valid_labels, patch_artist=True)
+            
+            # Color the boxes with transparency
+            for i, patch in enumerate(bp['boxes']):
+                color = colors[i % len(colors)]
+                patch.set_facecolor(color)
+                patch.set_alpha(0.7)  # Transparency
+                patch.set_edgecolor('black')
+                patch.set_linewidth(1.5)
+            
+            # Style the other elements
+            for element in ['whiskers', 'caps', 'medians']:
+                plt.setp(bp[element], color='black', linewidth=1.5)
+            
+            for flier in bp['fliers']:
+                flier.set(marker='o', markerfacecolor='red', markersize=4, alpha=0.7)
+            
+            plt.title(title, fontsize=14, fontweight='bold')
+            plt.xlabel('Set', fontsize=12)
+            plt.ylabel(ylabel, fontsize=12)
+            plt.xticks(rotation=45)
+            plt.grid(True, alpha=0.3)
+            
+            # Set Y axis to start at 0 with automatic maximum
+            plt.ylim(bottom=0)
+            
+            plt.tight_layout()
+            plt.savefig(os.path.join(summary_dir, filename), dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"  Created: {filename}")
+        except Exception as e:
+            print(f"  Error creating plot '{filename}': {e}")
+            import traceback
+            traceback.print_exc()
+            plt.close('all')  # Make sure to close any open figures
 
     # --- AuNP Results ---
     aunp_path = os.path.join('results', 'aunps_results.csv')
@@ -971,22 +999,30 @@ def generate_summary_figures():
             }
             
             for metric, unit in aunp_metrics.items():
-                if metric in df_aunp.columns:
-                    # Special cases for specific metrics
-                    if 'nearest_neighbor_distance' in metric:
-                        title = 'AuNP Nearest Neighbor Distance Mean by Set'
-                        ylabel = 'AuNP Nearest Neighbor Distance Mean'  # Unit (Å) will be added by create_colored_boxplot
-                    elif 'distance_to_presynaptic' in metric:
-                        title = 'AuNP-Presynaptic Membrane Distance Mean by Set'
-                        ylabel = 'AuNP-Presynaptic Membrane Distance Mean'  # Unit (nm) will be added by create_colored_boxplot
-                    elif 'distance_to_postsynaptic' in metric:
-                        title = 'AuNP-Postsynaptic Membrane Distance Mean by Set'
-                        ylabel = 'AuNP-Postsynaptic Membrane Distance Mean'  # Unit (nm) will be added by create_colored_boxplot
+                try:
+                    if metric in df_aunp.columns:
+                        # Special cases for specific metrics
+                        if 'nearest_neighbor_distance' in metric:
+                            title = 'AuNP Nearest Neighbor Distance Mean by Set'
+                            ylabel = 'AuNP Nearest Neighbor Distance Mean'  # Unit (Å) will be added by create_colored_boxplot
+                        elif 'distance_to_presynaptic' in metric:
+                            title = 'AuNP-Presynaptic Membrane Distance Mean by Set'
+                            ylabel = 'AuNP-Presynaptic Membrane Distance Mean'  # Unit (nm) will be added by create_colored_boxplot
+                        elif 'distance_to_postsynaptic' in metric:
+                            title = 'AuNP-Postsynaptic Membrane Distance Mean by Set'
+                            ylabel = 'AuNP-Postsynaptic Membrane Distance Mean'  # Unit (nm) will be added by create_colored_boxplot
+                        else:
+                            title = f'{metric.replace("aunp_analysis_", "").replace("_", " ").title()} by Set'
+                            ylabel = f'{metric.replace("aunp_analysis_", "").replace("_", " ").title()} ({unit})'
+                        filename = f'aunp_{metric.replace("aunp_analysis_", "")}_by_set.png'
+                        create_colored_boxplot(df_aunp, metric, 'set_name', title, ylabel, filename)
                     else:
-                        title = f'{metric.replace("aunp_analysis_", "").replace("_", " ").title()} by Set'
-                        ylabel = f'{metric.replace("aunp_analysis_", "").replace("_", " ").title()} ({unit})'
-                    filename = f'aunp_{metric.replace("aunp_analysis_", "")}_by_set.png'
-                    create_colored_boxplot(df_aunp, metric, 'set_name', title, ylabel, filename)
+                        print(f"  Skipping {metric}: column not found in aunps_results.csv")
+                except Exception as e:
+                    print(f"  Error processing metric '{metric}': {e}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
             
             # New: AuNP density and avg distance to AZ center
             # These metrics use the aunp_analysis_ prefix in the CSV
@@ -1020,11 +1056,19 @@ def generate_summary_figures():
             }
             
             for metric, unit in cluster_metrics.items():
-                if metric in df_cluster.columns:
-                    title = f'{metric.replace("_", " ").title()} by Set'
-                    ylabel = f'{metric.replace("_", " ").title()} ({unit})'
-                    filename = f'aunp_cluster_{metric}_by_set.png'
-                    create_colored_boxplot(df_cluster, metric, 'set_name', title, ylabel, filename)
+                try:
+                    if metric in df_cluster.columns:
+                        title = f'{metric.replace("_", " ").title()} by Set'
+                        ylabel = f'{metric.replace("_", " ").title()} ({unit})'
+                        filename = f'aunp_cluster_{metric}_by_set.png'
+                        create_colored_boxplot(df_cluster, metric, 'set_name', title, ylabel, filename)
+                    else:
+                        print(f"  Skipping {metric}: column not found in aunp_cluster_results.csv")
+                except Exception as e:
+                    print(f"  Error processing cluster metric '{metric}': {e}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
             
             # Also plot number of clusters per tomogram by set (from .star files)
             if 'tomogram_name' in df_cluster.columns:
@@ -1084,11 +1128,19 @@ def generate_summary_figures():
             }
             
             for metric, unit in vesicle_metrics.items():
-                if metric in df_ves.columns:
-                    title = f'{metric.replace("_", " ").title()} by Set'
-                    ylabel = f'{metric.replace("_", " ").title()} ({unit})'
-                    filename = f'vesicle_{metric}_by_set.png'
-                    create_colored_boxplot(df_ves, metric, 'set_name', title, ylabel, filename)
+                try:
+                    if metric in df_ves.columns:
+                        title = f'{metric.replace("_", " ").title()} by Set'
+                        ylabel = f'{metric.replace("_", " ").title()} ({unit})'
+                        filename = f'vesicle_{metric}_by_set.png'
+                        create_colored_boxplot(df_ves, metric, 'set_name', title, ylabel, filename)
+                    else:
+                        print(f"  Skipping {metric}: column not found in vesicles_results.csv")
+                except Exception as e:
+                    print(f"  Error processing vesicle metric '{metric}': {e}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
 
     # --- Active Zone Results ---
     az_path = os.path.join('results', 'activezone_results.csv')
@@ -1102,10 +1154,19 @@ def generate_summary_figures():
             }
             
             for metric, unit in az_metrics.items():
-                title = f'{metric.replace("_", " ").title()} by Set'
-                ylabel = f'{metric.replace("_", " ").title()} ({unit})'
-                filename = f'activezone_{metric}_by_set.png'
-                create_colored_boxplot(df_az, metric, 'set_name', title, ylabel, filename)
+                try:
+                    if metric in df_az.columns:
+                        title = f'{metric.replace("_", " ").title()} by Set'
+                        ylabel = f'{metric.replace("_", " ").title()} ({unit})'
+                        filename = f'activezone_{metric}_by_set.png'
+                        create_colored_boxplot(df_az, metric, 'set_name', title, ylabel, filename)
+                    else:
+                        print(f"  Skipping {metric}: column not found in activezone_results.csv")
+                except Exception as e:
+                    print(f"  Error processing activezone metric '{metric}': {e}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
 
     print(f"Summary figures saved to {summary_dir}")
 

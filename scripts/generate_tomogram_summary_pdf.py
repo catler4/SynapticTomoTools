@@ -565,26 +565,37 @@ def main():
         # Add each summary PNG as a page
         summary_dir = output_dir
         summary_pngs = sorted(glob.glob(str(summary_dir / '*_by_set.png')))
+        print(f"Found {len(summary_pngs)} summary figure files to add to PDF")
+        successful_count = 0
         for png in summary_pngs:
-            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_pdf:
-                c = canvas.Canvas(tmp_pdf.name, pagesize=letter)
-                width, height = letter
-                # Title from filename
-                title = os.path.basename(png).replace('_by_set.png', '').replace('_', ' ').title()
-                c.setFont("Helvetica-Bold", 16)
-                c.drawCentredString(width/2, height-40, title)
-                # Add image
-                img = Image.open(png)
-                iw, ih = img.size
-                max_width = width - 80
-                max_height = height - 120
-                scale = min(max_width/iw, max_height/ih, 1.0)
-                nw, nh = int(iw*scale), int(ih*scale)
-                x = (width - nw) // 2
-                y = (height - nh) // 2 - 20
-                c.drawImage(ImageReader(img), x, y, width=nw, height=nh)
-                c.save()
-                merger.append(tmp_pdf.name)
+            try:
+                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_pdf:
+                    c = canvas.Canvas(tmp_pdf.name, pagesize=letter)
+                    width, height = letter
+                    # Title from filename
+                    title = os.path.basename(png).replace('_by_set.png', '').replace('_', ' ').title()
+                    c.setFont("Helvetica-Bold", 16)
+                    c.drawCentredString(width/2, height-40, title)
+                    # Add image
+                    img = Image.open(png)
+                    iw, ih = img.size
+                    max_width = width - 80
+                    max_height = height - 120
+                    scale = min(max_width/iw, max_height/ih, 1.0)
+                    nw, nh = int(iw*scale), int(ih*scale)
+                    x = (width - nw) // 2
+                    y = (height - nh) // 2 - 20
+                    c.drawImage(ImageReader(img), x, y, width=nw, height=nh)
+                    c.save()
+                    merger.append(tmp_pdf.name)
+                    successful_count += 1
+                    print(f"  Added: {os.path.basename(png)}")
+            except Exception as e:
+                print(f"  Error adding {os.path.basename(png)}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+        print(f"Successfully added {successful_count} of {len(summary_pngs)} summary figures to PDF")
         merged_pdf_path = output_dir / "all_tomograms_summary.pdf"
         merger.write(str(merged_pdf_path))
         merger.close()
