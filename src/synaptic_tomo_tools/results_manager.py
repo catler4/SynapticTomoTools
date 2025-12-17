@@ -189,16 +189,29 @@ class ResultsManager:
                     
                     analysis_groups[analysis_type].append(row)
         
-        # Export each analysis type to its own CSV file
+        # Export each analysis type to its own CSV file in step-specific subdirectories
         exported_files = []
         for analysis_type, rows in analysis_groups.items():
             if rows:
-                df = pd.DataFrame(rows)
-                csv_filename = f"{analysis_type}_results.csv"
-                csv_path = self.results_dir / csv_filename
-                df.to_csv(csv_path, index=False)
-                exported_files.append(csv_path)
-                print(f"Exported {analysis_type} results to {csv_path}")
+                try:
+                    df = pd.DataFrame(rows)
+                    
+                    # Remove 'aunp_analysis_' prefix from column names for aunps results
+                    if analysis_type == 'aunps':
+                        df.columns = [col.replace('aunp_analysis_', '') if col.startswith('aunp_analysis_') else col for col in df.columns]
+                    
+                    csv_filename = f"{analysis_type}_results.csv"
+                    # Save in step-specific subdirectory
+                    step_dir = self.results_dir / analysis_type
+                    step_dir.mkdir(parents=True, exist_ok=True)
+                    csv_path = step_dir / csv_filename
+                    df.to_csv(csv_path, index=False)
+                    exported_files.append(csv_path)
+                    print(f"Exported {analysis_type} results to {csv_path}")
+                except Exception as e:
+                    print(f"Error exporting {analysis_type} results: {e}")
+                    import traceback
+                    traceback.print_exc()
         
         if exported_files:
             print(f"Exported {len(exported_files)} analysis files to {self.results_dir}")

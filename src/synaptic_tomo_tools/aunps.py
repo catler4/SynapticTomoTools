@@ -3,7 +3,7 @@
 from typing import List
 import pandas as pd
 import numpy as np
-from scipy.spatial import KDTree
+from scipy.spatial import KDTree, cKDTree
 from sklearn.cluster import DBSCAN
 from pathlib import Path
 import starfile
@@ -15,6 +15,56 @@ from .vesicles import import_presynaptic_membranes_and_active_zones
 import re
 
 # CSV export functions removed - now handled by ResultsManager
+
+def calculate_packing_density_using_sliding_cylinder(
+    active_zone: dict,
+    active_zonogram: dict,
+    aunp_coordinates: np.ndarray,
+    cylinder_radius: float = 25.0,
+    receptor_crosssection_nm_squared: float = 122.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Calculate packing density of AuNPs (receptors) on postsynaptic membrane using sliding cylinder method.
+    
+    Args:
+        active_zone: Dictionary containing 'active_postsynaptic_mesh' with vertices and vertex_normals
+        active_zonogram: Dictionary with zonogram data (not currently used but kept for API consistency)
+        aunp_coordinates: Array of shape (N, 3) with AuNP 3D coordinates in nm
+        cylinder_radius: Radius of the sliding cylinder probe in nm (default: 25.0)
+        receptor_crosssection_nm_squared: Cross-sectional area of a single receptor in nm² (default: 122.0)
+    
+    Returns:
+        Tuple of (v_array, packing_coefficient) where:
+        - v_array: Subset of postsynaptic mesh vertices used (every 50th vertex)
+        - packing_coefficient: Calculated packing density values for each vertex
+    """
+    ps_mesh = active_zone['active_postsynaptic_mesh']
+    subset_vertices = ps_mesh.vertices[::50]  # Use every 50th vertex for efficiency
+    
+    tree = cKDTree(ps_mesh.vertices)
+    # Generate a cKDTree of aunps
+    tree_aunps = cKDTree(aunp_coordinates)
+    # Iterate over vertices in ps_mesh_simplified and find all vertices in ps_mesh within cylinder_radius and average their normals
+    num_aunps_at_vertex = []
+    for v in subset_vertices:
+        idxs = tree.query_ball_point(v, cylinder_radius)
+        normals = ps_mesh.vertex_normals[idxs]
+        avg_normal = np.mean(normals, axis=0)
+        avg_normal /= np.linalg.norm(avg_normal)
+        # Find all aunps within cylinder_radius of line through v in direction of avg_normal
+        line_points = np.array([v + t * avg_normal for t in np.linspace(0, 50, 100)])
+        idxs_aunps = tree_aunps.query_ball_point(line_points, cylinder_radius)
+        # Generate list of unique inds in idxs_aunps
+        unique_idxs_aunps = set()
+        for idx_list in idxs_aunps:
+            unique_idxs_aunps.update(idx_list)
+        num_aunps_at_vertex.append(len(unique_idxs_aunps))
+
+    v_array = np.array(subset_vertices)
+    area_of_circle = np.pi * (cylinder_radius ** 2)  # Area = πr²
+    packing_coefficient = ((np.array(num_aunps_at_vertex)/2) * receptor_crosssection_nm_squared) / area_of_circle   
+
+    return (v_array, packing_coefficient)
 
 def compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0, fusion_point_threshold=20.0):
     """
@@ -391,7 +441,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
             cluster_csv = aunps_results_dir / "aunp_clusters.csv"
             cluster_df.to_csv(cluster_csv, index=False)
             print(f"Saved AuNP cluster summary to {cluster_csv}")
-            # --- Append to global results/aunp_cluster_results.csv ---
+            # --- Append to global results/aunps/aunp_cluster_results.csv ---
             tomogram_name = Path(tomogram_path).name
             # Use provided set_name or extract from tomogram path
             if set_name is None or set_name == "unknown":
@@ -403,7 +453,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
                         break
             cluster_df['tomogram_name'] = tomogram_name
             cluster_df['set_name'] = set_name
-            global_csv = Path("results/aunp_cluster_results.csv")
+            global_csv = Path("results/aunps/aunp_cluster_results.csv")
             global_csv.parent.mkdir(parents=True, exist_ok=True)
             if global_csv.exists():
                 try:
@@ -484,7 +534,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         df_valid.loc[:, cols_out].to_csv(output_file, index=False)
         print(f"Saved nearest neighbor, membrane, and fusion distances for AuNPs to {output_file}")
         
-        # --- Append to global results/all_aunp_distances.csv ---
+        # --- Append to global results/aunps/all_aunp_distances.csv ---
         tomogram_name = Path(tomogram_path).name
         # Use provided set_name or extract from tomogram path
         if set_name is None or set_name == "unknown":
@@ -499,7 +549,8 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         df_valid['tomogram_name'] = tomogram_name
         df_valid['set_name'] = set_name
         
-        global_csv = Path("results/all_aunp_distances.csv")
+        global_csv = Path("results/aunps/all_aunp_distances.csv")
+        global_csv.parent.mkdir(parents=True, exist_ok=True)
         global_csv.parent.mkdir(parents=True, exist_ok=True)
         if global_csv.exists():
             try:
@@ -516,43 +567,67 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         print(f"Appended AuNP distances to {global_csv}")
         # --- End global results ---
         
-        # --- Compute AuNP distance histograms per close vesicle ---
-        print("Computing AuNP distance histograms for close vesicles...")
-        df_vesicle_aunp_hist = compute_aunp_distance_histograms_per_vesicle(
+        # Helper function to save histogram CSV
+        def save_histogram_csv(df_hist, csv_path, vesicle_type, bin_width):
+            """Save histogram DataFrame to CSV, updating existing file if it exists."""
+            if not df_hist.empty:
+                # Add set info (tomogram_name already included in the dataframe)
+                df_hist['set_name'] = set_name
+                
+                csv_path.parent.mkdir(parents=True, exist_ok=True)
+                if csv_path.exists():
+                    try:
+                        df_existing = pd.read_csv(csv_path)
+                        # Remove existing data for this tomogram
+                        df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
+                        df_combined = pd.concat([df_existing, df_hist], ignore_index=True)
+                        df_combined.to_csv(csv_path, index=False)
+                    except Exception as e:
+                        print(f"Error updating {csv_path.name}: {e}")
+                        df_hist.to_csv(csv_path, index=False)
+                else:
+                    df_hist.to_csv(csv_path, index=False)
+                print(f"Saved AuNP histograms (bin{int(bin_width)}) for {len(df_hist)} {vesicle_type} vesicles to {csv_path}")
+            else:
+                print(f"No {vesicle_type} vesicles found for AuNP histogram analysis (bin{int(bin_width)})")
+        
+        # --- Compute AuNP distance histograms per close vesicle (bin5) ---
+        print("Computing AuNP distance histograms for close vesicles (bin5)...")
+        df_vesicle_aunp_hist_bin5 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
             vesicle_distance_threshold=20.0,
             fusion_point_threshold=20.0,
             max_distance=500.0,
             bin_width=5.0
         )
+        save_histogram_csv(df_vesicle_aunp_hist_bin5, Path("results/aunps/close_vesicles_aunp_histograms_bin5.csv"), "close", 5.0)
         
-        if not df_vesicle_aunp_hist.empty:
-            # Add set info (tomogram_name already included in the dataframe)
-            df_vesicle_aunp_hist['set_name'] = set_name
-            
-            # Save to global CSV
-            vesicle_aunp_csv = Path("results/close_vesicles_aunp_histograms.csv")
-            vesicle_aunp_csv.parent.mkdir(parents=True, exist_ok=True)
-            if vesicle_aunp_csv.exists():
-                try:
-                    df_existing = pd.read_csv(vesicle_aunp_csv)
-                    # Remove existing data for this tomogram
-                    df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
-                    df_combined = pd.concat([df_existing, df_vesicle_aunp_hist], ignore_index=True)
-                    df_combined.to_csv(vesicle_aunp_csv, index=False)
-                except Exception as e:
-                    print(f"Error updating close_vesicles_aunp_histograms.csv: {e}")
-                    df_vesicle_aunp_hist.to_csv(vesicle_aunp_csv, index=False)
-            else:
-                df_vesicle_aunp_hist.to_csv(vesicle_aunp_csv, index=False)
-            print(f"Saved AuNP histograms for {len(df_vesicle_aunp_hist)} close vesicles to {vesicle_aunp_csv}")
-        else:
-            print("No close vesicles found for AuNP histogram analysis")
-        # --- End vesicle AuNP histograms ---
+        # --- Compute AuNP distance histograms per close vesicle (bin10) ---
+        print("Computing AuNP distance histograms for close vesicles (bin10)...")
+        df_vesicle_aunp_hist_bin10 = compute_aunp_distance_histograms_per_vesicle(
+            tomogram_path, coords, 
+            vesicle_distance_threshold=20.0,
+            fusion_point_threshold=20.0,
+            max_distance=500.0,
+            bin_width=10.0
+        )
+        save_histogram_csv(df_vesicle_aunp_hist_bin10, Path("results/aunps/close_vesicles_aunp_histograms_bin10.csv"), "close", 10.0)
         
-        # --- Compute AuNP distance histograms per FUSING vesicle ---
-        print("Computing AuNP distance histograms for fusing vesicles (perimeter within 5 nm of AZ)...")
-        df_fusing_vesicle_aunp_hist = compute_aunp_distance_histograms_per_vesicle(
+        # --- Compute AuNP distance histograms per close vesicle (bin50) ---
+        print("Computing AuNP distance histograms for close vesicles (bin50)...")
+        df_vesicle_aunp_hist_bin50 = compute_aunp_distance_histograms_per_vesicle(
+            tomogram_path, coords, 
+            vesicle_distance_threshold=20.0,
+            fusion_point_threshold=20.0,
+            max_distance=500.0,
+            bin_width=50.0
+        )
+        save_histogram_csv(df_vesicle_aunp_hist_bin50, Path("results/aunps/close_vesicles_aunp_histograms_bin50.csv"), "close", 50.0)
+        # --- End close vesicle AuNP histograms ---
+        
+        # --- Compute AuNP distance histograms per FUSING vesicle (bin5) ---
+        print("Computing AuNP distance histograms for fusing vesicles (perimeter within 5 nm of AZ, bin5)...")
+        df_fusing_vesicle_aunp_hist_bin5 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
             vesicle_distance_threshold=20.0,
             fusion_point_threshold=20.0,
@@ -561,30 +636,125 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
             fusing_only=True,
             fusing_perimeter_threshold=5.0
         )
+        save_histogram_csv(df_fusing_vesicle_aunp_hist_bin5, Path("results/aunps/fusing_vesicles_aunp_histograms_bin5.csv"), "fusing", 5.0)
         
-        if not df_fusing_vesicle_aunp_hist.empty:
-            # Add set info (tomogram_name already included in the dataframe)
-            df_fusing_vesicle_aunp_hist['set_name'] = set_name
-            
-            # Save to global CSV
-            fusing_vesicle_aunp_csv = Path("results/fusing_vesicles_aunp_histograms.csv")
-            fusing_vesicle_aunp_csv.parent.mkdir(parents=True, exist_ok=True)
-            if fusing_vesicle_aunp_csv.exists():
-                try:
-                    df_existing = pd.read_csv(fusing_vesicle_aunp_csv)
-                    # Remove existing data for this tomogram
-                    df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
-                    df_combined = pd.concat([df_existing, df_fusing_vesicle_aunp_hist], ignore_index=True)
-                    df_combined.to_csv(fusing_vesicle_aunp_csv, index=False)
-                except Exception as e:
-                    print(f"Error updating fusing_vesicles_aunp_histograms.csv: {e}")
-                    df_fusing_vesicle_aunp_hist.to_csv(fusing_vesicle_aunp_csv, index=False)
-            else:
-                df_fusing_vesicle_aunp_hist.to_csv(fusing_vesicle_aunp_csv, index=False)
-            print(f"Saved AuNP histograms for {len(df_fusing_vesicle_aunp_hist)} fusing vesicles to {fusing_vesicle_aunp_csv}")
-        else:
-            print("No fusing vesicles found for AuNP histogram analysis")
+        # --- Compute AuNP distance histograms per FUSING vesicle (bin10) ---
+        print("Computing AuNP distance histograms for fusing vesicles (perimeter within 5 nm of AZ, bin10)...")
+        df_fusing_vesicle_aunp_hist_bin10 = compute_aunp_distance_histograms_per_vesicle(
+            tomogram_path, coords, 
+            vesicle_distance_threshold=20.0,
+            fusion_point_threshold=20.0,
+            max_distance=500.0,
+            bin_width=10.0,
+            fusing_only=True,
+            fusing_perimeter_threshold=5.0
+        )
+        save_histogram_csv(df_fusing_vesicle_aunp_hist_bin10, Path("results/aunps/fusing_vesicles_aunp_histograms_bin10.csv"), "fusing", 10.0)
+        
+        # --- Compute AuNP distance histograms per FUSING vesicle (bin50) ---
+        print("Computing AuNP distance histograms for fusing vesicles (perimeter within 5 nm of AZ, bin50)...")
+        df_fusing_vesicle_aunp_hist_bin50 = compute_aunp_distance_histograms_per_vesicle(
+            tomogram_path, coords, 
+            vesicle_distance_threshold=20.0,
+            fusion_point_threshold=20.0,
+            max_distance=500.0,
+            bin_width=50.0,
+            fusing_only=True,
+            fusing_perimeter_threshold=5.0
+        )
+        save_histogram_csv(df_fusing_vesicle_aunp_hist_bin50, Path("results/aunps/fusing_vesicles_aunp_histograms_bin50.csv"), "fusing", 50.0)
         # --- End fusing vesicle AuNP histograms ---
+        
+        # --- Calculate packing density for each active zone ---
+        packing_density_results = {}
+        try:
+            from .activezone import import_membrane_segmentations_from_glb, find_active_zones_from_glb, define_active_zonogram
+            
+            print("Calculating packing density for active zones...")
+            # Load active zones from GLB
+            membrane_data = import_membrane_segmentations_from_glb(tomogram_path)
+            active_zones_glb = find_active_zones_from_glb(membrane_data, distance_range=(10.0, 40.0))
+            
+            if active_zones_glb and 'active_zones' in active_zones_glb and len(active_zones_glb['active_zones']) > 0:
+                # Define active zonograms
+                zonogram_results = define_active_zonogram(active_zones_glb)
+                
+                if zonogram_results['status'] == 'completed' and 'zonogram_data' in zonogram_results:
+                    # Group AuNPs by active zone
+                    aunps_by_az = {}
+                    for az_idx in df_valid['active_zone'].unique():
+                        if az_idx != -1:
+                            az_df = df_valid[df_valid['active_zone'] == az_idx]
+                            aunps_by_az[az_idx] = az_df[coord_cols].values
+                    
+                    # Calculate packing density for each active zone
+                    all_packing_coefficients = []
+                    for zone_name, zone_data in active_zones_glb['active_zones'].items():
+                        # Check if this zone has the required mesh
+                        if 'active_postsynaptic_mesh' not in zone_data:
+                            continue
+                        
+                        # Find matching AuNP data for this zone
+                        # Try to match by zone name pattern (e.g., "active_zone_pre1_post1")
+                        zone_aunps = None
+                        for az_idx, aunp_coords in aunps_by_az.items():
+                            # For now, use the first available AuNP set
+                            # In the future, could match more precisely using zone centers
+                            if zone_aunps is None:
+                                zone_aunps = aunp_coords
+                        
+                        if zone_aunps is None or len(zone_aunps) == 0:
+                            print(f"  No AuNPs found for {zone_name}, skipping packing density calculation")
+                            continue
+                        
+                        # Get zonogram data for this zone
+                        if zone_name not in zonogram_results['zonogram_data']:
+                            print(f"  No zonogram data found for {zone_name}, skipping packing density calculation")
+                            continue
+                        
+                        zonogram_data = zonogram_results['zonogram_data'][zone_name]
+                        
+                        try:
+                            # Calculate packing density
+                            v_array, packing_coefficient = calculate_packing_density_using_sliding_cylinder(
+                                zone_data,
+                                zonogram_data,
+                                zone_aunps
+                            )
+                            
+                            # Store results for this zone
+                            packing_density_results[zone_name] = {
+                                'v_array': v_array.tolist(),  # Convert to list for JSON serialization
+                                'packing_coefficient': packing_coefficient.tolist(),
+                                'max_packing_coefficient': float(np.max(packing_coefficient)),
+                                'avg_packing_coefficient': float(np.mean(packing_coefficient)),
+                                'min_packing_coefficient': float(np.min(packing_coefficient)),
+                                'std_packing_coefficient': float(np.std(packing_coefficient))
+                            }
+                            
+                            all_packing_coefficients.extend(packing_coefficient.tolist())
+                            
+                            print(f"  ✓ Calculated packing density for {zone_name}: max={packing_density_results[zone_name]['max_packing_coefficient']:.4f}, avg={packing_density_results[zone_name]['avg_packing_coefficient']:.4f}")
+                        except Exception as e:
+                            print(f"  Error calculating packing density for {zone_name}: {e}")
+                            continue
+                    
+                    # Save packing density results to file
+                    if packing_density_results:
+                        packing_density_file = aunps_results_dir / "packing_density_results.json"
+                        import json
+                        with open(packing_density_file, 'w') as f:
+                            json.dump(packing_density_results, f, indent=2)
+                        print(f"Saved packing density results to {packing_density_file}")
+                else:
+                    print("  Could not define active zonograms for packing density calculation")
+            else:
+                print("  No active zones found for packing density calculation")
+        except Exception as e:
+            print(f"Error calculating packing density: {e}")
+            import traceback
+            traceback.print_exc()
+        # --- End packing density calculation ---
         
         # Prepare summary statistics for ResultsManager
         n_aunps = len(df_valid)
@@ -642,6 +812,20 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
             summary_stats['distance_to_active_zone_center_mean'] = float(df_valid['distance_to_active_zone_center'].mean())
         else:
             summary_stats['distance_to_active_zone_center_mean'] = 0.0
+        
+        # Add packing density statistics
+        if packing_density_results:
+            # Calculate overall max and average across all active zones
+            all_max_values = [zone_data['max_packing_coefficient'] for zone_data in packing_density_results.values()]
+            all_avg_values = [zone_data['avg_packing_coefficient'] for zone_data in packing_density_results.values()]
+            
+            summary_stats['packing_density_max'] = float(np.max(all_max_values)) if all_max_values else 0.0
+            summary_stats['packing_density_avg'] = float(np.mean(all_avg_values)) if all_avg_values else 0.0
+            summary_stats['packing_density_min'] = float(np.min([zone_data['min_packing_coefficient'] for zone_data in packing_density_results.values()])) if packing_density_results else 0.0
+        else:
+            summary_stats['packing_density_max'] = 0.0
+            summary_stats['packing_density_avg'] = 0.0
+            summary_stats['packing_density_min'] = 0.0
         
         # Add completion status
         summary_stats['status'] = 'completed'

@@ -67,7 +67,7 @@ def load_membrane_coords(tomo_path, kind='presynaptic'):
 
 def load_active_zone_coords(tomo_path):
     """Load active zone coordinates."""
-    az_dir = Path(tomo_path) / 'best_alignment' / 'STT_results' / 'active_zones'
+    az_dir = Path(tomo_path) / 'best_alignment' / 'STT_results' / 'activezone'
     files = sorted(az_dir.glob('active_zone_pre*_post*_pre.txt'))
     coords = [np.loadtxt(f) for f in files if f.exists()]
     return coords
@@ -208,14 +208,14 @@ def filter_coords_in_slice(coords_list, z_center, z_thresh, max_segment_size=Non
 
 def load_postsynaptic_active_zone_coords(tomo_path):
     """Load postsynaptic active zone coordinates."""
-    az_dir = Path(tomo_path) / 'best_alignment' / 'STT_results' / 'active_zones'
+    az_dir = Path(tomo_path) / 'best_alignment' / 'STT_results' / 'activezone'
     files = sorted(az_dir.glob('active_zone_pre*_post*_post.txt'))
     coords = [np.loadtxt(f) for f in files if f.exists()]
     return coords
 
 def load_specific_active_zone_coords(tomo_path, active_zone_indices, aunps):
     """Load active zone coordinates only for the specified active zone indices, matched by distance to AuNPs."""
-    az_dir = Path(tomo_path) / 'best_alignment' / 'STT_results' / 'active_zones'
+    az_dir = Path(tomo_path) / 'best_alignment' / 'STT_results' / 'activezone'
     
     azs_pre = []
     azs_post = []
@@ -855,7 +855,8 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
                                  label=f'Cluster {c}' if c != -1 else 'Non-clustered')
                           for c in unique_clusters]
         ax.legend(handles=legend_elements, loc='best')
-        output_dir_viz = Path('results/visualizations/aunps_and_vesicles')
+        # Use organized structure: results/visualizations/{tomo_name}/aunps_and_vesicles/
+        output_dir_viz = Path('results') / 'visualizations' / tomo_name / 'aunps_and_vesicles'
         output_dir_viz.mkdir(parents=True, exist_ok=True)
         out_combined = output_dir_viz / f"{tomo_name}_combined_aunpclusters_{suffix}.png"
         if out_combined.exists() and not rerun:
@@ -903,7 +904,7 @@ def generate_summary_figures():
             print("Warning: 'seaborn-v0_8-whitegrid' style not found. Using 'ggplot' instead.")
         except Exception:
             print("Warning: Could not set preferred matplotlib style. Using default.")
-    summary_dir = os.path.join('results', 'summary_pdfs')
+    summary_dir = os.path.join('results', 'visualizations', 'pdf_summaries')
     os.makedirs(summary_dir, exist_ok=True)
 
     # Define colors for different sets
@@ -986,16 +987,16 @@ def generate_summary_figures():
             plt.close('all')  # Make sure to close any open figures
 
     # --- AuNP Results ---
-    aunp_path = os.path.join('results', 'aunps_results.csv')
+    aunp_path = os.path.join('results', 'aunps', 'aunps_results.csv')
     if os.path.exists(aunp_path):
         df_aunp = pd.read_csv(aunp_path)
         if 'set_name' in df_aunp.columns:
             # Define metrics with their units
             aunp_metrics = {
-                'aunp_analysis_aunp_count': 'Number of AuNPs',
-                'aunp_analysis_nearest_neighbor_distance_mean': 'nm',
-                'aunp_analysis_distance_to_presynaptic_mean': 'nm',
-                'aunp_analysis_distance_to_postsynaptic_mean': 'nm'
+                'aunp_count': 'Number of AuNPs',
+                'nearest_neighbor_distance_mean': 'nm',
+                'distance_to_presynaptic_mean': 'nm',
+                'distance_to_postsynaptic_mean': 'nm'
             }
             
             for metric, unit in aunp_metrics.items():
@@ -1012,9 +1013,9 @@ def generate_summary_figures():
                             title = 'AuNP-Postsynaptic Membrane Distance Mean by Set'
                             ylabel = 'AuNP-Postsynaptic Membrane Distance Mean'  # Unit (nm) will be added by create_colored_boxplot
                         else:
-                            title = f'{metric.replace("aunp_analysis_", "").replace("_", " ").title()} by Set'
-                            ylabel = f'{metric.replace("aunp_analysis_", "").replace("_", " ").title()} ({unit})'
-                        filename = f'aunp_{metric.replace("aunp_analysis_", "")}_by_set.png'
+                            title = f'{metric.replace("_", " ").title()} by Set'
+                            ylabel = f'{metric.replace("_", " ").title()} ({unit})'
+                        filename = f'aunp_{metric}_by_set.png'
                         create_colored_boxplot(df_aunp, metric, 'set_name', title, ylabel, filename)
                     else:
                         print(f"  Skipping {metric}: column not found in aunps_results.csv")
@@ -1025,10 +1026,9 @@ def generate_summary_figures():
                     continue
             
             # New: AuNP density and avg distance to AZ center
-            # These metrics use the aunp_analysis_ prefix in the CSV
             aunp_extra_metrics = {
-                'aunp_analysis_aunp_density': ('AuNPs/μm³', 'aunp_density'),
-                'aunp_analysis_distance_to_active_zone_center_mean': ('nm', 'distance_to_active_zone_center_mean')
+                'aunp_density': ('AuNPs/μm³', 'aunp_density'),
+                'distance_to_active_zone_center_mean': ('nm', 'distance_to_active_zone_center_mean')
             }
             
             for column_name, (unit, metric_key) in aunp_extra_metrics.items():
@@ -1179,9 +1179,7 @@ def run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=Non
             import_membrane_segmentations_from_glb, find_active_zones_from_glb
         )
         
-        # Create zonogram output directory
-        zonogram_output_dir = output_dir / "visualizations" / "active_zonograms"
-        zonogram_output_dir.mkdir(parents=True, exist_ok=True)
+        # Individual files are saved to organized structure: results/visualizations/{tomogram_name}/active_zonograms/
         
         print(f"Running active zonogram analysis for {len(tomo_paths)} tomograms...")
         
@@ -1203,7 +1201,7 @@ def run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=Non
             
             try:
                 # Run the combined active zonogram analysis for this tomogram
-                result = run_combined_zonogram_analysis_single_tomogram(tomo_path, zonogram_output_dir, aunp_active_zones, rerun)
+                result = run_combined_zonogram_analysis_single_tomogram(tomo_path, None, aunp_active_zones, rerun)
                 
                 if result.get('success', False):
                     print("✅")
@@ -1247,9 +1245,9 @@ def run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=Non
             # Go up to find the data directory (assuming structure: data_dir/set/TOP_TOMOS/tomogram)
             if first_tomo_path.parent.name == "TOP_TOMOS":
                 data_dir = str(first_tomo_path.parent.parent.parent)
-        generate_zonogram_pdf_summaries(zonogram_output_dir, tomo_paths, data_dir)
+        generate_zonogram_pdf_summaries(None, tomo_paths, data_dir)
         
-        print(f"\nActive zonogram analysis complete! Results saved to: {zonogram_output_dir}")
+        print(f"\nActive zonogram analysis complete! Results saved to organized structure: results/visualizations/{{tomogram_name}}/active_zonograms/")
         
     except ImportError as e:
         print(f"Warning: Could not import active zonogram analysis modules: {e}")
@@ -1464,20 +1462,19 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
             print("No active zones found. Skipping active zonogram analysis.")
             return {"success": False, "reason": "No active zones found"}
         
-        # Load AuNP data for smart active zone matching
+        # Load AuNP data for smart active zone matching (always try to load if file exists)
         aunp_data = None
-        if aunp_active_zones is not None:
-            try:
-                # Load AuNP data to match active zones
-                aunp_star_path = Path(tomogram_path) / "best_alignment" / "STT_results" / "aunps" / "aunp_clusters.star"
-                if aunp_star_path.exists():
-                    import starfile
-                    aunp_data = starfile.read(aunp_star_path)
-                    # Loaded AuNP data for smart active zone matching
-                else:
-                    print(f"Warning: AuNP data not found at {aunp_star_path}, using simple filtering")
-            except Exception as e:
-                print(f"Warning: Error loading AuNP data: {e}, using simple filtering")
+        try:
+            # Load AuNP data to match active zones
+            aunp_star_path = Path(tomogram_path) / "best_alignment" / "STT_results" / "aunps" / "aunp_clusters.star"
+            if aunp_star_path.exists():
+                import starfile
+                aunp_data = starfile.read(aunp_star_path)
+                # Loaded AuNP data for smart active zone matching
+            else:
+                print(f"Warning: AuNP data not found at {aunp_star_path}, smart matching will not be available")
+        except Exception as e:
+            print(f"Warning: Error loading AuNP data: {e}, smart matching will not be available")
         
         # Filter active zones based on CSV specification using smart matching
         if aunp_active_zones is not None and aunp_active_zones != []:
@@ -1596,11 +1593,11 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
             # Extract and save zonograms
             extracted_results = extract_active_zonogram(zonogram_results, active_zones_data, tomogram_path)
             
-            if extracted_results and 'rendered_zonograms' in extracted_results:
-                # Create output directories for both locations
-                # 1. In results/visualizations/active_zonograms directory
-                results_active_zonograms_dir = Path(output_dir)
-                results_active_zonograms_dir.mkdir(parents=True, exist_ok=True)
+            if extracted_results and isinstance(extracted_results, dict) and 'rendered_zonograms' in extracted_results and extracted_results.get('rendered_zonograms'):
+                # Create output directories
+                # 1. In results/visualizations/{tomogram_name}/active_zonograms/full/ directory (new organized structure)
+                results_active_zonograms_dir_full = Path("results") / "visualizations" / tomogram_name / "active_zonograms" / "full"
+                results_active_zonograms_dir_full.mkdir(parents=True, exist_ok=True)
                 
                 # 2. In tomogram's STT_results/visualizations/active_zonograms directory
                 tomogram_active_zonograms_dir = Path(tomogram_path) / "best_alignment" / "STT_results" / "visualizations" / "active_zonograms"
@@ -1657,17 +1654,17 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                     np.save(tomogram_active_zonograms_dir / npy_filename, npy_data, allow_pickle=True)
                     print(f"    ✓ Saved MRC: {mrc_filename}")
                     
-                    # Generate main PNG and save to both locations
+                    # Generate main PNG and save to organized structure and tomogram directory
                     png_filename = f"{tomogram_name}_active_zonogram_{zone_name}{suffix}.png"
-                    png_path_results = results_active_zonograms_dir / png_filename
+                    png_path_results_organized = results_active_zonograms_dir_full / png_filename
                     png_path_tomogram = tomogram_active_zonograms_dir / png_filename
                     
-                    if png_path_results.exists() and png_path_tomogram.exists() and not rerun:
+                    if png_path_results_organized.exists() and png_path_tomogram.exists() and not rerun:
                         print(f"    Skipping {png_filename}, already exists.")
                         files_created.append(png_filename)
                     else:
                         fig = render_active_zonograms_findingampa_style(zonogram_findingampa)
-                        fig.savefig(png_path_results)
+                        fig.savefig(png_path_results_organized)
                         fig.savefig(png_path_tomogram)
                         plt.close(fig)
                         print(f"    ✓ Saved PNG: {png_filename}")
@@ -1695,10 +1692,10 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                     selected_aunps = select_aunps_findingampa_style(zonogram_findingampa, None, tomogram_path, active_zone_id, original_zone_data)
                     if len(selected_aunps) > 0:
                         aunp_filename = f"{tomogram_name}_active_zonogram_{zone_name}_selected_aunps{suffix}.png"
-                        aunp_path_results = results_active_zonograms_dir / aunp_filename
+                        aunp_path_results_organized = results_active_zonograms_dir_full / aunp_filename
                         aunp_path_tomogram = tomogram_active_zonograms_dir / aunp_filename
                         
-                        if aunp_path_results.exists() and aunp_path_tomogram.exists() and not rerun:
+                        if aunp_path_results_organized.exists() and aunp_path_tomogram.exists() and not rerun:
                             print(f"    Skipping {aunp_filename}, already exists.")
                             files_created.append(aunp_filename)
                         else:
@@ -1710,7 +1707,7 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                             axxz.scatter(selected_aunps[:,2], selected_aunps[:,1], s=circle_size, c='none', alpha=1.0, edgecolors='gold', linewidth=1.5)
                             axyz.scatter(selected_aunps[:,0], selected_aunps[:,2], s=circle_size, c='none', alpha=1.0, edgecolors='gold', linewidth=1.5)
                             
-                            fig.savefig(aunp_path_results)
+                            fig.savefig(aunp_path_results_organized)
                             fig.savefig(aunp_path_tomogram)
                             plt.close(fig)
                             print(f"    ✓ Saved PNG: {aunp_filename}")
@@ -1844,14 +1841,14 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                         
                         # Save the version with fusion points
                         cluster_filename = f"{tomogram_name}_active_zonogram_{zone_name}_selected_aunps_by_cluster{suffix}.png"
-                        cluster_path_results = results_active_zonograms_dir / cluster_filename
+                        cluster_path_results_organized = results_active_zonograms_dir_full / cluster_filename
                         cluster_path_tomogram = tomogram_active_zonograms_dir / cluster_filename
                         
-                        if cluster_path_results.exists() and cluster_path_tomogram.exists() and not rerun:
+                        if cluster_path_results_organized.exists() and cluster_path_tomogram.exists() and not rerun:
                             print(f"    Skipping {cluster_filename}, already exists.")
                             files_created.append(cluster_filename)
                         else:
-                            fig.savefig(cluster_path_results)
+                            fig.savefig(cluster_path_results_organized)
                             fig.savefig(cluster_path_tomogram)
                             print(f"    ✓ Saved PNG: {cluster_filename}")
                             files_created.append(cluster_filename)
@@ -1887,20 +1884,111 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                         
                         # Save the version without fusion points
                         cluster_no_fusion_filename = f"{tomogram_name}_active_zonogram_{zone_name}_selected_aunps_by_cluster_no_fusion{suffix}.png"
-                        cluster_no_fusion_path_results = results_active_zonograms_dir / cluster_no_fusion_filename
+                        cluster_no_fusion_path_results_organized = results_active_zonograms_dir_full / cluster_no_fusion_filename
                         cluster_no_fusion_path_tomogram = tomogram_active_zonograms_dir / cluster_no_fusion_filename
                         
-                        if cluster_no_fusion_path_results.exists() and cluster_no_fusion_path_tomogram.exists() and not rerun:
+                        if cluster_no_fusion_path_results_organized.exists() and cluster_no_fusion_path_tomogram.exists() and not rerun:
                             print(f"    Skipping {cluster_no_fusion_filename}, already exists.")
                             files_created.append(cluster_no_fusion_filename)
                         else:
-                            fig_no_fusion.savefig(cluster_no_fusion_path_results)
+                            fig_no_fusion.savefig(cluster_no_fusion_path_results_organized)
                             fig_no_fusion.savefig(cluster_no_fusion_path_tomogram)
                             print(f"    ✓ Saved PNG: {cluster_no_fusion_filename}")
                             files_created.append(cluster_no_fusion_filename)
                         
                         plt.close(fig)
                         plt.close(fig_no_fusion)
+                    
+                    # Generate packing density visualization
+                    packing_density_file = Path(tomogram_path) / "best_alignment" / "STT_results" / "aunps" / "packing_density_results.json"
+                    if packing_density_file.exists() and zone_name in zonogram_results['zonogram_data']:
+                        try:
+                            import json
+                            from scipy.interpolate import griddata
+                            from synaptic_tomo_tools.activezone import transform_coordinates_to_active_zonogram
+                            
+                            with open(packing_density_file, 'r') as f:
+                                packing_density_data = json.load(f)
+                            
+                            if zone_name in packing_density_data:
+                                zone_packing_data = packing_density_data[zone_name]
+                                v_array = np.array(zone_packing_data['v_array'])
+                                packing_coefficient = np.array(zone_packing_data['packing_coefficient'])
+                                
+                                # Transform coordinates to active zonogram space
+                                transformed_v = transform_coordinates_to_active_zonogram(v_array, original_zone_data)
+                                
+                                if len(transformed_v) > 0:
+                                    # Create figure EXACTLY the same way as regular active zonogram
+                                    fig_packing = render_active_zonograms_findingampa_style(zonogram_findingampa)
+                                    (axxy_packing, axxz_packing, axyz_packing) = fig_packing.get_axes()
+                                    
+                                    # Get the base image to determine its extent
+                                    res_ddw = zonogram_findingampa[2]
+                                    base_image = torch.min(res_ddw, axis=0).values
+                                    base_image_shape = base_image.shape  # (y, x) = (shape[1], shape[2] from res_ddw)
+                                    
+                                    # Get the extent of the base image (imshow default is [left, right, bottom, top])
+                                    # For a (y, x) array with origin='lower', extent is [0, x_size, 0, y_size]
+                                    base_extent = [0, base_image_shape[1], 0, base_image_shape[0]]
+                                    
+                                    # Create grid for interpolation matching the base image shape exactly
+                                    grid_y, grid_x = np.mgrid[0:base_image_shape[0], 0:base_image_shape[1]]
+                                    
+                                    # Interpolate packing density onto the grid
+                                    # transformed_v[:, :2] gives (x, y) coordinates
+                                    # griddata expects (xi, yi) as the grid, which is (grid_x, grid_y)
+                                    density_map = griddata(
+                                        transformed_v[:, :2],  # (x, y) points
+                                        packing_coefficient, 
+                                        (grid_x, grid_y),  # Grid points (x, y)
+                                        method='linear', 
+                                        fill_value=0
+                                    )
+                                    
+                                    # Verify density_map shape matches base image exactly
+                                    if density_map.shape != base_image_shape:
+                                        # If shape doesn't match, we need to fix it
+                                        from scipy.ndimage import zoom
+                                        zoom_factors = (base_image_shape[0] / density_map.shape[0], 
+                                                       base_image_shape[1] / density_map.shape[1])
+                                        density_map = zoom(density_map, zoom_factors, order=1)
+                                    
+                                    # Overlay the heatmap on the XY view (main view)
+                                    # Use the EXACT same extent as the base image to ensure perfect alignment
+                                    im = axxy_packing.imshow(
+                                        density_map, 
+                                        cmap='hot', 
+                                        alpha=0.6, 
+                                        origin='lower',
+                                        vmin=0.0,
+                                        vmax=1.0,
+                                        extent=base_extent,  # Use same extent as base image
+                                        zorder=10  # Ensure it's on top
+                                    )
+                                    
+                                    # Add colorbar
+                                    cbar = fig_packing.colorbar(im, ax=axxy_packing, fraction=0.046, pad=0.04)
+                                    cbar.set_label('Estimated AMPA Receptor Packing Coefficient', rotation=270, labelpad=15)
+                                    
+                                    # Save packing density visualization
+                                    packing_filename = f"{tomogram_name}_active_zonogram_{zone_name}_packing_density{suffix}.png"
+                                    packing_path_results_organized = results_active_zonograms_dir_full / packing_filename
+                                    packing_path_tomogram = tomogram_active_zonograms_dir / packing_filename
+                                    
+                                    if packing_path_results_organized.exists() and packing_path_tomogram.exists() and not rerun:
+                                        print(f"    Skipping {packing_filename}, already exists.")
+                                        files_created.append(packing_filename)
+                                    else:
+                                        fig_packing.savefig(packing_path_results_organized)
+                                        fig_packing.savefig(packing_path_tomogram)
+                                        plt.close(fig_packing)
+                                        print(f"    ✓ Saved PNG: {packing_filename}")
+                                        files_created.append(packing_filename)
+                        except Exception as e:
+                            print(f"    Warning: Could not create packing density visualization for {zone_name}: {e}")
+                            import traceback
+                            traceback.print_exc()
             else:
                 print("No active zonograms found")
         else:
@@ -1960,8 +2048,14 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                 cluster_data = cluster_df[cluster_df['aunp_cluster'] == cluster_id]
                 
                 # Create mini zonogram (use filtered active zones)
+                # Create mini zonogram directory in organized structure
+                results_active_zonograms_dir_mini = Path("results") / "visualizations" / tomogram_name / "active_zonograms" / "mini"
+                results_active_zonograms_dir_mini.mkdir(parents=True, exist_ok=True)
+                
                 success = create_mini_zonogram_for_cluster(
-                    cluster_data, cluster_id, tomogram_path, tomogram_active_zonograms_dir, results_active_zonograms_dir, active_zones_data, cluster_color_map, tomogram_name, default_suffix, rerun
+                    cluster_data, cluster_id, tomogram_path, tomogram_active_zonograms_dir, 
+                    results_active_zonograms_dir_mini, active_zones_data, cluster_color_map, 
+                    tomogram_name, default_suffix, rerun
                 )
                 
                 if success:
@@ -2108,13 +2202,12 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
         # Save mini zonogram files to both locations
         mini_filename_base = f"{tomogram_name}_mini_zonogram_cluster_{cluster_id}{suffix}"
         
-        # 1. Save MRC file to both locations
+        # 1. Save MRC file to tomogram directory only (not to results directory)
         mrc_filename = f"{mini_filename_base}.mrc"
         mrcfile.write(tomogram_azograms_dir / mrc_filename, transformed_tomogram.numpy(), overwrite=True)
-        mrcfile.write(results_azograms_dir / mrc_filename, transformed_tomogram.numpy(), overwrite=True)
         print(f"    ✓ Saved MRC: {mrc_filename}")
         
-        # 2. Save NPY file to both locations
+        # 2. Save NPY file to tomogram directory only (not to results directory)
         npy_filename = f"{mini_filename_base}.npy"
         npy_data = {
             "cs": coordinate_system, 
@@ -2124,10 +2217,9 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
             "aunp_count": len(cluster_data)
         }
         np.save(tomogram_azograms_dir / npy_filename, npy_data, allow_pickle=True)
-        np.save(results_azograms_dir / npy_filename, npy_data, allow_pickle=True)
         print(f"    ✓ Saved NPY: {npy_filename}")
         
-        # 3. Generate main PNG and save to both locations
+        # 3. Generate main PNG and save to all locations
         png_filename = f"{mini_filename_base}.png"
         png_path_tomogram = tomogram_azograms_dir / png_filename
         png_path_results = results_azograms_dir / png_filename
@@ -2165,7 +2257,7 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_path, to
         valid_mask = np.all(cluster_positions_transformed >= 0, axis=1) & np.all(cluster_positions_transformed < extent.reshape(1, -1), axis=1)
         cluster_positions_transformed = cluster_positions_transformed[valid_mask]
         
-        # 4. Generate AuNP visualization and save to both locations
+        # 4. Generate AuNP visualization and save to all locations
         aunp_filename = f"{mini_filename_base}_aunps.png"
         aunp_path_tomogram = tomogram_azograms_dir / aunp_filename
         aunp_path_results = results_azograms_dir / aunp_filename
@@ -2395,8 +2487,8 @@ def generate_all_zonograms_pdf(tomo_paths, data_dir=None):
         
         print(f"    Processing {len(tomogram_data)} tomograms for PDF generation")
         
-        # Create output directory
-        output_dir = Path("results/visualizations/active_zonograms")
+        # Create output directory for summary PDFs
+        output_dir = Path("results/visualizations/pdf_summaries")
         output_dir.mkdir(parents=True, exist_ok=True)
         pdf_path = output_dir / "all_zonograms_summary.pdf"
         
@@ -2445,8 +2537,8 @@ def generate_all_zonograms_pdf(tomo_paths, data_dir=None):
                     if Path(tomo_info).name == tomogram_name:
                         break
             
-            # Use results directory instead of tomogram directory for all zonograms PDF
-            azograms_dir = Path("results/visualizations/active_zonograms")
+            # Look in the new organized structure
+            azograms_dir = Path("results") / "visualizations" / tomogram_name / "active_zonograms" / "full"
             
             if not azograms_dir.exists():
                 print(f"    Warning: Active zonograms directory not found: {azograms_dir}")
@@ -2518,7 +2610,9 @@ def generate_all_zonograms_pdf(tomo_paths, data_dir=None):
                     print(f"      Error adding regular zonogram {zonogram_file}: {e}")
             
             # Find mini zonogram comparison files for this specific tomogram
-            mini_zonogram_files = list(azograms_dir.glob(f"{tomogram_name}_mini_zonogram_cluster_*_comparison.png"))
+            # Look for mini zonograms in the mini subdirectory
+            mini_azograms_dir = Path("results") / "visualizations" / tomogram_name / "active_zonograms" / "mini"
+            mini_zonogram_files = list(mini_azograms_dir.glob(f"{tomogram_name}_mini_zonogram_cluster_*_comparison.png")) if mini_azograms_dir.exists() else []
             
             if mini_zonogram_files:
                 # Add mini zonograms section title for this tomogram
@@ -2636,8 +2730,8 @@ def generate_mini_zonograms_pdf(tomo_paths, data_dir=None):
         
         # Processing tomograms for mini zonogram PDF generation
         
-        # Create output directory
-        output_dir = Path("results/visualizations/active_zonograms")
+        # Create output directory for summary PDFs
+        output_dir = Path("results/visualizations/pdf_summaries")
         output_dir.mkdir(parents=True, exist_ok=True)
         pdf_path = output_dir / "mini_zonograms_summary.pdf"
         pdf_path_4aunps = output_dir / "mini_zonograms_4aunps_summary.pdf"
@@ -2689,14 +2783,19 @@ def generate_mini_zonograms_pdf(tomo_paths, data_dir=None):
                 tomogram_path = Path(data_dir) / tomogram_set / "TOP_TOMOS" / tomogram_name
             else:
                 tomogram_path = Path("data") / tomogram_set / "TOP_TOMOS" / tomogram_name
-            azograms_dir = tomogram_path / "best_alignment" / "STT_results" / "visualizations" / "active_zonograms"
             
-            if not azograms_dir.exists():
-                print(f"    Warning: Active zonograms directory not found: {azograms_dir}")
+            # Look in the organized structure
+            azograms_dir_organized = Path("results") / "visualizations" / tomogram_name / "active_zonograms" / "mini"
+            
+            if not azograms_dir_organized.exists():
+                print(f"    Warning: Active zonograms directory not found: {azograms_dir_organized}")
                 continue
             
-            # Find mini zonogram comparison files
-            mini_zonogram_files = list(azograms_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
+            mini_zonogram_files = list(azograms_dir_organized.glob("*_mini_zonogram_cluster_*_comparison.png"))
+            
+            if not mini_zonogram_files:
+                print(f"    Warning: No mini zonogram files found for {tomogram_name}")
+                continue
             
             # Filter mini zonogram files by active zone indices if specified in CSV
             if selected_az_indices is not None and mini_zonogram_files:
@@ -2899,11 +2998,13 @@ def generate_default_visualization_pdf_summary(tomogram_paths, original_csv_path
         
         # Run the PDF generation script with the original CSV
         cmd = [sys.executable, str(script_path)]
-        cmd += ["--vis-dir", "results/visualizations/aunps_and_vesicles"]
+        # Note: The PDF generation script may need to be updated to use the new organized structure
+        # For now, point to the base visualizations directory - the script will need to handle the new structure
+        cmd += ["--vis-dir", "results/visualizations"]
         # Use the provided root directory or default to "data"
         data_dir = root_dir if root_dir else "data"
         cmd += ["--data-dir", data_dir]
-        cmd += ["--output-dir", "results/summary_pdfs"]
+        cmd += ["--output-dir", "results/visualizations/pdf_summaries"]
         cmd += ["--tomocsv", str(original_csv_path)]
         
         print(f"    Running: {' '.join(cmd)}")

@@ -280,11 +280,12 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
             img_types.append((f"AuNP Clusters Overlay (AZ {az_idx})", f"{tomo_name}_combined_aunpclusters_az{az_idx}.png"))
             # Add cluster image for this active zone - need to find the actual zone name
             # Look for the actual active zonogram cluster file
-            az_dir = vis_dir.parent / "active_zonograms"
+            # Look in the new organized structure for cluster files
+            az_dir_organized = vis_dir / tomo_name / "active_zonograms" / "full"
             cluster_pattern = f"{tomo_name}_active_zonogram_*_selected_aunps_by_cluster_az{az_idx}.png"
             print(f"Looking for cluster files with pattern: {cluster_pattern}")
-            print(f"In directory: {az_dir}")
-            cluster_files = list(az_dir.glob(cluster_pattern))
+            print(f"In directory: {az_dir_organized}")
+            cluster_files = list(az_dir_organized.glob(cluster_pattern))
             print(f"Found cluster files: {[f.name for f in cluster_files]}")
             if cluster_files:
                 actual_filename = cluster_files[0].name
@@ -310,39 +311,44 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
         print(f"Processing image: {fname}")
         if "active_zonogram" in fname and "active_zone_pre1_post1" not in fname and "selected_aunps_by_cluster" not in fname:
             # Active zonogram position/selected images are in the tomogram's active_zonograms directory
-            # Find the actual tomogram directory (it might be in a subdirectory)
+            # Find the actual tomogram directory
             tomo_dirs = list(base_data_dir.glob(f"**/{tomo_name}"))
             if tomo_dirs:
                 az_dir = tomo_dirs[0] / "best_alignment" / "active_zonograms"
                 img_path = az_dir / fname
                 print(f"  Using tomogram directory: {img_path}")
+                print(f"  File exists: {img_path.exists()}")
             else:
-                # Fallback to direct path
                 az_dir = base_data_dir / f"{tomo_name}" / "best_alignment" / "active_zonograms"
                 img_path = az_dir / fname
-                print(f"  Using fallback path: {img_path}")
+                print(f"  Using path: {img_path}")
+                print(f"  File exists: {img_path.exists()}")
             img_paths.append(img_path)
         elif "active_zonogram" in fname:
-            # Active zonogram cluster images are in the results active_zonograms directory
-            # Also check the tomogram's STT_results/visualizations/active_zonograms directory
-            az_dir = vis_dir.parent / "active_zonograms"
-            img_path = az_dir / fname
-            print(f"  Using results active_zonograms directory: {img_path}")
+            # Active zonogram cluster images are in the organized structure
+            # Look in vis_dir/{tomo_name}/active_zonograms/full/
+            az_dir_organized = vis_dir / tomo_name / "active_zonograms" / "full"
+            img_path = az_dir_organized / fname
+            print(f"  Using organized structure: {img_path}")
             print(f"  File exists: {img_path.exists()}")
-            
-            # Also check tomogram directory
-            tomo_dirs = list(base_data_dir.glob(f"**/{tomo_name}"))
-            if tomo_dirs:
-                tomo_az_dir = tomo_dirs[0] / "best_alignment" / "STT_results" / "visualizations" / "active_zonograms"
-                tomo_img_path = tomo_az_dir / fname
-                print(f"  Also checking tomogram directory: {tomo_img_path}")
-                print(f"  File exists in tomogram: {tomo_img_path.exists()}")
-            
+            if not img_path.exists():
+                print(f"  WARNING: File not found at {img_path}")
             img_paths.append(img_path)
         else:
-            # Regular visualization images are in the aunps_and_vesicles subdirectory
-            img_path = vis_dir / fname
-            print(f"  Using aunps_and_vesicles directory: {img_path}")
+            # Regular visualization images are in the organized structure
+            # Look in vis_dir/{tomo_name}/aunps_and_vesicles/ for combined images
+            # Look in vis_dir/{tomo_name}/active_zonograms/full/ for active zonogram images
+            if 'combined' in fname or 'aunpclusters' in fname:
+                img_path = vis_dir / tomo_name / "aunps_and_vesicles" / fname
+            elif 'active_zonogram' in fname:
+                img_path = vis_dir / tomo_name / "active_zonograms" / "full" / fname
+            else:
+                # Unknown image type - try aunps_and_vesicles as default
+                img_path = vis_dir / tomo_name / "aunps_and_vesicles" / fname
+            print(f"  Looking for image: {img_path}")
+            print(f"  File exists: {img_path.exists()}")
+            if not img_path.exists():
+                print(f"  WARNING: File not found at {img_path}")
             img_paths.append(img_path)
     img_labels = [label for label, _ in img_types]
     
@@ -450,9 +456,9 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Generate tomogram summary PDFs')
-    parser.add_argument('--vis-dir', default='results/visualizations/aunps_and_vesicles', help='Directory with visualization images')
+    parser.add_argument('--vis-dir', default='results/visualizations', help='Base directory with visualization images (organized by tomogram name)')
     parser.add_argument('--data-dir', default='data', help='Base data directory for tomogram stats')
-    parser.add_argument('--output-dir', default='results/summary_pdfs', help='Output directory for PDFs')
+    parser.add_argument('--output-dir', default='results/visualizations/pdf_summaries', help='Output directory for PDFs')
     parser.add_argument('--tomocsv', default='data/tomograms.csv', help='CSV file mapping tomogram names to sets')
     parser.add_argument('--start-from', default=None, help='Start PDF generation from this tomogram (still includes all tomograms in final PDF)')
     args = parser.parse_args()
@@ -468,17 +474,19 @@ def main():
     
     # Find all combined images as tomogram anchors
     allowed_tomos = set(tomo_set_map.keys())
-    # vis_dir is already the aunps_and_vesicles directory, don't append it again
-    aunps_vesicles_dir = vis_dir
+    # vis_dir is now the base visualizations directory
+    # Look for images in the new organized structure: vis_dir/{tomo_name}/aunps_and_vesicles/
     
     # Create a mapping from tomogram name to image path
     tomo_to_img = {}
     
-    # Looking for combined images
+    # Looking for combined images in the new organized structure
     
-    if aunps_vesicles_dir.exists():
-        # Look for combined images with the correct active zone suffix for each tomogram
-        for tomo_name in allowed_tomos:
+    for tomo_name in allowed_tomos:
+        # Look in the new organized structure
+        aunps_vesicles_dir = vis_dir / tomo_name / "aunps_and_vesicles"
+        
+        if aunps_vesicles_dir.exists():
             # Get the active zone indices for this tomogram
             az_indices = tomo_az_indices_map.get(tomo_name, [0])  # Default to [0] if not specified
             if az_indices is None:
@@ -497,11 +505,6 @@ def main():
             else:
                 # Combined image not found
                 pass
-    else:
-        print(f"Directory {aunps_vesicles_dir} does not exist, using fallback")
-        # Fallback to old location
-        combined_imgs = [img for img in vis_dir.glob('*_combined.png') if img.name.replace('_combined.png', '') in allowed_tomos]
-        tomo_to_img = {img.name.replace('_combined.png', ''): img for img in combined_imgs}
     
     # Final tomogram mapping completed
     
@@ -520,8 +523,11 @@ def main():
     for i, tomo_name in enumerate(csv_tomograms[start_index:], start=start_index):
         if tomo_name in tomo_to_img:
             print(f"[{i+1}/{len(csv_tomograms)}] Generating PDF for {tomo_name}...", end=" ", flush=True)
-            generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tomo_set_map, tomo_az_map, tomo_az_indices_map)
-            pdf_path = output_dir / f"{tomo_name}_summary.pdf"
+            # Save individual tomogram PDF to its own directory
+            tomogram_pdf_dir = vis_dir / tomo_name
+            tomogram_pdf_dir.mkdir(parents=True, exist_ok=True)
+            generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, tomogram_pdf_dir, tomo_set_map, tomo_az_map, tomo_az_indices_map)
+            pdf_path = tomogram_pdf_dir / f"{tomo_name}_summary.pdf"
             if pdf_path.exists():
                 pdf_paths.append(str(pdf_path))
         else:
@@ -532,7 +538,8 @@ def main():
     all_pdf_paths = []
     print(f"\nCollecting PDFs for combined document...")
     for tomo_name in csv_tomograms:
-        pdf_path = output_dir / f"{tomo_name}_summary.pdf"
+        # Look for PDF in the tomogram's directory
+        pdf_path = vis_dir / tomo_name / f"{tomo_name}_summary.pdf"
         if pdf_path.exists():
             all_pdf_paths.append(str(pdf_path))
             # Found PDF

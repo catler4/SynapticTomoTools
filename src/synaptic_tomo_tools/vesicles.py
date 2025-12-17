@@ -371,7 +371,7 @@ def import_presynaptic_membranes_and_active_zones(tomogram_path) -> Dict[str, Di
     """
     tomogram_path = Path(tomogram_path)
     aunps_dir = tomogram_path / "best_alignment" / "aunps"
-    stt_results_dir = tomogram_path / "best_alignment" / "STT_results" / "active_zones"
+    stt_results_dir = tomogram_path / "best_alignment" / "STT_results" / "activezone"
     
     if not aunps_dir.exists():
         raise FileNotFoundError(f"AuNPs directory not found: {aunps_dir}")
@@ -397,7 +397,7 @@ def import_presynaptic_membranes_and_active_zones(tomogram_path) -> Dict[str, Di
             membrane_name = membrane_file.stem  # e.g., "presynapticmembranes_1"
             membrane_number = membrane_name.split('_')[-1]  # e.g., "1"
             
-            # Look for ALL active zone files with matching number in STT_results/active_zones
+            # Look for ALL active zone files with matching number in STT_results/activezone
             active_zone_files = list(stt_results_dir.glob(f"active_zone_pre{membrane_number}_post*_pre.txt"))
             
             if active_zone_files:
@@ -829,7 +829,7 @@ def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Di
             
             # Save to global CSV
             df_vesicles = pd.DataFrame(vesicle_rows)
-            global_csv = Path("results/all_vesicle_data.csv")
+            global_csv = Path("results/vesicles/all_vesicle_data.csv")
             global_csv.parent.mkdir(parents=True, exist_ok=True)
             if global_csv.exists():
                 try:

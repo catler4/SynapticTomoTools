@@ -7,6 +7,8 @@ import os
 import webbrowser
 import pandas as pd
 from pathlib import Path
+import shutil
+from datetime import datetime
 
 # Get the repository root directory (parent of scripts/)
 REPO_ROOT = Path(__file__).parent.parent
@@ -96,6 +98,25 @@ class AnalysisPipelineGUI(tk.Tk):
         # Add a separator at a fixed position
         separator = ttk.Separator(frame, orient='horizontal')
         separator.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        
+        # Results management section
+        ttk.Label(frame, text="Results Management:", font=('TkDefaultFont', 10, 'bold')).grid(row=6, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
+        
+        # Archive current results
+        archive_frame = ttk.Frame(frame)
+        archive_frame.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+        ttk.Label(archive_frame, text="Archive note:").pack(side=tk.LEFT, padx=(0, 5))
+        self.archive_note_var = tk.StringVar()
+        archive_entry = ttk.Entry(archive_frame, textvariable=self.archive_note_var, width=30)
+        archive_entry.pack(side=tk.LEFT, padx=(0, 5))
+        archive_btn = ttk.Button(archive_frame, text="Archive current results", command=self._archive_results)
+        archive_btn.pack(side=tk.LEFT)
+        ToolTip(archive_btn, "Move all contents of results/ directory to a dated archive directory. Archived results are preserved and not deleted.")
+        
+        # Delete previous results
+        delete_btn = ttk.Button(frame, text="Delete previous results", command=self._delete_previous_results)
+        delete_btn.grid(row=8, column=0, columnspan=3, sticky=tk.W, pady=5)
+        ToolTip(delete_btn, "Delete results from individual tomogram STT_results directories (for tomograms in CSV) and the results directory. Does NOT delete archived results.")
 
     def _load_and_display_image(self, path, parent, max_width=400, max_height=180):
         try:
@@ -445,21 +466,17 @@ Do you want to continue?"""
             ttk.Label(controls_frame, text="Active Zone -> Vesicles -> AuNPs -> Visualization").pack(anchor=tk.W, pady=(0, 10))
         run_btn = ttk.Button(controls_frame, text=f"Run {step}", command=lambda s=step: self._run_analysis(s, tab))
         run_btn.pack(anchor=tk.W, pady=5)
-        # Add checkboxes for rerun, delete-results, check-files
+        # Add checkboxes for rerun, check-files
         rerun_var = tk.BooleanVar()
-        delres_var = tk.BooleanVar()
         checkfiles_var = tk.BooleanVar()
         rerun_cb = ttk.Checkbutton(controls_frame, text="Rerun (overwrite existing results)", variable=rerun_var)
         rerun_cb.pack(anchor=tk.W)
         ToolTip(rerun_cb, "Rerun analysis on already completed steps and overwrite existing results.")
-        delres_cb = ttk.Checkbutton(controls_frame, text="Delete all results before running", variable=delres_var)
-        delres_cb.pack(anchor=tk.W)
-        ToolTip(delres_cb, "Delete all analysis results files before running analysis.")
         checkfiles_cb = ttk.Checkbutton(controls_frame, text="Check files only (no analysis)", variable=checkfiles_var)
         checkfiles_cb.pack(anchor=tk.W)
         ToolTip(checkfiles_cb, "Check that all expected files for the tomograms listed in the CSV are present in the expected locations. No analysis is run.")
         # Store flag variables in the tab for access in _run_analysis
-        tab._flag_vars = (rerun_var, delres_var, checkfiles_var)
+        tab._flag_vars = (rerun_var, checkfiles_var)
         
         # Add calculate signals checkbox for vesicles
         if step == "Vesicles":
@@ -560,6 +577,141 @@ Do you want to continue?"""
             # Hide the starting tomogram selection
             self.start_tomogram_label.grid_remove()
             self.start_tomogram_combo.grid_remove()
+    
+    def _archive_results(self):
+        """Archive current results directory to a dated directory with user note."""
+        results_dir = Path("results")
+        if not results_dir.exists():
+            messagebox.showwarning("Warning", "Results directory does not exist. Nothing to archive.")
+            return
+        
+        # Check if results directory is empty
+        if not any(results_dir.iterdir()):
+            messagebox.showwarning("Warning", "Results directory is empty. Nothing to archive.")
+            return
+        
+        # Get user note
+        note = self.archive_note_var.get().strip()
+        if not note:
+            if not messagebox.askyesno("No Note", "No archive note provided. Continue without note?"):
+                return
+            note = "no_note"
+        else:
+            # Sanitize note for filename (remove invalid characters)
+            import re
+            note = re.sub(r'[<>:"/\\|?*]', '_', note)
+            note = note.replace(' ', '_')
+        
+        # Create archive directory name
+        date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        archive_dir_name = f"{date_str}_results_{note}"
+        
+        # Create archived_results directory if it doesn't exist
+        archived_results_base = Path("archived_results")
+        archived_results_base.mkdir(exist_ok=True)
+        
+        archive_dir = archived_results_base / archive_dir_name
+        
+        # Check if archive directory already exists
+        if archive_dir.exists():
+            if not messagebox.askyesno("Directory Exists", f"Archive directory {archive_dir_name} already exists. Overwrite?"):
+                return
+            shutil.rmtree(archive_dir)
+        
+        try:
+            # Move entire results directory to archive
+            shutil.move(str(results_dir), str(archive_dir))
+            # Recreate empty results directory
+            results_dir.mkdir(exist_ok=True)
+            
+            messagebox.showinfo("Success", f"Results archived to archived_results/{archive_dir_name}")
+            self._log(f"Archived results to archived_results/{archive_dir_name}\n")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to archive results: {e}")
+            self._log(f"Error archiving results: {e}\n")
+    
+    def _delete_previous_results(self):
+        """Delete previous results from tomogram STT_results and results directory."""
+        csv_path = self.csv_path.get()
+        if not csv_path:
+            messagebox.showerror("Error", "Please select a CSV file first to identify which tomograms to process.")
+            return
+        
+        # Get selected tomograms based on processing mode (same logic as _run_analysis)
+        processing_mode = self.processing_mode.get()
+        selected_tomogram = self.start_tomogram.get() if hasattr(self, 'start_tomogram') else None
+        
+        # Determine which tomograms to delete based on processing mode
+        try:
+            df = pd.read_csv(csv_path)
+            if 'tomoname' not in df.columns:
+                messagebox.showerror("Error", "CSV file must contain a 'tomoname' column.")
+                return
+            
+            tomogram_names = df['tomoname'].tolist()
+            
+            if processing_mode == "Single tomogram" and selected_tomogram:
+                tomograms_to_delete = [selected_tomogram]
+                mode_description = f"single tomogram: {selected_tomogram}"
+            elif processing_mode == "Start from" and selected_tomogram:
+                start_idx = tomogram_names.index(selected_tomogram) if selected_tomogram in tomogram_names else 0
+                tomograms_to_delete = tomogram_names[start_idx:]
+                mode_description = f"tomograms starting from: {selected_tomogram} ({len(tomograms_to_delete)} tomograms)"
+            else:
+                # "All tomograms" mode
+                tomograms_to_delete = tomogram_names
+                mode_description = f"all tomograms in CSV ({len(tomograms_to_delete)} tomograms)"
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to read CSV file: {e}")
+            return
+        
+        # Confirm deletion with specific tomogram list
+        if not messagebox.askyesno("Confirm Deletion", 
+                                   f"This will delete results for {mode_description}:\n\n"
+                                   "- STT_results directories for selected tomograms\n"
+                                   "- Results entries from results/analysis_results.json\n"
+                                   "- All contents from results/ directory\n\n"
+                                   "Archived results will NOT be deleted.\n\n"
+                                   "Continue?"):
+            return
+        
+        try:
+            # Create a temporary CSV with only the selected tomograms
+            import tempfile
+            temp_csv = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+            temp_df = df[df['tomoname'].isin(tomograms_to_delete)]
+            temp_df.to_csv(temp_csv.name, index=False)
+            temp_csv.close()
+            
+            # Import delete function - ensure project root is in path
+            import sys
+            if str(REPO_ROOT) not in sys.path:
+                sys.path.insert(0, str(REPO_ROOT))
+            from src.synaptic_tomo_tools.cli import delete_csv_tomogram_results
+            
+            # Delete results for selected tomograms only
+            self._log(f"Deleting previous results for {mode_description}...\n")
+            delete_csv_tomogram_results(temp_csv.name, results_dir="results", data_dir="data")
+            
+            # Clean up temporary CSV
+            os.unlink(temp_csv.name)
+            
+            # Also delete the entire results directory contents
+            # (Archived directories are already moved out, so safe to delete everything)
+            results_dir = Path("results")
+            if results_dir.exists():
+                for item in results_dir.iterdir():
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+                self._log("Deleted all contents from results/ directory\n")
+            
+            messagebox.showinfo("Success", f"Previous results deleted successfully for {mode_description}.")
+            self._log("Previous results deletion completed.\n")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to delete previous results: {e}")
+            self._log(f"Error deleting previous results: {e}\n")
 
     def _run_analysis(self, step, tab, generate_pdf=False):
         # Build CLI command
@@ -645,11 +797,9 @@ Do you want to continue?"""
             if hasattr(tab, '_calculate_signals_var') and tab._calculate_signals_var.get():
                 cli += ["--calculate-vesicle-signals"]
         # Add flags from checkboxes
-        rerun_var, delres_var, checkfiles_var = getattr(tab, '_flag_vars', (None, None, None))
+        rerun_var, checkfiles_var = getattr(tab, '_flag_vars', (None, None))
         if rerun_var and rerun_var.get():
             cli += ["--rerun"]
-        if delres_var and delres_var.get():
-            cli += ["--delete-results"]
         if checkfiles_var and checkfiles_var.get():
             cli += ["--check-files"]
         self._log(f"Running: {' '.join(cli)}\n")
@@ -740,7 +890,7 @@ Do you want to continue?"""
 
 
     def _view_pdf_summary(self):
-        pdf_path = os.path.abspath("results/summary_pdfs/all_tomograms_summary.pdf")
+        pdf_path = os.path.abspath("results/visualizations/pdf_summaries/all_tomograms_summary.pdf")
         if not os.path.exists(pdf_path):
             messagebox.showerror("PDF Not Found", f"{pdf_path} does not exist. Please generate the PDF summary first.")
             return
@@ -1682,22 +1832,35 @@ Do you want to continue?"""
                 combined_output_dir = "results/ampa_poses"
                 os.makedirs(combined_output_dir, exist_ok=True)
                 
+                # Build parameter strings for filenames (same format as individual tomogram files)
+                if aunp_no_cutoff:
+                    aunp_str = "aunpNONE"
+                else:
+                    aunp_str = f"aunp{aunp_min_dist}-{aunp_max_dist}nm"
+                
+                if membrane_no_cutoff:
+                    membrane_str = "memNONE"
+                else:
+                    membrane_str = f"mem{membrane_min_dist}-{membrane_max_dist}nm"
+                
                 # Save original method results (all poses)
                 if all_particles_data_original:
                     combined_particles_original = pd.concat(all_particles_data_original, ignore_index=True)
+                    original_filename = f"all_ampa_poses_all_poses_{aunp_str}_{membrane_str}.star"
                     starfile.write({
                         'particles': combined_particles_original,
                         'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
-                    }, os.path.join(combined_output_dir, "all_ampa_poses_all_poses.star"))
-                    self._log(f"Saved combined all poses AMPA poses to {combined_output_dir}/all_ampa_poses_all_poses.star\n")
+                    }, os.path.join(combined_output_dir, original_filename))
+                    self._log(f"Saved combined all poses AMPA poses to {combined_output_dir}/{original_filename}\n")
                     
                     if all_aunps_data_original:
                         combined_aunps_original = pd.concat(all_aunps_data_original, ignore_index=True)
+                        original_aunps_filename = f"all_ampa_poses_all_poses_{aunp_str}_{membrane_str}_paired_aunps.star"
                         starfile.write({
                             'particles': combined_aunps_original,
                             'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
-                        }, os.path.join(combined_output_dir, "all_ampa_poses_all_poses_paired_aunps.star"))
-                        self._log(f"Saved combined all poses paired AuNPs to {combined_output_dir}/all_ampa_poses_all_poses_paired_aunps.star\n")
+                        }, os.path.join(combined_output_dir, original_aunps_filename))
+                        self._log(f"Saved combined all poses paired AuNPs to {combined_output_dir}/{original_aunps_filename}\n")
                 
                 # Save optimized method results
                 if all_particles_data_optimized:
@@ -1706,37 +1869,41 @@ Do you want to continue?"""
                     optimization_method = self.ampa_optimization_method.get()
                     method_suffix = optimization_method if optimization_method in ["greedy", "ilp"] else "optimized"
                     
+                    optimized_filename = f"all_ampa_poses_{method_suffix}_{aunp_str}_{membrane_str}_steric{steric_radius}nm.star"
                     starfile.write({
                         'particles': combined_particles_optimized,
                         'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
-                    }, os.path.join(combined_output_dir, f"all_ampa_poses_{method_suffix}.star"))
-                    self._log(f"Saved combined {method_suffix} AMPA poses to {combined_output_dir}/all_ampa_poses_{method_suffix}.star\n")
+                    }, os.path.join(combined_output_dir, optimized_filename))
+                    self._log(f"Saved combined {method_suffix} AMPA poses to {combined_output_dir}/{optimized_filename}\n")
                     
                     if all_aunps_data_optimized:
                         combined_aunps_optimized = pd.concat(all_aunps_data_optimized, ignore_index=True)
+                        optimized_aunps_filename = f"all_ampa_poses_{method_suffix}_{aunp_str}_{membrane_str}_steric{steric_radius}nm_paired_aunps.star"
                         starfile.write({
                             'particles': combined_aunps_optimized,
                             'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
-                        }, os.path.join(combined_output_dir, f"all_ampa_poses_{method_suffix}_paired_aunps.star"))
-                        self._log(f"Saved combined {method_suffix} paired AuNPs to {combined_output_dir}/all_ampa_poses_{method_suffix}_paired_aunps.star\n")
+                        }, os.path.join(combined_output_dir, optimized_aunps_filename))
+                        self._log(f"Saved combined {method_suffix} paired AuNPs to {combined_output_dir}/{optimized_aunps_filename}\n")
                     
                     # Save unpaired AuNPs for all poses method
                     if all_unpaired_data_original:
                         combined_unpaired_original = pd.concat(all_unpaired_data_original, ignore_index=True)
+                        unpaired_original_filename = f"all_ampa_poses_all_poses_{aunp_str}_{membrane_str}_unpaired_aunps.star"
                         starfile.write({
                             'particles': combined_unpaired_original,
                             'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
-                        }, os.path.join(combined_output_dir, "all_ampa_poses_all_poses_unpaired_aunps.star"))
-                        self._log(f"Saved combined all poses unpaired AuNPs to {combined_output_dir}/all_ampa_poses_all_poses_unpaired_aunps.star\n")
+                        }, os.path.join(combined_output_dir, unpaired_original_filename))
+                        self._log(f"Saved combined all poses unpaired AuNPs to {combined_output_dir}/{unpaired_original_filename}\n")
                     
                     # Save unpaired AuNPs for optimized method
                     if all_unpaired_data_optimized:
                         combined_unpaired_optimized = pd.concat(all_unpaired_data_optimized, ignore_index=True)
+                        unpaired_optimized_filename = f"all_ampa_poses_{method_suffix}_{aunp_str}_{membrane_str}_steric{steric_radius}nm_unpaired_aunps.star"
                         starfile.write({
                             'particles': combined_unpaired_optimized,
                             'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
-                        }, os.path.join(combined_output_dir, f"all_ampa_poses_{method_suffix}_unpaired_aunps.star"))
-                        self._log(f"Saved combined {method_suffix} unpaired AuNPs to {combined_output_dir}/all_ampa_poses_{method_suffix}_unpaired_aunps.star\n")
+                        }, os.path.join(combined_output_dir, unpaired_optimized_filename))
+                        self._log(f"Saved combined {method_suffix} unpaired AuNPs to {combined_output_dir}/{unpaired_optimized_filename}\n")
                 
                 # Generate comparison report if both methods were run
                 if method == "both" and all_particles_data_original and all_particles_data_optimized:
@@ -1913,7 +2080,7 @@ Do you want to continue?"""
                     self._log("No 'set' column found, defaulting to '15F1' for all tomograms\n")
                 
                 # Create output directory
-                output_dir = Path("results/visualizations/active_zonograms")
+                output_dir = Path("results/visualizations/pdf_summaries")
                 output_dir.mkdir(parents=True, exist_ok=True)
                 pdf_path = output_dir / "all_zonograms_summary.pdf"
                 
@@ -2169,7 +2336,7 @@ Do you want to continue?"""
                     self._log("No 'set' column found, defaulting to '15F1' for all tomograms\n")
                 
                 # Create output directory
-                output_dir = Path("results/visualizations/active_zonograms")
+                output_dir = Path("results/visualizations/pdf_summaries")
                 output_dir.mkdir(parents=True, exist_ok=True)
                 pdf_path = output_dir / "mini_zonograms_summary.pdf"
                 pdf_path_4aunps = output_dir / "mini_zonograms_4aunps_summary.pdf"

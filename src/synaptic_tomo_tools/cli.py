@@ -212,9 +212,10 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
         
     print("\nGenerating visualizations...")
     
-    # Create combined visualization directory in results
-    combined_viz_dir = Path(results_manager.results_dir) / 'visualizations' / 'aunps_and_vesicles'
-    combined_viz_dir.mkdir(parents=True, exist_ok=True)
+    # Create combined visualization directory in results (structure: visualizations/{tomogram_name}/aunps_and_vesicles/full/)
+    # We'll create tomogram-specific directories as we process each tomogram
+    base_viz_dir = Path(results_manager.results_dir) / 'visualizations'
+    base_viz_dir.mkdir(parents=True, exist_ok=True)
     
     for i, (tomo, set_name, aunp_active_zones) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
@@ -260,14 +261,16 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
                         az_indices.append(int(x))
                     elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
                         az_indices.append(int(float(x)))
-            # Generate the three visualization types in the tomogram's directory
+            # Create tomogram-specific directory structure: visualizations/{tomogram_name}/aunps_and_vesicles/
+            tomogram_viz_dir = base_viz_dir / tomogram_name / 'aunps_and_vesicles'
+            tomogram_viz_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Generate the three visualization types
+            # 1. In tomogram's own directory
             plot_tomogram_overlays(tomo, viz_output_dir, az_indices, rerun=rerun)
             
-            # Copy the generated files to the combined directory with tomogram name prefix
-            for viz_file in viz_output_dir.glob(f"{tomogram_name}_*.png"):
-                combined_file = combined_viz_dir / viz_file.name
-                import shutil
-                shutil.copy2(viz_file, combined_file)
+            # 2. In the new organized structure
+            plot_tomogram_overlays(tomo, tomogram_viz_dir, az_indices, rerun=rerun)
             
             print("✅")
         except Exception as e:
@@ -276,11 +279,11 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
             continue
     
     print(f"\nAll visualizations saved to:")
-    print(f"  Individual: {viz_output_dir}")
-    print(f"  Combined: {combined_viz_dir}")
+    print(f"  Individual tomogram directories: {viz_output_dir}")
+    print(f"  Organized results directory: {base_viz_dir}")
 
     # Generate summary figures for all sets/metrics
-    summary_dir = Path("results/summary_pdfs")
+    summary_dir = Path("results/visualizations/pdf_summaries")
     summary_dir.mkdir(parents=True, exist_ok=True)
     
     # Check if summary figures already exist
@@ -665,7 +668,7 @@ def main():
                 missing_files.append("postsynaptic membrane files (postsynapticmembranes_*.txt)")
             # Check for active zone segmentations only if not running activezone or all
             if args.analysis not in ["activezone", "all"]:
-                az_dir = base.parent / "STT_results" / "active_zones"
+                az_dir = base.parent / "STT_results" / "activezone"
                 az_pre = list(az_dir.glob("*_pre.txt"))
                 az_post = list(az_dir.glob("*_post.txt"))
                 if not az_pre:
@@ -749,9 +752,9 @@ def main():
         print("\nGenerating PDF summary...")
         subprocess.run([
             sys.executable, "scripts/generate_tomogram_summary_pdf.py",
-            "--vis-dir", "results/visualizations/aunps_and_vesicles",
+            "--vis-dir", "results/visualizations",
             "--data-dir", "data",
-            "--output-dir", "results/summary_pdfs"
+            "--output-dir", "results/visualizations/pdf_summaries"
         ], check=True)
 
     if args.show_status:

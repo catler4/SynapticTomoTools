@@ -23,8 +23,8 @@ def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarra
     tomogram_path = Path(tomogram_path)
     stt_results_dir = tomogram_path / "best_alignment" / "STT_results"
     
-    # Create active_zones directory
-    active_zones_dir = stt_results_dir / "active_zones"
+    # Create activezone directory
+    active_zones_dir = stt_results_dir / "activezone"
     active_zones_dir.mkdir(parents=True, exist_ok=True)
     
     volumes_data = {}
@@ -99,7 +99,7 @@ def load_membrane_volumes(tomogram_path) -> Dict[str, Any]:
         Dictionary containing volume statistics with averages for pre and post
     """
     tomogram_path = Path(tomogram_path)
-    volumes_file = tomogram_path / "best_alignment" / "STT_results" / "active_zones" / "membrane_volumes.json"
+    volumes_file = tomogram_path / "best_alignment" / "STT_results" / "activezone" / "membrane_volumes.json"
     
     if not volumes_file.exists():
         print(f"Warning: Membrane volumes file not found: {volumes_file}")
@@ -486,8 +486,8 @@ def save_active_zone_segmentations(active_zones: Dict[str, Any], tomogram_path):
     tomogram_path = Path(tomogram_path)
     stt_results_dir = tomogram_path / "best_alignment" / "STT_results"
     
-    # Create active zone directory
-    active_zone_dir = stt_results_dir / "active_zones"
+    # Create activezone directory
+    active_zone_dir = stt_results_dir / "activezone"
     active_zone_dir.mkdir(parents=True, exist_ok=True)
     
     for zone_name, zone_data in active_zones['active_zones'].items():
@@ -588,7 +588,7 @@ def import_active_zone_segmentations(tomogram_path) -> Dict[str, Any]:
         Dictionary containing active zone segmentations
     """
     tomogram_path = Path(tomogram_path)
-    active_zone_dir = tomogram_path / "best_alignment" / "STT_results" / "active_zones"
+    active_zone_dir = tomogram_path / "best_alignment" / "STT_results" / "activezone"
     
     if not active_zone_dir.exists():
         raise FileNotFoundError(f"Active zones directory not found: {active_zone_dir}")
@@ -783,7 +783,7 @@ def calculate_cleft_width(tomogram_path) -> Dict[str, Any]:
             
             # Save to global CSV
             df_cleft = pd.DataFrame([cleft_row])
-            global_csv = Path("results/all_cleft_distances.csv")
+            global_csv = Path("results/activezone/all_cleft_distances.csv")
             global_csv.parent.mkdir(parents=True, exist_ok=True)
             if global_csv.exists():
                 try:
@@ -933,7 +933,12 @@ def extract_active_zonogram(active_zonograms, active_zones, tomo_path, tomo_type
 
     mrcs = list((Path(tomo_path) / 'best_alignment').glob(f'*{tomo_type}.mrc'))
     if not mrcs:
-        return None, None
+        print(f"No {tomo_type} MRC files found in {Path(tomo_path) / 'best_alignment'}")
+        return {
+            'status': 'no_mrc_files',
+            'active_zone_count': 0,
+            'rendered_zonograms': {}
+        }
     with mrcfile.open(mrcs[0], 'r') as mrc:
         data = torch.tensor(mrc.data)
     

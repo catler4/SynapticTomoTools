@@ -10,6 +10,10 @@ STT_results/
 results/
 **/results/
 
+# Ignore archived results directories
+archived_results/
+**/archived_results/
+
 # Ignore Python compiled files
 __pycache__/
 **/__pycache__/
