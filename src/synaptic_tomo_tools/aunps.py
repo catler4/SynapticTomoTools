@@ -242,15 +242,15 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
             'tomogram_name': tomogram_name,
             'vesicle_name': vesicle_name,
             'vesicle_id': vesicle_idx,
-            'distance_to_presynaptic_az': distance_to_az,
-            'vesicle_center_x': vesicle['center'][0],
-            'vesicle_center_y': vesicle['center'][1],
-            'vesicle_center_z': vesicle['center'][2],
-            'vesicle_diameter': vesicle['diameter'],
-            'vesicle_volume': vesicle['volume'],
-            'fusion_point_x': fusion_point[0],
-            'fusion_point_y': fusion_point[1],
-            'fusion_point_z': fusion_point[2],
+            'distance_to_presynaptic_az_nm': distance_to_az,
+            'vesicle_center_x_nm': vesicle['center'][0],
+            'vesicle_center_y_nm': vesicle['center'][1],
+            'vesicle_center_z_nm': vesicle['center'][2],
+            'vesicle_diameter_nm': vesicle['diameter'],
+            'vesicle_volume_nm3': vesicle['volume'],
+            'fusion_point_x_nm': fusion_point[0],
+            'fusion_point_y_nm': fusion_point[1],
+            'fusion_point_z_nm': fusion_point[2],
             'total_aunps_analyzed': len(aunp_coords)
         }
         
@@ -433,9 +433,9 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
                 cluster_rows.append({
                     'cluster_label': label,
                     'n_aunps': n_points,
-                    'cluster_area': area,
-                    'cluster_max_dimension': max_dim,
-                    'cluster_density': density
+                    'cluster_area_nm2': area,
+                    'cluster_max_dimension_nm': max_dim,
+                    'cluster_density_aunps_per_nm2': density
                 })
             cluster_df = pd.DataFrame(cluster_rows)
             cluster_csv = aunps_results_dir / "aunp_clusters.csv"
@@ -525,13 +525,18 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         else:
             fusion_dists = np.full(coords.shape[0], np.nan)
         df_valid['distance_to_fusion_point'] = fusion_dists
-        # Update output columns
+        # Update output columns (rename distance columns to include units)
         cols_out = [
-            'active_zone', 'faCoordinateX', 'faCoordinateY', 'faCoordinateZ',
-            'nearest_neighbor_distance', 'distance_to_presynaptic', 'distance_to_postsynaptic',
-            'distance_to_fusion_point', 'distance_to_active_zone_center', 'aunp_cluster'
+            'active_zone', 'faCoordinateX_nm', 'faCoordinateY_nm', 'faCoordinateZ_nm',
+            'nearest_neighbor_distance_nm', 'distance_to_presynaptic_nm', 'distance_to_postsynaptic_nm',
+            'distance_to_fusion_point_nm', 'distance_to_active_zone_center_nm', 'aunp_cluster'
         ]
-        df_valid.loc[:, cols_out].to_csv(output_file, index=False)
+        # Create a copy with renamed columns for CSV output
+        df_output = df_valid[['active_zone', 'faCoordinateX', 'faCoordinateY', 'faCoordinateZ',
+                              'nearest_neighbor_distance', 'distance_to_presynaptic', 'distance_to_postsynaptic',
+                              'distance_to_fusion_point', 'distance_to_active_zone_center', 'aunp_cluster']].copy()
+        df_output.columns = cols_out
+        df_output.to_csv(output_file, index=False)
         print(f"Saved nearest neighbor, membrane, and fusion distances for AuNPs to {output_file}")
         
         # --- Append to global results/aunps/all_aunp_distances.csv ---
@@ -549,21 +554,36 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         df_valid['tomogram_name'] = tomogram_name
         df_valid['set_name'] = set_name
         
+        # Create a copy with renamed columns for global CSV (add units to distance/coordinate columns)
+        df_global = df_valid.copy()
+        rename_dict = {
+            'faCoordinateX': 'faCoordinateX_nm',
+            'faCoordinateY': 'faCoordinateY_nm',
+            'faCoordinateZ': 'faCoordinateZ_nm',
+            'nearest_neighbor_distance': 'nearest_neighbor_distance_nm',
+            'distance_to_presynaptic': 'distance_to_presynaptic_nm',
+            'distance_to_postsynaptic': 'distance_to_postsynaptic_nm',
+            'distance_to_fusion_point': 'distance_to_fusion_point_nm',
+            'distance_to_active_zone_center': 'distance_to_active_zone_center_nm'
+        }
+        # Only rename columns that exist
+        rename_dict = {k: v for k, v in rename_dict.items() if k in df_global.columns}
+        df_global = df_global.rename(columns=rename_dict)
+        
         global_csv = Path("results/aunps/all_aunp_distances.csv")
-        global_csv.parent.mkdir(parents=True, exist_ok=True)
         global_csv.parent.mkdir(parents=True, exist_ok=True)
         if global_csv.exists():
             try:
                 df_existing = pd.read_csv(global_csv)
                 # Remove existing data for this tomogram
                 df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
-                df_combined = pd.concat([df_existing, df_valid], ignore_index=True)
+                df_combined = pd.concat([df_existing, df_global], ignore_index=True)
                 df_combined.to_csv(global_csv, index=False)
             except Exception as e:
                 print(f"Error updating global all_aunp_distances.csv: {e}")
-                df_valid.to_csv(global_csv, index=False)
+                df_global.to_csv(global_csv, index=False)
         else:
-            df_valid.to_csv(global_csv, index=False)
+            df_global.to_csv(global_csv, index=False)
         print(f"Appended AuNP distances to {global_csv}")
         # --- End global results ---
         

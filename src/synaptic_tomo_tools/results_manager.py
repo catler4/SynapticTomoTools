@@ -88,6 +88,40 @@ class ResultsManager:
         """Get all stored results."""
         return self.results
     
+    def _add_units_to_column_name(self, col_name: str) -> str:
+        """
+        Add units to column names based on their content.
+        Returns the column name with appropriate unit suffix if applicable.
+        """
+        # Distance measurements (nm)
+        if any(term in col_name.lower() for term in ['distance', 'cleft_width', 'diameter', 'radius', 'dimension']):
+            if '_nm' not in col_name and '_um' not in col_name:
+                return f"{col_name}_nm"
+        
+        # Area measurements (µm²)
+        if any(term in col_name.lower() for term in ['area', 'surface']):
+            if '_nm2' not in col_name and '_um2' not in col_name and '_nm²' not in col_name and '_um²' not in col_name:
+                return f"{col_name}_um2"
+        
+        # Volume measurements (µm³)
+        if 'volume' in col_name.lower():
+            if '_nm3' not in col_name and '_um3' not in col_name and '_nm³' not in col_name and '_um³' not in col_name:
+                return f"{col_name}_um3"
+        
+        # Density measurements
+        if 'density' in col_name.lower() and 'aunp' in col_name.lower():
+            if '_per_um2' not in col_name and '_per_um²' not in col_name:
+                return f"{col_name}_per_um2"
+        
+        # Coordinates (nm)
+        if any(term in col_name.lower() for term in ['coordinate', 'center', 'point', 'x', 'y', 'z']):
+            if col_name.lower() in ['x', 'y', 'z'] or any(coord in col_name.lower() for coord in ['coordinatex', 'coordinatey', 'coordinatez', 'center_x', 'center_y', 'center_z', 'point_x', 'point_y', 'point_z']):
+                if '_nm' not in col_name and '_um' not in col_name:
+                    return f"{col_name}_nm"
+        
+        # Already has units or doesn't need them
+        return col_name
+    
     def _flatten_results(self, data: Any, prefix: str = "") -> Dict[str, Any]:
         """
         Flatten nested dictionary/list structures to simple key-value pairs.
@@ -146,7 +180,12 @@ class ResultsManager:
                     continue
                 
                 if isinstance(value, (int, float, str, bool)):
-                    flattened[new_key] = value
+                    # Add units to column names for numeric values
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        final_key = self._add_units_to_column_name(new_key)
+                    else:
+                        final_key = new_key
+                    flattened[final_key] = value
                 elif isinstance(value, (list, dict)):
                     # Recursively flatten nested structures
                     nested = self._flatten_results(value, f"{new_key}_")
@@ -199,6 +238,9 @@ class ResultsManager:
                     # Remove 'aunp_analysis_' prefix from column names for aunps results
                     if analysis_type == 'aunps':
                         df.columns = [col.replace('aunp_analysis_', '') if col.startswith('aunp_analysis_') else col for col in df.columns]
+                    
+                    # Add units to column names that don't already have them
+                    df.columns = [self._add_units_to_column_name(col) for col in df.columns]
                     
                     csv_filename = f"{analysis_type}_results.csv"
                     # Save in step-specific subdirectory

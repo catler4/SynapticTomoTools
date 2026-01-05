@@ -836,7 +836,7 @@ def calculate_cleft_width(tomogram_path) -> Dict[str, Any]:
             cleft_row = {
                 'tomogram_name': tomogram_name,
                 'set_name': set_name,
-                'average_cleft_width': avg_cleft_width,
+                'average_cleft_width_nm': avg_cleft_width,
                 'n_measurements': len(all_distances)
             }
             
