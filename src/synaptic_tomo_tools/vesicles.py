@@ -216,10 +216,7 @@ def fit_sphere_to_points(points: np.ndarray) -> Tuple[np.ndarray, float]:
         radius = result.x[3]
         return center, radius
     else:
-        # Fallback to simple method
-        center = np.mean(points, axis=0)
-        radius = np.mean(np.linalg.norm(points - center, axis=1))
-        return center, radius
+        raise ValueError(f"Sphere fitting optimization failed: {result.message}. Cannot calculate vesicle center and radius.")
 
 
 def calculate_sphere_volume(radius: float) -> float:
@@ -1065,18 +1062,22 @@ def calculate_vesicle_sphericity(vesicle_data: Dict[str, Any]) -> Dict[str, floa
         actual_surface_area = hull.area
         actual_volume = hull.volume
         
+        if actual_surface_area <= 0:
+            raise ValueError(f"Invalid surface area from convex hull: {actual_surface_area}. Must be positive.")
+        if actual_volume <= 0:
+            raise ValueError(f"Invalid volume from convex hull: {actual_volume}. Must be positive.")
+        
         # Volume-based sphericity (ψ = (π^(1/3) * (6V)^(2/3)) / A)
         sphericity_volume = (np.pi**(1/3) * (6 * actual_volume)**(2/3)) / actual_surface_area
         
-    except Exception:
-        # Fallback if convex hull fails
-        sphericity_volume = 0.0
+    except Exception as e:
+        raise ValueError(f"Convex hull calculation failed for sphericity: {e}. Cannot calculate sphericity.")
     
     # Calculate sphericity data using only volume-based metric
     sphericity_data = {
         'sphericity_volume': float(sphericity_volume),
-        'actual_volume': float(actual_volume) if 'actual_volume' in locals() else 0.0,
-        'actual_surface_area': float(actual_surface_area) if 'actual_surface_area' in locals() else 0.0
+        'actual_volume': float(actual_volume),
+        'actual_surface_area': float(actual_surface_area)
     }
     
     # Use volume-based sphericity as the primary sphericity measure

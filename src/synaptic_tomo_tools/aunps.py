@@ -790,20 +790,23 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
                 active_zone_results = results_manager.get_tomogram_results(tomogram_name, 'activezone')
                 if active_zone_results and 'results' in active_zone_results:
                     az_data = active_zone_results['results'].get('active_zone', {})
-                    # Calculate total active zone area (sum of all active zones)
-                    active_zone_count = az_data.get('active_zone_count', 0)
-                    avg_active_zone_area = az_data.get('avg_active_zone_area', 0.0)
-                    total_active_zone_area = active_zone_count * avg_active_zone_area
+                    # Use total postsynaptic active zone area (sum of all active zones)
+                    # Use postsynaptic area since AuNPs are on the postsynaptic membrane
                     
-                    if total_active_zone_area > 0:
-                        summary_stats['aunp_density'] = float(n_aunps / total_active_zone_area)  # AuNPs per µm²
-                    else:
-                        summary_stats['aunp_density'] = 0.0
+                    if 'total_active_zone_post_area' not in az_data:
+                        raise ValueError("No total postsynaptic active zone area available. Cannot calculate AuNP density. Active zone analysis must be run with postsynaptic area calculation.")
+                    
+                    total_active_zone_area = az_data['total_active_zone_post_area']
+                    
+                    if total_active_zone_area <= 0:
+                        raise ValueError(f"Invalid total active zone area: {total_active_zone_area}. Area must be positive.")
+                    
+                    summary_stats['aunp_density'] = float(n_aunps / total_active_zone_area)  # AuNPs per µm²
                 else:
-                    summary_stats['aunp_density'] = 0.0
+                    raise ValueError("No active zone results available. Cannot calculate AuNP density.")
             except Exception as e:
                 print(f"Error getting active zone area for density calculation: {e}")
-                summary_stats['aunp_density'] = 0.0
+                raise  # Re-raise the exception instead of silently setting to 0.0
         else:
             summary_stats['aunp_density'] = 0.0
         
@@ -819,13 +822,17 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
             all_max_values = [zone_data['max_packing_coefficient'] for zone_data in packing_density_results.values()]
             all_avg_values = [zone_data['avg_packing_coefficient'] for zone_data in packing_density_results.values()]
             
-            summary_stats['packing_density_max'] = float(np.max(all_max_values)) if all_max_values else 0.0
-            summary_stats['packing_density_avg'] = float(np.mean(all_avg_values)) if all_avg_values else 0.0
-            summary_stats['packing_density_min'] = float(np.min([zone_data['min_packing_coefficient'] for zone_data in packing_density_results.values()])) if packing_density_results else 0.0
+            if not all_max_values:
+                raise ValueError("No packing density values found. Cannot calculate packing density statistics.")
+            
+            summary_stats['packing_density_max'] = float(np.max(all_max_values))
+            summary_stats['packing_density_avg'] = float(np.mean(all_avg_values))
+            summary_stats['packing_density_min'] = float(np.min([zone_data['min_packing_coefficient'] for zone_data in packing_density_results.values()]))
         else:
-            summary_stats['packing_density_max'] = 0.0
-            summary_stats['packing_density_avg'] = 0.0
-            summary_stats['packing_density_min'] = 0.0
+            # Packing density calculation was attempted but no results were produced
+            # This is acceptable - not all analyses may have packing density data
+            # Don't set to 0.0, just don't include these stats
+            pass
         
         # Add completion status
         summary_stats['status'] = 'completed'
