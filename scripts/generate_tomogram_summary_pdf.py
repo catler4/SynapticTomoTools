@@ -547,65 +547,17 @@ def main():
             # No PDF found - will be skipped
             pass
     
-    # Found PDFs to combine
     # Combine all PDFs into a single document
     if all_pdf_paths:
         merger = PdfMerger()
         for pdf in all_pdf_paths:  # Use CSV order, not alphabetical order
             merger.append(pdf)
-        # Add summary figures at the end
-        from reportlab.lib.pagesizes import letter
-        from reportlab.pdfgen import canvas
-        from reportlab.lib.utils import ImageReader
-        import glob
-        import tempfile
-        # Title page for summary figures
-        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_title:
-            c = canvas.Canvas(tmp_title.name, pagesize=letter)
-            width, height = letter
-            c.setFont("Helvetica-Bold", 24)
-            c.drawCentredString(width/2, height/2 + 20, "Analysis Summary Figures by Set")
-            c.setFont("Helvetica", 14)
-            c.drawCentredString(width/2, height/2 - 10, "(Generated from all analyzed tomograms)")
-            c.save()
-            merger.append(tmp_title.name)
-        # Add each summary PNG as a page
-        summary_dir = output_dir
-        summary_pngs = sorted(glob.glob(str(summary_dir / '*_by_set.png')))
-        print(f"Found {len(summary_pngs)} summary figure files to add to PDF")
-        successful_count = 0
-        for png in summary_pngs:
-            try:
-                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_pdf:
-                    c = canvas.Canvas(tmp_pdf.name, pagesize=letter)
-                    width, height = letter
-                    # Title from filename
-                    title = os.path.basename(png).replace('_by_set.png', '').replace('_', ' ').title()
-                    c.setFont("Helvetica-Bold", 16)
-                    c.drawCentredString(width/2, height-40, title)
-                    # Add image
-                    img = Image.open(png)
-                    iw, ih = img.size
-                    max_width = width - 80
-                    max_height = height - 120
-                    scale = min(max_width/iw, max_height/ih, 1.0)
-                    nw, nh = int(iw*scale), int(ih*scale)
-                    x = (width - nw) // 2
-                    y = (height - nh) // 2 - 20
-                    c.drawImage(ImageReader(img), x, y, width=nw, height=nh)
-                    c.save()
-                    merger.append(tmp_pdf.name)
-                    successful_count += 1
-                    print(f"  Added: {os.path.basename(png)}")
-            except Exception as e:
-                print(f"  Error adding {os.path.basename(png)}: {e}")
-                import traceback
-                traceback.print_exc()
-                continue
-        print(f"Successfully added {successful_count} of {len(summary_pngs)} summary figures to PDF")
+        # Summary PNG figures have been removed - no longer included in PDF
         merged_pdf_path = output_dir / "all_tomograms_summary.pdf"
         merger.write(str(merged_pdf_path))
         merger.close()
         print(f"✓ Combined {len(all_pdf_paths)} PDFs into: {merged_pdf_path}")
+    else:
+        print("Warning: No tomogram PDFs found to combine. all_tomograms_summary.pdf will not be created.")
 if __name__ == "__main__":
     main() 

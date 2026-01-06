@@ -55,132 +55,6 @@ def load_tomogram_data(tomogram_path) -> Optional[np.ndarray]:
         return None
 
 
-def calculate_vesicle_signal(vesicle_data: Tuple[int, Dict[str, Any]], 
-                           tomogram_data: np.ndarray) -> Tuple[int, float]:
-    """
-    Calculate average signal inside a vesicle volume (for parallel processing).
-    
-    Args:
-        vesicle_data: Tuple of (index, vesicle_dict)
-        tomogram_data: 3D tomogram data array
-        
-    Returns:
-        Tuple of (index, average_signal)
-    """
-    index, vesicle = vesicle_data
-    
-    # Get vesicle center and radius from fitted sphere
-    center = np.array(vesicle['center'])
-    radius = vesicle['radius']
-    
-    if radius <= 0:
-        return index, 0.0
-    
-    # Get tomogram dimensions
-    tomogram_shape = tomogram_data.shape
-    
-    # Create a grid of points within the vesicle sphere
-    # We'll sample points within the sphere to get the average signal
-    x_range = np.arange(max(0, int(center[0] - radius)), min(tomogram_shape[2], int(center[0] + radius + 1)))
-    y_range = np.arange(max(0, int(center[1] - radius)), min(tomogram_shape[1], int(center[1] + radius + 1)))
-    z_range = np.arange(max(0, int(center[2] - radius)), min(tomogram_shape[0], int(center[2] + radius + 1)))
-    
-    # Create meshgrid for all points in the bounding box
-    X, Y, Z = np.meshgrid(x_range, y_range, z_range, indexing='ij')
-    
-    # Calculate distances from center to all points
-    distances = np.sqrt((X - center[0])**2 + (Y - center[1])**2 + (Z - center[2])**2)
-    
-    # Use only the central 50% of the vesicle by volume
-    central_fraction = 0.5
-    effective_radius = radius * (central_fraction ** (1/3))
-    mask = distances <= effective_radius
-    
-    if not np.any(mask):
-        return index, 0.0
-    
-    # Extract coordinates of points inside the effective sphere
-    coords = np.where(mask)
-    z_coords = coords[2].astype(int)
-    y_coords = coords[1].astype(int)
-    x_coords = coords[0].astype(int)
-    
-    try:
-        signal_values = tomogram_data[z_coords, y_coords, x_coords]
-        average_signal = float(np.mean(signal_values))
-    except Exception as e:
-        print(f"Error calculating signal for vesicle {index}: {e}")
-        return index, 0.0
-    
-    return index, average_signal
-
-
-def calculate_vesicle_signals(vesicles: List[Dict[str, Any]], 
-                            tomogram_data: np.ndarray,
-                            n_processes: Optional[int] = None) -> List[float]:
-    """
-    Calculate average signals for all vesicles using parallel processing.
-    
-    Args:
-        vesicles: List of vesicle dictionaries
-        tomogram_data: 3D tomogram data array
-        n_processes: Number of processes to use (default: CPU count)
-        
-    Returns:
-        List of average signals corresponding to each vesicle
-    """
-    if tomogram_data is None:
-        return [0.0] * len(vesicles)
-    
-    if n_processes is None:
-        n_processes = mp.cpu_count()
-    
-    # Create partial function with tomogram data
-    calc_func = partial(calculate_vesicle_signal, tomogram_data=tomogram_data)
-    
-    # Prepare data for parallel processing
-    vesicle_data = [(i, vesicle) for i, vesicle in enumerate(vesicles)]
-    
-    # Use multiprocessing to calculate signals
-    with mp.Pool(processes=n_processes) as pool:
-        results = list(tqdm(
-            pool.imap(calc_func, vesicle_data),
-            total=len(vesicle_data),
-            desc=f"Calculating vesicle signals (using {n_processes} processes)"
-        ))
-    
-    # Sort results by index and extract signals
-    results.sort(key=lambda x: x[0])
-    signals = [result[1] for result in results]
-    
-    return signals
-
-
-def scale_vesicle_signals(signals: List[float]) -> List[float]:
-    """
-    Scale vesicle signals relative to the average of all vesicle signals.
-    
-    Args:
-        signals: List of average signals for each vesicle
-        
-    Returns:
-        List of scaled signals (relative to overall average)
-    """
-    if not signals or all(s == 0.0 for s in signals):
-        return [0.0] * len(signals)
-    
-    # Calculate overall average signal
-    overall_average = np.mean(signals)
-    
-    if overall_average == 0.0:
-        return [0.0] * len(signals)
-    
-    # Scale signals relative to overall average and convert to Python floats
-    scaled_signals = [float(s / overall_average) for s in signals]
-    
-    return scaled_signals
-
-
 def fit_sphere_to_points(points: np.ndarray) -> Tuple[np.ndarray, float]:
     """
     Fit a sphere to a set of 3D points using least squares optimization.
@@ -356,12 +230,14 @@ def remove_overlapping_vesicles(vesicles: List[Dict[str, Any]]) -> List[Dict[str
     return non_overlapping
 
 
-def import_presynaptic_membranes_and_active_zones(tomogram_path) -> Dict[str, Dict[str, np.ndarray]]:
+def import_presynaptic_membranes_and_active_zones(tomogram_path, active_zone_indices=None) -> Dict[str, Dict[str, np.ndarray]]:
     """
-    Import all presynaptic membranes and their associated active zones.
+    Import presynaptic membranes and their associated active zones.
+    If active_zone_indices is specified, only includes active zones that correspond to those indices.
     
     Args:
         tomogram_path: Path to the tomogram directory (str or Path)
+        active_zone_indices: List of active zone indices to include (None = all)
         
     Returns:
         Dictionary mapping presynaptic membrane names to their active zone points
@@ -394,11 +270,39 @@ def import_presynaptic_membranes_and_active_zones(tomogram_path) -> Dict[str, Di
             membrane_name = membrane_file.stem  # e.g., "presynapticmembranes_1"
             membrane_number = membrane_name.split('_')[-1]  # e.g., "1"
             
-            # Look for ALL active zone files with matching number in STT_results/activezone
+            # Look for active zone files with matching number in STT_results/activezone
             active_zone_files = list(stt_results_dir.glob(f"active_zone_pre{membrane_number}_post*_pre.txt"))
             
             if active_zone_files:
-                # Load all active zones for this membrane
+                # Filter active zones if indices are specified
+                if active_zone_indices is not None:
+                    # Load active zone results to map indices to zone names
+                    try:
+                        from .activezone import import_membrane_segmentations_from_glb, find_active_zones_from_glb
+                        membrane_data = import_membrane_segmentations_from_glb(tomogram_path)
+                        active_zones_glb = find_active_zones_from_glb(membrane_data, distance_range=(10.0, 40.0))
+                        
+                        if active_zones_glb and 'active_zones' in active_zones_glb:
+                            active_zone_names = list(active_zones_glb['active_zones'].keys())
+                            # Filter to only include zones corresponding to specified indices
+                            zones_to_include = set()
+                            for az_idx in active_zone_indices:
+                                if 0 <= az_idx < len(active_zone_names):
+                                    zone_name = active_zone_names[az_idx]
+                                    zones_to_include.add(zone_name)
+                            
+                            # Filter active zone files to only those matching included zones
+                            filtered_files = []
+                            for active_zone_file in sorted(active_zone_files):
+                                # Extract zone name from filename (e.g., "active_zone_pre1_post1_pre.txt" -> "active_zone_pre1_post1")
+                                zone_name = active_zone_file.name.replace('_pre.txt', '')
+                                if zone_name in zones_to_include:
+                                    filtered_files.append(active_zone_file)
+                            active_zone_files = filtered_files
+                    except Exception as e:
+                        print(f"Warning: Could not filter active zones by indices: {e}. Using all active zones.")
+                
+                # Load all active zones for this membrane (filtered if indices specified)
                 all_active_zone_points = []
                 for active_zone_file in sorted(active_zone_files):
                     active_zone_points = np.loadtxt(active_zone_file, delimiter=None)
@@ -691,14 +595,14 @@ def save_nearby_vesicles(vesicles: List[Dict[str, Any]], tomogram_path,
 
 
 
-def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Dict[str, Any]:
+def detect_vesicles(tomogram_path, set_name=None, active_zone_indices=None) -> Dict[str, Any]:
     """
     Detect synaptic vesicles in tomogram.
     
     Args:
         tomogram_path (str or Path): Path to the tomogram file.
         set_name (str, optional): Name of the experimental set.
-        calculate_signals (bool): Whether to calculate vesicle signals (default: False).
+        active_zone_indices (list of int, optional): Which active zones to include (None = all).
     
     Returns:
         Dictionary containing vesicle detection results.
@@ -713,7 +617,8 @@ def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Di
         vesicles = remove_overlapping_vesicles(vesicles)
         
         # Import presynaptic membranes and their associated active zones
-        membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path)
+        # Only include active zones that have AuNPs (if active_zone_indices specified)
+        membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path, active_zone_indices=active_zone_indices)
         
         # Calculate distances from vesicle segmentation points to closest active zones using parallel processing
         if membrane_active_zone_pairs:
@@ -730,39 +635,6 @@ def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Di
                 vesicle['distance_to_az'] = 0.0
                 vesicle['closest_membrane'] = "unknown"
         
-        # Calculate average signals inside vesicles (only if requested)
-        if calculate_signals:
-            print("Loading tomogram data for signal calculation...")
-            tomogram_data = load_tomogram_data(tomogram_path)
-            
-            if tomogram_data is not None:
-                # Calculate average signals for all vesicles
-                vesicle_signals = calculate_vesicle_signals(vesicles, tomogram_data)
-                
-                # Scale signals relative to overall average
-                scaled_signals = scale_vesicle_signals(vesicle_signals)
-                
-                # Assign signals to vesicles
-                for i, vesicle in enumerate(vesicles):
-                    vesicle['average_signal'] = vesicle_signals[i]
-                    vesicle['scaled_signal'] = scaled_signals[i]
-                
-                print(f"Calculated signals for {len(vesicles)} vesicles")
-                print(f"Signal range: {min(vesicle_signals):.2f} to {max(vesicle_signals):.2f}")
-                print(f"Scaled signal range: {min(scaled_signals):.2f} to {max(scaled_signals):.2f}")
-            else:
-                # No tomogram data available
-                for vesicle in vesicles:
-                    vesicle['average_signal'] = 0.0
-                    vesicle['scaled_signal'] = 0.0
-                print("No tomogram data available for signal calculation")
-        else:
-            # Skip signal calculation for speed
-            for vesicle in vesicles:
-                vesicle['average_signal'] = 0.0
-                vesicle['scaled_signal'] = 0.0
-            print("Skipping signal calculation (use --calculate-signals to enable)")
-        
         # Calculate sphericity for all vesicles
         print("Calculating vesicle sphericity...")
         sphericities = calculate_all_vesicle_sphericities(vesicles)
@@ -776,9 +648,6 @@ def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Di
             volumes = [v['volume'] for v in vesicles]
             diameters = [v['diameter'] for v in vesicles]
             distances_to_az = [v.get('distance_to_az', 0.0) for v in vesicles]
-            signals = [v.get('average_signal', 0.0) for v in vesicles]
-            scaled_signals = [v.get('scaled_signal', 0.0) for v in vesicles]
-            
             # Extract sphericity values (now only volume-based)
             sphericity_volume = [s['sphericity_volume'] for s in sphericities]
             sphericity = [s['sphericity'] for s in sphericities]  # Primary sphericity measure
@@ -817,8 +686,6 @@ def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Di
                     'volume': vesicle['volume'],
                     'distance_to_az': vesicle.get('distance_to_az', 0.0),
                     'closest_membrane': vesicle.get('closest_membrane', 'unknown'),
-                    'average_signal': vesicle.get('average_signal', 0.0),
-                    'scaled_signal': vesicle.get('scaled_signal', 0.0),
                     'sphericity_volume': sphericities[i]['sphericity_volume'],
                     'sphericity': sphericities[i]['sphericity']  # Primary sphericity measure
                 }
@@ -860,14 +727,6 @@ def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Di
                 'max_distance_to_az': float(np.max(distances_to_az)),
                 'distance_std': float(np.std(distances_to_az)),
                 'nearby_vesicle_count': nearby_vesicle_count,
-                'average_vesicle_signal': float(np.mean(signals)),
-                'min_vesicle_signal': float(np.min(signals)),
-                'max_vesicle_signal': float(np.max(signals)),
-                'signal_std': float(np.std(signals)),
-                'average_scaled_signal': float(np.mean(scaled_signals)),
-                'min_scaled_signal': float(np.min(scaled_signals)),
-                'max_scaled_signal': float(np.max(scaled_signals)),
-                'scaled_signal_std': float(np.std(scaled_signals)),
                 'average_sphericity_volume': float(np.mean(sphericity_volume)),
                 'min_sphericity_volume': float(np.min(sphericity_volume)),
                 'max_sphericity_volume': float(np.max(sphericity_volume)),
@@ -887,14 +746,6 @@ def detect_vesicles(tomogram_path, set_name=None, calculate_signals=False) -> Di
                 'total_vesicle_volume': 0.0,
                 'average_vesicle_diameter': 0.0,
                 'nearby_vesicle_count': 0,
-                'average_vesicle_signal': 0.0,
-                'min_vesicle_signal': 0.0,
-                'max_vesicle_signal': 0.0,
-                'signal_std': 0.0,
-                'average_scaled_signal': 0.0,
-                'min_scaled_signal': 0.0,
-                'max_scaled_signal': 0.0,
-                'scaled_signal_std': 0.0,
                 'average_sphericity_volume': 0.0,
                 'min_sphericity_volume': 0.0,
                 'max_sphericity_volume': 0.0,
@@ -1004,16 +855,6 @@ def measure_distances_to_az(tomogram_path) -> Dict[str, Any]:
             if distance_to_az <= 20.0:
                 nearby_vesicles.append(vesicle)
         nearby_vesicle_count = len(nearby_vesicles)
-        
-        # Extract signal values from loaded vesicles
-        signals = [v.get('average_signal', 0.0) for v in vesicles]
-        scaled_signals = [v.get('scaled_signal', 0.0) for v in vesicles]
-        
-        # Calculate signal statistics (use scaled signals)
-        average_vesicle_signal = float(np.mean(scaled_signals)) if scaled_signals else 0.0
-        min_vesicle_signal = float(np.min(scaled_signals)) if scaled_signals else 0.0
-        max_vesicle_signal = float(np.max(scaled_signals)) if scaled_signals else 0.0
-        signal_std = float(np.std(scaled_signals)) if scaled_signals else 0.0
         
         return results
         

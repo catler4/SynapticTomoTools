@@ -478,22 +478,6 @@ Do you want to continue?"""
         # Store flag variables in the tab for access in _run_analysis
         tab._flag_vars = (rerun_var, checkfiles_var)
         
-        # Add calculate signals checkbox for vesicles
-        if step == "Vesicles":
-            calculate_signals_var = tk.BooleanVar()
-            calculate_signals_cb = ttk.Checkbutton(controls_frame, text="Calculate vesicle signals (slower)", variable=calculate_signals_var)
-            calculate_signals_cb.pack(anchor=tk.W)
-            ToolTip(calculate_signals_cb, "Calculate vesicle signal intensity (slower but provides signal data).")
-            tab._calculate_signals_var = calculate_signals_var
-        
-        # Add calculate signals checkbox for full pipeline
-        if step == "Full Pipeline":
-            calculate_signals_var = tk.BooleanVar()
-            calculate_signals_cb = ttk.Checkbutton(controls_frame, text="Calculate vesicle signals (slower)", variable=calculate_signals_var)
-            calculate_signals_cb.pack(anchor=tk.W)
-            ToolTip(calculate_signals_cb, "Calculate vesicle signal intensity (slower but provides signal data).")
-            tab._calculate_signals_var = calculate_signals_var
-        
         pdf_frame = None
         if step in ["Visualization", "Full Pipeline"]:
             pdf_frame = ttk.Frame(controls_frame)
@@ -784,8 +768,6 @@ Do you want to continue?"""
             cli += ["--analysis", "activezone"]
         elif step == "Vesicles":
             cli += ["--analysis", "vesicles"]
-            if hasattr(tab, '_calculate_signals_var') and tab._calculate_signals_var.get():
-                cli += ["--calculate-vesicle-signals"]
         elif step == "AuNPs":
             cli += ["--analysis", "aunps"]
         elif step == "Visualization":
@@ -794,8 +776,6 @@ Do you want to continue?"""
             cli += ["--analysis", "all"]
             if generate_pdf:
                 cli += ["--generate-pdf-summary"]
-            if hasattr(tab, '_calculate_signals_var') and tab._calculate_signals_var.get():
-                cli += ["--calculate-vesicle-signals"]
         # Add flags from checkboxes
         rerun_var, checkfiles_var = getattr(tab, '_flag_vars', (None, None))
         if rerun_var and rerun_var.get():
