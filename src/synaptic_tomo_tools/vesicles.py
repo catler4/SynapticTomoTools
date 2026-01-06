@@ -230,14 +230,14 @@ def remove_overlapping_vesicles(vesicles: List[Dict[str, Any]]) -> List[Dict[str
     return non_overlapping
 
 
-def import_presynaptic_membranes_and_active_zones(tomogram_path, active_zone_indices=None) -> Dict[str, Dict[str, np.ndarray]]:
+def import_presynaptic_membranes_and_active_zones(tomogram_path) -> Dict[str, Dict[str, np.ndarray]]:
     """
     Import presynaptic membranes and their associated active zones.
-    If active_zone_indices is specified, only includes active zones that correspond to those indices.
+    Note: Active zones are already filtered by the active zone analysis step, so only
+    relevant zones (those with AuNPs) will be present in the saved files.
     
     Args:
         tomogram_path: Path to the tomogram directory (str or Path)
-        active_zone_indices: List of active zone indices to include (None = all)
         
     Returns:
         Dictionary mapping presynaptic membrane names to their active zone points
@@ -271,38 +271,12 @@ def import_presynaptic_membranes_and_active_zones(tomogram_path, active_zone_ind
             membrane_number = membrane_name.split('_')[-1]  # e.g., "1"
             
             # Look for active zone files with matching number in STT_results/activezone
+            # Note: These files are already filtered by the active zone analysis step
+            # to only include zones with AuNPs, so no additional filtering is needed
             active_zone_files = list(stt_results_dir.glob(f"active_zone_pre{membrane_number}_post*_pre.txt"))
             
             if active_zone_files:
-                # Filter active zones if indices are specified
-                if active_zone_indices is not None:
-                    # Load active zone results to map indices to zone names
-                    try:
-                        from .activezone import import_membrane_segmentations_from_glb, find_active_zones_from_glb
-                        membrane_data = import_membrane_segmentations_from_glb(tomogram_path)
-                        active_zones_glb = find_active_zones_from_glb(membrane_data, distance_range=(10.0, 40.0))
-                        
-                        if active_zones_glb and 'active_zones' in active_zones_glb:
-                            active_zone_names = list(active_zones_glb['active_zones'].keys())
-                            # Filter to only include zones corresponding to specified indices
-                            zones_to_include = set()
-                            for az_idx in active_zone_indices:
-                                if 0 <= az_idx < len(active_zone_names):
-                                    zone_name = active_zone_names[az_idx]
-                                    zones_to_include.add(zone_name)
-                            
-                            # Filter active zone files to only those matching included zones
-                            filtered_files = []
-                            for active_zone_file in sorted(active_zone_files):
-                                # Extract zone name from filename (e.g., "active_zone_pre1_post1_pre.txt" -> "active_zone_pre1_post1")
-                                zone_name = active_zone_file.name.replace('_pre.txt', '')
-                                if zone_name in zones_to_include:
-                                    filtered_files.append(active_zone_file)
-                            active_zone_files = filtered_files
-                    except Exception as e:
-                        print(f"Warning: Could not filter active zones by indices: {e}. Using all active zones.")
-                
-                # Load all active zones for this membrane (filtered if indices specified)
+                # Load all active zones for this membrane
                 all_active_zone_points = []
                 for active_zone_file in sorted(active_zone_files):
                     active_zone_points = np.loadtxt(active_zone_file, delimiter=None)
@@ -335,42 +309,48 @@ def import_presynaptic_membranes_and_active_zones(tomogram_path, active_zone_ind
     return membrane_active_zone_pairs
 
 
-def find_closest_presynaptic_membrane(vesicle_center: np.ndarray, 
-                                     membrane_active_zone_pairs: Dict[str, Dict[str, np.ndarray]]) -> Tuple[str, np.ndarray]:
+def find_closest_active_zone(vesicle_center: np.ndarray, 
+                            membrane_active_zone_pairs: Dict[str, Dict[str, np.ndarray]]) -> Tuple[str, np.ndarray]:
     """
-    Find the presynaptic membrane closest to a vesicle and return its associated active zone.
+    Find the active zone closest to a vesicle across all filtered active zones.
+    Only considers active zones that passed the filtering step (those with AuNPs).
     
     Args:
         vesicle_center: (x, y, z) coordinates of vesicle center
         membrane_active_zone_pairs: Dictionary mapping membrane names to their data
         
     Returns:
-        Tuple of (membrane_name, active_zone_points)
+        Tuple of (membrane_name, active_zone_points) for the closest active zone
     """
     if not membrane_active_zone_pairs:
         return "unknown", np.array([])
     
     closest_membrane = None
+    closest_active_zone_points = np.array([])
     min_distance = float('inf')
     
+    # Check all membranes and their active zones
     for membrane_name, data in membrane_active_zone_pairs.items():
-        membrane_points = data['membrane_points']
+        active_zone_points = data['active_zone_points']
         
-        if len(membrane_points) == 0:
+        # Only consider membranes that have active zones (filtered zones with AuNPs)
+        if len(active_zone_points) == 0:
             continue
-            
-        # Calculate distance from vesicle center to membrane points
-        distances = np.linalg.norm(membrane_points - vesicle_center, axis=1)
-        min_membrane_distance = np.min(distances)
         
-        if min_membrane_distance < min_distance:
-            min_distance = min_membrane_distance
+        # Calculate distance from vesicle center to active zone points
+        distances = np.linalg.norm(active_zone_points - vesicle_center, axis=1)
+        min_active_zone_distance = np.min(distances)
+        
+        # Find the closest active zone across all membranes
+        if min_active_zone_distance < min_distance:
+            min_distance = min_active_zone_distance
             closest_membrane = membrane_name
+            closest_active_zone_points = active_zone_points
     
     if closest_membrane is None:
         return "unknown", np.array([])
     
-    return closest_membrane, membrane_active_zone_pairs[closest_membrane]['active_zone_points']
+    return closest_membrane, closest_active_zone_points
 
 
 def calculate_vesicle_distance_to_closest_active_zone(vesicle_data: Tuple[int, Dict[str, Any]], 
@@ -392,8 +372,8 @@ def calculate_vesicle_distance_to_closest_active_zone(vesicle_data: Tuple[int, D
     
     vesicle_center = np.array(vesicle['center'])
     
-    # Find closest presynaptic membrane and its active zones
-    membrane_name, active_zone_points = find_closest_presynaptic_membrane(vesicle_center, membrane_active_zone_pairs)
+    # Find closest active zone across all filtered active zones (only those with AuNPs)
+    membrane_name, active_zone_points = find_closest_active_zone(vesicle_center, membrane_active_zone_pairs)
     
     if len(active_zone_points) == 0:
         return index, 0.0, membrane_name
@@ -595,14 +575,13 @@ def save_nearby_vesicles(vesicles: List[Dict[str, Any]], tomogram_path,
 
 
 
-def detect_vesicles(tomogram_path, set_name=None, active_zone_indices=None) -> Dict[str, Any]:
+def detect_vesicles(tomogram_path, set_name=None) -> Dict[str, Any]:
     """
     Detect synaptic vesicles in tomogram.
     
     Args:
         tomogram_path (str or Path): Path to the tomogram file.
         set_name (str, optional): Name of the experimental set.
-        active_zone_indices (list of int, optional): Which active zones to include (None = all).
     
     Returns:
         Dictionary containing vesicle detection results.
@@ -617,8 +596,9 @@ def detect_vesicles(tomogram_path, set_name=None, active_zone_indices=None) -> D
         vesicles = remove_overlapping_vesicles(vesicles)
         
         # Import presynaptic membranes and their associated active zones
-        # Only include active zones that have AuNPs (if active_zone_indices specified)
-        membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path, active_zone_indices=active_zone_indices)
+        # Note: Active zones are already filtered by the active zone analysis step
+        # to only include zones with AuNPs, so only relevant zones will be loaded
+        membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path)
         
         # Calculate distances from vesicle segmentation points to closest active zones using parallel processing
         if membrane_active_zone_pairs:
@@ -648,9 +628,8 @@ def detect_vesicles(tomogram_path, set_name=None, active_zone_indices=None) -> D
             volumes = [v['volume'] for v in vesicles]
             diameters = [v['diameter'] for v in vesicles]
             distances_to_az = [v.get('distance_to_az', 0.0) for v in vesicles]
-            # Extract sphericity values (now only volume-based)
+            # Extract sphericity values (volume-based only)
             sphericity_volume = [s['sphericity_volume'] for s in sphericities]
-            sphericity = [s['sphericity'] for s in sphericities]  # Primary sphericity measure
             
             # Count vesicles within 20 nm of active zone using the same logic as save_nearby_vesicles
             nearby_vesicles = []
@@ -686,8 +665,7 @@ def detect_vesicles(tomogram_path, set_name=None, active_zone_indices=None) -> D
                     'volume': vesicle['volume'],
                     'distance_to_az': vesicle.get('distance_to_az', 0.0),
                     'closest_membrane': vesicle.get('closest_membrane', 'unknown'),
-                    'sphericity_volume': sphericities[i]['sphericity_volume'],
-                    'sphericity': sphericities[i]['sphericity']  # Primary sphericity measure
+                    'sphericity_volume': sphericities[i]['sphericity_volume']
                 }
                 vesicle_rows.append(row)
             
@@ -711,9 +689,7 @@ def detect_vesicles(tomogram_path, set_name=None, active_zone_indices=None) -> D
             # --- End global results ---
             
             # Print sphericity statistics
-            print(f"Sphericity statistics:")
-            print(f"  Volume-based (Wadell): {np.mean(sphericity_volume):.3f} ± {np.std(sphericity_volume):.3f}")
-            print(f"  Primary sphericity: {np.mean(sphericity):.3f} ± {np.std(sphericity):.3f}")
+            print(f"Volume-based Sphericity (Wadell): {np.mean(sphericity_volume):.3f} ± {np.std(sphericity_volume):.3f}")
             
             results = {
                 'vesicle_count': len(vesicles),
@@ -731,10 +707,6 @@ def detect_vesicles(tomogram_path, set_name=None, active_zone_indices=None) -> D
                 'min_sphericity_volume': float(np.min(sphericity_volume)),
                 'max_sphericity_volume': float(np.max(sphericity_volume)),
                 'sphericity_volume_std': float(np.std(sphericity_volume)),
-                'average_sphericity': float(np.mean(sphericity)),
-                'min_sphericity': float(np.min(sphericity)),
-                'max_sphericity': float(np.max(sphericity)),
-                'sphericity_std': float(np.std(sphericity)),
                 'status': 'completed'
             }
         else:
@@ -750,10 +722,6 @@ def detect_vesicles(tomogram_path, set_name=None, active_zone_indices=None) -> D
                 'min_sphericity_volume': 0.0,
                 'max_sphericity_volume': 0.0,
                 'sphericity_volume_std': 0.0,
-                'average_sphericity': 0.0,
-                'min_sphericity': 0.0,
-                'max_sphericity': 0.0,
-                'sphericity_std': 0.0,
                 'status': 'completed'
             }
         
@@ -889,8 +857,7 @@ def calculate_vesicle_sphericity(vesicle_data: Dict[str, Any]) -> Dict[str, floa
         return {
             'sphericity_volume': 0.0,
             'actual_volume': 0.0,
-            'actual_surface_area': 0.0,
-            'sphericity': 0.0
+            'actual_surface_area': 0.0
         }
     
     # Method 1: Volume-based sphericity using fitted sphere
@@ -920,9 +887,6 @@ def calculate_vesicle_sphericity(vesicle_data: Dict[str, Any]) -> Dict[str, floa
         'actual_volume': float(actual_volume),
         'actual_surface_area': float(actual_surface_area)
     }
-    
-    # Use volume-based sphericity as the primary sphericity measure
-    sphericity_data['sphericity'] = float(sphericity_volume)
     
     return sphericity_data
 

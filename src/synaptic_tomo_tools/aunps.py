@@ -801,67 +801,29 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
             summary_stats['aunp_cluster_count'] = n_clusters
         
         # Add AuNP density (AuNPs per unit active zone area)
-        # Only include areas of active zones that were included in the analysis (same as visualization)
+        # Use the saved active zone results which already contain the filtered zones
         if n_aunps > 0:
             try:
-                # Use the active_zone_indices parameter to determine which zones to include
-                # This matches how visualization determines which zones to process
-                if active_zone_indices is not None:
-                    # Use the specified active zone indices from CSV
-                    zones_to_include = active_zone_indices
+                # Load active zone results (already filtered by active zone analysis step)
+                from .results_manager import ResultsManager
+                results_manager = ResultsManager("results")
+                active_zone_results = results_manager.get_tomogram_results(tomogram_name, 'activezone')
+                
+                if active_zone_results and 'results' in active_zone_results:
+                    az_data = active_zone_results['results'].get('active_zone', {})
+                    
+                    # Use total postsynaptic active zone area (already filtered to only include zones with AuNPs)
+                    if 'total_active_zone_post_area' not in az_data:
+                        raise ValueError("No total postsynaptic active zone area available. Cannot calculate AuNP density. Active zone analysis must be run with postsynaptic area calculation.")
+                    
+                    total_active_zone_area = az_data['total_active_zone_post_area']
+                    
+                    if total_active_zone_area <= 0:
+                        raise ValueError(f"Invalid total active zone area: {total_active_zone_area}. Area must be positive.")
+                    
+                    summary_stats['aunp_density'] = float(n_aunps / total_active_zone_area)  # AuNPs per µm²
                 else:
-                    # If no indices specified, use all zones that have AuNPs
-                    zones_to_include = [idx for idx in df_valid['active_zone'].unique() if idx != -1]
-                
-                if len(zones_to_include) == 0:
-                    raise ValueError("No active zones specified for density calculation. Cannot calculate AuNP density.")
-                
-                # Load active zones from GLB to get individual zone data
-                from .activezone import import_membrane_segmentations_from_glb, find_active_zones_from_glb
-                membrane_data = import_membrane_segmentations_from_glb(tomogram_path)
-                active_zones_glb = find_active_zones_from_glb(membrane_data, distance_range=(10.0, 40.0))
-                
-                if not active_zones_glb or 'active_zones' not in active_zones_glb or len(active_zones_glb['active_zones']) == 0:
-                    raise ValueError("No active zones found. Cannot calculate AuNP density.")
-                
-                # Get active zone names in order (they should correspond to indices 0, 1, 2, ...)
-                active_zone_names = list(active_zones_glb['active_zones'].keys())
-                
-                if len(active_zone_names) == 0:
-                    raise ValueError("No active zone names found. Cannot calculate AuNP density.")
-                
-                # Sum postsynaptic areas only for active zones that were included in the analysis
-                total_active_zone_area = 0.0
-                zones_included = []
-                
-                for az_idx in zones_to_include:
-                    # Map index to zone name (assuming indices 0, 1, 2, ... correspond to zone names in order)
-                    if az_idx < 0 or az_idx >= len(active_zone_names):
-                        print(f"Warning: Active zone index {az_idx} is out of range. Available zones: {len(active_zone_names)}")
-                        continue
-                    
-                    zone_name = active_zone_names[az_idx]
-                    
-                    if zone_name not in active_zones_glb['active_zones']:
-                        print(f"Warning: Zone name {zone_name} not found in active zones data.")
-                        continue
-                    
-                    zone_data = active_zones_glb['active_zones'][zone_name]
-                    
-                    if 'active_postsynaptic_area' not in zone_data:
-                        raise ValueError(f"No postsynaptic area data available for {zone_name}. Cannot calculate AuNP density.")
-                    
-                    zone_area = zone_data['active_postsynaptic_area']
-                    if zone_area <= 0:
-                        raise ValueError(f"Invalid postsynaptic area for {zone_name}: {zone_area}. Area must be positive.")
-                    
-                    total_active_zone_area += zone_area
-                    zones_included.append(zone_name)
-                
-                if total_active_zone_area <= 0:
-                    raise ValueError(f"Total active zone area is {total_active_zone_area}. Must be positive. Zones included: {zones_included}")
-                
-                summary_stats['aunp_density'] = float(n_aunps / total_active_zone_area)  # AuNPs per µm²
+                    raise ValueError("No active zone results available. Cannot calculate AuNP density. Active zone analysis must be run first.")
                 
             except Exception as e:
                 print(f"Error getting active zone area for density calculation: {e}")

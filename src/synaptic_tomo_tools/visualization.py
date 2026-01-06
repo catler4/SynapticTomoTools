@@ -214,89 +214,74 @@ def load_postsynaptic_active_zone_coords(tomo_path):
     return coords
 
 def load_specific_active_zone_coords(tomo_path, active_zone_indices, aunps):
-    """Load active zone coordinates only for the specified active zone indices, matched by distance to AuNPs."""
+    """Load active zone coordinates only for the specified active zone indices, using saved mapping."""
+    from .activezone import load_active_zone_mapping
+    
     az_dir = Path(tomo_path) / 'best_alignment' / 'STT_results' / 'activezone'
     
     azs_pre = []
     azs_post = []
     
-    if active_zone_indices is not None and aunps is not None and not aunps.empty:
-        # Get all available active zone files
-        pre_files = sorted(list(az_dir.glob('active_zone_pre*_post*_pre.txt')))
-        post_files = sorted(list(az_dir.glob('active_zone_pre*_post*_post.txt')))
+    if active_zone_indices is not None:
+        # Load saved mapping
+        az_mapping = load_active_zone_mapping(tomo_path)
         
-        # Found active zone files
-        
-        for az_id in active_zone_indices:
-            # Get AuNPs for this specific active zone
-            if 'active_zone' in aunps.columns:
-                aunps_in_az = aunps[aunps['active_zone'] == az_id]
-            else:
-                print(f"Warning: No 'active_zone' column in AuNP data, cannot match membranes for active zone {az_id}")
-                continue
-            
-            if aunps_in_az.empty:
-                print(f"Warning: No AuNPs found for active zone {az_id}, cannot match membranes")
-                continue
-            
-            # Calculate center of AuNPs for this active zone
-            aunp_center = np.mean(aunps_in_az[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values, axis=0)
-            # Active zone AuNP center calculated
-            
-            # Find the paired active zone membrane files closest to these AuNPs
-            best_az_name = None
-            min_distance = float('inf')
+        if not az_mapping:
+            # No mapping found - use all available zone files as fallback but print error
+            print(f"No saved active zone mapping found for {Path(tomo_path).name}. Active zone analysis must be run first with smart matching to create the mapping.")
+            print(f"FALLBACK: Loading all available active zone files (no filtering applied).")
+            # Load all available zone files
+            pre_files = sorted(list(az_dir.glob('active_zone_pre*_post*_pre.txt')))
+            post_files = sorted(list(az_dir.glob('active_zone_pre*_post*_post.txt')))
             
             # Group files by active zone name to ensure paired matching
             active_zone_groups = {}
             for pre_file in pre_files:
-                # Extract zone name from filename (e.g., "active_zone_pre1_post1_pre.txt" -> "active_zone_pre1_post1")
                 zone_name = pre_file.name.replace('_pre.txt', '')
                 if zone_name not in active_zone_groups:
                     active_zone_groups[zone_name] = {'pre': None, 'post': None}
                 active_zone_groups[zone_name]['pre'] = pre_file
             
             for post_file in post_files:
-                # Extract zone name from filename (e.g., "active_zone_pre1_post1_post.txt" -> "active_zone_pre1_post1")
                 zone_name = post_file.name.replace('_post.txt', '')
                 if zone_name not in active_zone_groups:
                     active_zone_groups[zone_name] = {'pre': None, 'post': None}
                 active_zone_groups[zone_name]['post'] = post_file
             
-            # Check each complete active zone (paired pre/post)
+            # Load all paired zones
             for zone_name, files in active_zone_groups.items():
                 if files['pre'] is not None and files['post'] is not None:
                     try:
                         pre_coords = np.loadtxt(files['pre'])
                         post_coords = np.loadtxt(files['post'])
-                        
                         if pre_coords.size > 0 and post_coords.size > 0:
-                            # Calculate center of this active zone (paired pre/post)
-                            pre_center = np.mean(pre_coords, axis=0)
-                            post_center = np.mean(post_coords, axis=0)
-                            az_center = (pre_center + post_center) / 2.0
-                            
-                            # Calculate distance from AuNP center to active zone center
-                            distance = np.linalg.norm(aunp_center - az_center)
-                            
-                            if distance < min_distance:
-                                min_distance = distance
-                                best_az_name = zone_name
+                            azs_pre.append(pre_coords)
+                            azs_post.append(post_coords)
                     except Exception as e:
-                        print(f"Error reading {zone_name}: {e}")
-                        continue
+                        print(f"Warning: Error loading {zone_name}: {e}")
+        else:
+            # Convert string keys to int (JSON stores dict keys as strings)
+            az_mapping = {int(k): v for k, v in az_mapping.items()}
             
-            # Load the best matching paired files
-            if best_az_name is not None and best_az_name in active_zone_groups:
-                files = active_zone_groups[best_az_name]
-                try:
-                    pre_coords = np.loadtxt(files['pre'])
-                    post_coords = np.loadtxt(files['post'])
-                    azs_pre.append(pre_coords)
-                    azs_post.append(post_coords)
-                    # Matched active zone to paired membrane
-                except Exception as e:
-                    print(f"Error loading {best_az_name}: {e}")
+            # Use saved mapping to load zones directly
+            for az_id in active_zone_indices:
+                if az_id in az_mapping:
+                    zone_name = az_mapping[az_id]
+                    pre_file = az_dir / f"{zone_name}_pre.txt"
+                    post_file = az_dir / f"{zone_name}_post.txt"
+                    
+                    if pre_file.exists() and post_file.exists():
+                        try:
+                            pre_coords = np.loadtxt(pre_file)
+                            post_coords = np.loadtxt(post_file)
+                            azs_pre.append(pre_coords)
+                            azs_post.append(post_coords)
+                        except Exception as e:
+                            raise ValueError(f"Error loading zone {zone_name} from saved mapping: {e}")
+                    else:
+                        raise ValueError(f"Files not found for zone {zone_name} from saved mapping. Expected files: {pre_file} and {post_file}")
+                else:
+                    raise ValueError(f"Active zone index {az_id} not found in saved mapping. This indicates the active zone analysis was run with different indices.")
     
     return azs_pre, azs_post
 
@@ -841,7 +826,7 @@ def run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=Non
     """Run active zonogram analysis for all tomograms and generate PDF summaries."""
     try:
         # Import the combined zonogram analysis function
-        from synaptic_tomo_tools.activezone import (
+        from .activezone import (
             define_active_zone, define_active_zonogram, extract_active_zonogram,
             import_membrane_segmentations_from_glb, find_active_zones_from_glb
         )
@@ -1098,7 +1083,7 @@ def select_aunps_by_cluster_findingampa_style(active_zone_data, cluster_data, to
 
 def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_active_zones=None, rerun=False):
     """Run combined active zonogram analysis for a single tomogram - EXACT SAME CODE as original script."""
-    from synaptic_tomo_tools.activezone import (
+    from .activezone import (
         define_active_zone, define_active_zonogram, extract_active_zonogram,
         import_membrane_segmentations_from_glb, find_active_zones_from_glb
     )
@@ -1194,60 +1179,43 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
             selected_az_indices = aunp_az_numbers
             print(f"Using all available active zones from AuNP files: {selected_az_indices}")
         
-        # Apply smart matching for both CSV-specified and auto-detected active zones
-        if aunp_data is not None and 'active_zone' in aunp_data.columns:
-            # Use smart matching: find which active zone files are closest to AuNPs in each active zone
-            filtered_active_zones = {}
-            az_mapping = {}  # Maps active zone index to actual active zone name
-            
-            for az_index in selected_az_indices:
-                # Get AuNPs for this active zone
-                aunps_in_az = aunp_data[aunp_data['active_zone'] == az_index]
-                
-                if aunps_in_az.empty:
-                    raise ValueError(f"No AuNPs found for active zone {az_index}. Smart matching requires AuNP data for each specified active zone.")
-                
-                # Calculate center of AuNPs for this active zone
-                aunp_center = np.mean(aunps_in_az[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values, axis=0)
-                # Active zone AuNP center calculated
-                
-                # Find the active zone membrane file closest to these AuNPs
-                best_az_name = None
-                min_distance = float('inf')
-                
-                for az_name, az_data in active_zones_data['active_zones'].items():
-                    if len(az_data['active_presynaptic_points']) > 0 and len(az_data['active_postsynaptic_points']) > 0:
-                        # Calculate center of this active zone (paired pre/post membranes)
-                        pre_center = np.mean(az_data['active_presynaptic_points'], axis=0)
-                        post_center = np.mean(az_data['active_postsynaptic_points'], axis=0)
-                        az_center = (pre_center + post_center) / 2.0
-                        
-                        # Calculate distance from AuNP center to active zone center
-                        distance = np.linalg.norm(aunp_center - az_center)
-                        
-                        # Checking active zone distance
-                        
-                        if distance < min_distance:
-                            min_distance = distance
-                            best_az_name = az_name
-                
-                if best_az_name is not None:
-                    filtered_active_zones[best_az_name] = active_zones_data['active_zones'][best_az_name]
-                    az_mapping[az_index] = best_az_name
-                    # Matched active zone to membrane
-                else:
-                    raise ValueError(f"No suitable active zone membrane found for active zone {az_index}. Smart matching requires valid membrane data.")
-            
-            # Store the mapping for later use in filename generation
-            active_zones_data['az_mapping'] = az_mapping
-            active_zones_data['active_zones'] = filtered_active_zones
-            # Smart matching completed
+        # Use saved mapping from activezone.py (created by define_active_zone)
+        from .activezone import load_active_zone_mapping
+        
+        # Load saved mapping
+        az_mapping = load_active_zone_mapping(tomogram_path)
+        
+        if not az_mapping:
+            # No mapping found - use all active zones as fallback but print error
+            print(f"No saved active zone mapping found for {tomogram_name}. Active zone analysis must be run first with smart matching to create the mapping.")
+            print(f"FALLBACK: Using all {len(active_zones_data['active_zones'])} active zones found from GLB (no filtering applied).")
+            # Use all zones, no filtering
+            filtered_active_zones = active_zones_data['active_zones']
+            # Create a dummy mapping for filename generation (use zone names as-is)
+            az_mapping = {}
+            for idx, zone_name in enumerate(active_zones_data['active_zones'].keys()):
+                az_mapping[idx] = zone_name
         else:
-            # Smart matching is required - fail if AuNP data is not available
-            if aunp_data is None:
-                raise ValueError("Smart matching requires AuNP data, but no AuNP data was found. Please run AuNP analysis first.")
-            else:
-                raise ValueError("Smart matching requires AuNP data with 'active_zone' column, but this column was not found in the AuNP data.")
+            # Convert string keys to int (JSON stores dict keys as strings)
+            az_mapping = {int(k): v for k, v in az_mapping.items()}
+            
+            # Filter to only include zones in the mapping
+            filtered_active_zones = {}
+            for az_index in selected_az_indices:
+                if az_index in az_mapping:
+                    zone_name = az_mapping[az_index]
+                    if zone_name in active_zones_data['active_zones']:
+                        filtered_active_zones[zone_name] = active_zones_data['active_zones'][zone_name]
+                    else:
+                        raise ValueError(f"Zone {zone_name} from saved mapping not found in active zones data. This indicates a mismatch between the mapping and current active zones.")
+                else:
+                    raise ValueError(f"Active zone index {az_index} not found in saved mapping. This indicates the active zone analysis was run with different indices.")
+            
+            print(f"Using saved active zone mapping for {len(filtered_active_zones)} zones")
+        
+        # Store the mapping for later use in filename generation
+        active_zones_data['az_mapping'] = az_mapping
+        active_zones_data['active_zones'] = filtered_active_zones
         
         # Step 2: Regular Active Zonogram Analysis
         
@@ -1420,7 +1388,7 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                             # Compute fusion points if not cached
                             if len(fusion_points) == 0:
                                 try:
-                                    from synaptic_tomo_tools.aunps import compute_fusion_points
+                                    from .aunps import compute_fusion_points
                                     fusion_points = compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0)
                                 except Exception as e:
                                     print(f"Could not compute fusion points: {e}")
@@ -1572,7 +1540,7 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                         try:
                             import json
                             from scipy.interpolate import griddata
-                            from synaptic_tomo_tools.activezone import transform_coordinates_to_active_zonogram
+                            from .activezone import transform_coordinates_to_active_zonogram
                             
                             with open(packing_density_file, 'r') as f:
                                 packing_density_data = json.load(f)

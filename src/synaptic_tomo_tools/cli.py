@@ -112,7 +112,7 @@ SYNAPTIC TOMO TOOLS
 def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True):
     if print_ascii:
         print_synapse_ascii_art()
-    for i, (tomo, set_name) in enumerate(tomo_paths):
+    for i, (tomo, set_name, aunp_active_zones) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
         print(f"\n{'='*33} TOMOGRAM {i+1}/{len(tomo_paths)} {'='*33}")
         print(f"Analyzing: {tomogram_name}")
@@ -131,8 +131,25 @@ def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True):
         
         print(f"Running active zone analysis on {tomogram_name}")
         try:
-            az_results = define_active_zone(tomo)
-            cleft_results = calculate_cleft_width(tomo)
+            # Parse aunp_active_zones to get active zone indices (same as in run_aunps and run_vesicles)
+            az_str = str(aunp_active_zones) if aunp_active_zones is not None else ""
+            if az_str.strip() == "" or az_str.lower() == "nan":
+                az_indices = None
+            else:
+                # Handle both integer strings and float strings (e.g., "0.0" -> 0)
+                az_indices = []
+                for x in az_str.split(","):
+                    x = x.strip()
+                    if x.isdigit():
+                        az_indices.append(int(x))
+                    elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
+                        az_indices.append(int(float(x)))
+                # If parsing resulted in empty list, treat as None (use all active zones)
+                if len(az_indices) == 0:
+                    az_indices = None
+            
+            az_results = define_active_zone(tomo, active_zone_indices=az_indices)
+            cleft_results = calculate_cleft_width(tomo, active_zone_indices=az_indices)
             combined_results = {
                 'active_zone': az_results,
                 'cleft_width': cleft_results
@@ -177,21 +194,10 @@ def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True):
         
         print(f"Running vesicle analysis on {tomogram_name}")
         try:
-            # Parse aunp_active_zones to get active zone indices (same as in run_aunps)
-            az_str = str(aunp_active_zones) if aunp_active_zones is not None else ""
-            if az_str.strip() == "" or az_str.lower() == "nan":
-                az_indices = None
-            else:
-                # Handle both integer strings and float strings (e.g., "0.0" -> 0)
-                az_indices = []
-                for x in az_str.split(","):
-                    x = x.strip()
-                    if x.isdigit():
-                        az_indices.append(int(x))
-                    elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
-                        az_indices.append(int(float(x)))
-            
-            vesicle_results = detect_vesicles(tomo, set_name=set_name, active_zone_indices=az_indices)
+            # Note: Active zones are already filtered by the active zone analysis step
+            # to only include zones with AuNPs, so vesicle analysis will automatically
+            # use only the relevant active zones
+            vesicle_results = detect_vesicles(tomo, set_name=set_name)
             distance_results = measure_distances_to_az(tomo)
             combined_results = {
                 'vesicle_detection': vesicle_results,
@@ -342,15 +348,13 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None):
     print("\n" + "="*80)
     print("STEP 1: ACTIVE ZONE ANALYSIS")
     print("="*80)
-    activezone_paths = [(tomo, set_name) for (tomo, set_name, _) in tomo_paths]
-    run_activezone(activezone_paths, results_manager, rerun, print_ascii=False)
+    run_activezone(tomo_paths, results_manager, rerun, print_ascii=False)
     
     # Step 2: Vesicle Analysis
     print("\n" + "="*80)
     print("STEP 2: VESICLE ANALYSIS")
     print("="*80)
-    vesicles_paths = [(tomo, set_name) for (tomo, set_name, _) in tomo_paths]
-    run_vesicles(vesicles_paths, results_manager, rerun, print_ascii=False)
+    run_vesicles(tomo_paths, results_manager, rerun, print_ascii=False)
     
     # Step 3: AuNP Analysis
     print("\n" + "="*80)
@@ -709,11 +713,9 @@ def main():
         print("Use --rerun to force re-generation of existing visualizations.")
 
     if args.analysis == "activezone":
-        activezone_paths = [(tomo, set_name) for (tomo, set_name, _) in tomos]
-        run_activezone(activezone_paths, results_manager, rerun=args.rerun)
+        run_activezone(tomos, results_manager, rerun=args.rerun)
     elif args.analysis == "vesicles":
-        vesicles_paths = [(tomo, set_name) for (tomo, set_name, _) in tomos]
-        run_vesicles(vesicles_paths, results_manager, rerun=args.rerun)
+        run_vesicles(tomos, results_manager, rerun=args.rerun)
     elif args.analysis == "aunps":
         run_aunps(tomos, results_manager, rerun=args.rerun)
     elif args.analysis == "visualizations":

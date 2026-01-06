@@ -540,12 +540,131 @@ def save_active_zone_segmentations(active_zones: Dict[str, Any], tomogram_path):
             np.savetxt(post_filepath, zone_data['active_postsynaptic_points'], fmt='%.6e')
 
 
-def define_active_zone(tomogram_path) -> Dict[str, Any]:
+def match_active_zones_by_aunps(tomogram_path, active_zone_indices, all_active_zones) -> Dict[int, str]:
+    """
+    Match active zone indices to zone names using smart matching based on AuNP locations.
+    This is done once and the mapping can be reused.
+    
+    Args:
+        tomogram_path: Path to the tomogram file
+        active_zone_indices: List of active zone indices to match
+        all_active_zones: Dictionary of all active zones from GLB
+        
+    Returns:
+        Dictionary mapping active_zone_index -> zone_name
+    """
+    az_mapping = {}
+    
+    # Load AuNP data for smart matching
+    try:
+        import starfile
+        import pandas as pd
+        aunps_dir = Path(tomogram_path) / "best_alignment" / "aunps"
+        star_dfs = []
+        for idx in active_zone_indices:
+            star_file = aunps_dir / f"aunp_tm_BP_active_zone_{idx}.star"
+            if star_file.exists():
+                star_data = starfile.read(star_file)
+                if isinstance(star_data, dict):
+                    for v in star_data.values():
+                        if isinstance(v, pd.DataFrame):
+                            v = v.copy()
+                            v['active_zone'] = idx
+                            star_dfs.append(v)
+                            break
+                elif isinstance(star_data, pd.DataFrame):
+                    star_data = star_data.copy()
+                    star_data['active_zone'] = idx
+                    star_dfs.append(star_data)
+        
+        if not star_dfs:
+            return az_mapping
+        
+        aunp_data = pd.concat(star_dfs, ignore_index=True)
+        
+        if 'active_zone' not in aunp_data.columns or 'faCoordinateX' not in aunp_data.columns:
+            return az_mapping
+        
+        # Match each index to a zone name
+        for az_idx in active_zone_indices:
+            # Get AuNPs for this active zone index
+            aunps_in_az = aunp_data[aunp_data['active_zone'] == az_idx]
+            
+            if aunps_in_az.empty:
+                print(f"Warning: No AuNPs found for active zone index {az_idx}, skipping")
+                continue
+            
+            # Calculate center of AuNPs for this active zone index
+            aunp_center = np.mean(aunps_in_az[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values, axis=0)
+            
+            # Find the active zone closest to these AuNPs
+            best_az_name = None
+            min_distance = float('inf')
+            
+            for zone_name, zone_data in all_active_zones.items():
+                if len(zone_data['active_presynaptic_points']) > 0 and len(zone_data['active_postsynaptic_points']) > 0:
+                    # Calculate center of this active zone (paired pre/post membranes)
+                    pre_center = np.mean(zone_data['active_presynaptic_points'], axis=0)
+                    post_center = np.mean(zone_data['active_postsynaptic_points'], axis=0)
+                    az_center = (pre_center + post_center) / 2.0
+                    
+                    # Calculate distance from AuNP center to active zone center
+                    distance = np.linalg.norm(aunp_center - az_center)
+                    
+                    if distance < min_distance:
+                        min_distance = distance
+                        best_az_name = zone_name
+            
+            if best_az_name is not None:
+                az_mapping[az_idx] = best_az_name
+                print(f"Matched active zone index {az_idx} to {best_az_name} (distance: {min_distance:.2f} nm)")
+            else:
+                print(f"Warning: No active zone found for active zone index {az_idx}")
+    
+    except Exception as e:
+        print(f"Warning: Could not perform smart matching: {e}")
+    
+    return az_mapping
+
+
+def save_active_zone_mapping(tomogram_path, az_mapping: Dict[int, str]):
+    """Save the active zone index to zone name mapping to a JSON file."""
+    tomogram_path = Path(tomogram_path)
+    active_zone_dir = tomogram_path / "best_alignment" / "STT_results" / "activezone"
+    active_zone_dir.mkdir(parents=True, exist_ok=True)
+    
+    mapping_file = active_zone_dir / "active_zone_mapping.json"
+    import json
+    with open(mapping_file, 'w') as f:
+        json.dump(az_mapping, f, indent=2)
+    print(f"Saved active zone mapping to {mapping_file}")
+
+
+def load_active_zone_mapping(tomogram_path) -> Dict[int, str]:
+    """Load the active zone index to zone name mapping from JSON file."""
+    tomogram_path = Path(tomogram_path)
+    active_zone_dir = tomogram_path / "best_alignment" / "STT_results" / "activezone"
+    mapping_file = active_zone_dir / "active_zone_mapping.json"
+    
+    if mapping_file.exists():
+        try:
+            import json
+            with open(mapping_file, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Warning: Could not load active zone mapping: {e}")
+    
+    return {}
+
+
+def define_active_zone(tomogram_path, active_zone_indices=None) -> Dict[str, Any]:
     """
     Define active zone in tomogram.
+    If active_zone_indices is specified, only includes active zones that correspond to those indices.
     
     Args:
         tomogram_path: Path to the tomogram file.
+        active_zone_indices: List of active zone indices to include (None = all).
     
     Returns:
         Dictionary containing active zone analysis results.
@@ -558,6 +677,40 @@ def define_active_zone(tomogram_path) -> Dict[str, Any]:
         
         # Find active zones from GLB
         active_zones = find_active_zones_from_glb(membranes, distance_range=(10.0, 40.0))
+        
+        # Filter active zones if indices are specified using smart matching based on AuNP locations
+        az_mapping = {}
+        if active_zone_indices is not None and len(active_zone_indices) > 0:
+            # Do smart matching once
+            az_mapping = match_active_zones_by_aunps(tomogram_path, active_zone_indices, active_zones['active_zones'])
+            
+            if az_mapping:
+                # Filter to only include matched zones
+                zones_to_include = set(az_mapping.values())
+                filtered_zones = {name: data for name, data in active_zones['active_zones'].items() if name in zones_to_include}
+                active_zones['active_zones'] = filtered_zones
+                active_zones['total_active_zones'] = len(filtered_zones)
+                
+                # Save the mapping for reuse by other functions
+                save_active_zone_mapping(tomogram_path, az_mapping)
+                print(f"Filtered to {len(filtered_zones)} active zones using smart matching (indices: {active_zone_indices})")
+            else:
+                # Fallback to order-based matching if smart matching failed
+                print("Warning: Smart matching failed. Using order-based matching (may be incorrect).")
+                active_zone_names = list(active_zones['active_zones'].keys())
+                zones_to_include = set()
+                for az_idx in active_zone_indices:
+                    if 0 <= az_idx < len(active_zone_names):
+                        zone_name = active_zone_names[az_idx]
+                        zones_to_include.add(zone_name)
+                        az_mapping[az_idx] = zone_name
+                
+                # Filter to only include specified zones
+                filtered_zones = {name: data for name, data in active_zones['active_zones'].items() if name in zones_to_include}
+                active_zones['active_zones'] = filtered_zones
+                active_zones['total_active_zones'] = len(filtered_zones)
+                save_active_zone_mapping(tomogram_path, az_mapping)
+                print(f"Filtered to {len(filtered_zones)} active zones using order-based matching (indices: {active_zone_indices})")
         
         # Save active zone segmentations
         save_active_zone_segmentations(active_zones, tomogram_path)
@@ -742,12 +895,14 @@ def calculate_cleft_width_for_active_zone(pre_coords: np.ndarray, post_coords: n
     }
 
 
-def calculate_cleft_width(tomogram_path) -> Dict[str, Any]:
+def calculate_cleft_width(tomogram_path, active_zone_indices=None) -> Dict[str, Any]:
     """
-    Calculate synaptic cleft width for all active zones.
+    Calculate synaptic cleft width for active zones.
+    If active_zone_indices is specified, only includes active zones that correspond to those indices.
     
     Args:
         tomogram_path: Path to the tomogram file.
+        active_zone_indices: List of active zone indices to include (None = all).
     
     Returns:
         Dictionary containing cleft width analysis results.
@@ -757,6 +912,24 @@ def calculate_cleft_width(tomogram_path) -> Dict[str, Any]:
     try:
         # Import active zone segmentations
         active_zones = import_active_zone_segmentations(tomogram_path)
+        
+        # Filter active zones if indices are specified - use saved mapping from define_active_zone
+        if active_zone_indices is not None and len(active_zone_indices) > 0:
+            # Load the saved mapping (created by define_active_zone)
+            az_mapping = load_active_zone_mapping(tomogram_path)
+            
+            if az_mapping:
+                # Convert string keys to int (JSON stores dict keys as strings)
+                az_mapping = {int(k): v for k, v in az_mapping.items()}
+                
+                # Filter to only include zones in the mapping
+                zones_to_include = {az_mapping[az_idx] for az_idx in active_zone_indices if az_idx in az_mapping}
+                active_zones = {name: data for name, data in active_zones.items() if name in zones_to_include}
+                print(f"Filtered to {len(active_zones)} active zones for cleft width using saved mapping (indices: {active_zone_indices})")
+            else:
+                # If no saved mapping exists, the zones were already filtered when saved
+                # Just use all loaded zones (they're already filtered)
+                print(f"Using {len(active_zones)} active zones for cleft width (already filtered by define_active_zone)")
         
         if not active_zones:
             print("No active zones found for cleft width calculation")
