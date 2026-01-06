@@ -598,8 +598,6 @@ def main():
         help="Generate PDF summary for all tomograms at the end of the analysis pipeline."
     )
     parser.add_argument(
-    )
-    parser.add_argument(
         "--show-status", action="store_true",
         help="Show detailed status of all analyses for the selected tomograms."
     )
