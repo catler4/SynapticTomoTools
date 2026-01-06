@@ -149,7 +149,7 @@ def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True):
                     az_indices = None
             
             az_results = define_active_zone(tomo, active_zone_indices=az_indices)
-            cleft_results = calculate_cleft_width(tomo, active_zone_indices=az_indices)
+            cleft_results = calculate_cleft_width(tomo, active_zone_indices=az_indices, set_name=set_name)
             combined_results = {
                 'active_zone': az_results,
                 'cleft_width': cleft_results

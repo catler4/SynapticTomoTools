@@ -895,7 +895,7 @@ def calculate_cleft_width_for_active_zone(pre_coords: np.ndarray, post_coords: n
     }
 
 
-def calculate_cleft_width(tomogram_path, active_zone_indices=None) -> Dict[str, Any]:
+def calculate_cleft_width(tomogram_path, active_zone_indices=None, set_name=None) -> Dict[str, Any]:
     """
     Calculate synaptic cleft width for active zones.
     If active_zone_indices is specified, only includes active zones that correspond to those indices.
@@ -903,6 +903,7 @@ def calculate_cleft_width(tomogram_path, active_zone_indices=None) -> Dict[str, 
     Args:
         tomogram_path: Path to the tomogram file.
         active_zone_indices: List of active zone indices to include (None = all).
+        set_name: Name of the dataset/set this tomogram belongs to (from CSV).
     
     Returns:
         Dictionary containing cleft width analysis results.
@@ -992,13 +993,14 @@ def calculate_cleft_width(tomogram_path, active_zone_indices=None) -> Dict[str, 
             
             # --- Append to global results/all_cleft_distances.csv ---
             tomogram_name = Path(tomogram_path).name
-            # Extract set_name from tomogram path
-            path_parts = Path(tomogram_path).parts
-            set_name = "unknown"
-            for i, part in enumerate(path_parts):
-                if part.endswith("_tomograms") and i > 0:
-                    set_name = part.replace("_tomograms", "")
-                    break
+            # Use provided set_name or extract from tomogram path
+            if set_name is None or set_name == "unknown":
+                path_parts = Path(tomogram_path).parts
+                set_name = "unknown"
+                for i, part in enumerate(path_parts):
+                    if part.endswith("_tomograms") and i > 0:
+                        set_name = part.replace("_tomograms", "")
+                        break
             
             # Prepare average cleft distance data for CSV (one row per tomogram)
             import pandas as pd
