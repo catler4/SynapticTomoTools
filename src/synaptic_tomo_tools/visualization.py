@@ -80,54 +80,96 @@ def load_vesicles(tomo_path):
     return data['vesicles']
 
 def load_aunps(tomo_path, active_zone_indices=None):
-    """Load AuNP coordinates from STAR file(s), optionally filtered by active_zone_indices."""
-    aunps_dir = Path(tomo_path) / 'best_alignment' / 'aunps'
+    """Load AuNP coordinates from filtered aunp_clusters.star file, optionally filtered by active_zone_indices."""
+    aunps_results_dir = Path(tomo_path) / 'best_alignment' / 'STT_results' / 'aunps'
     import starfile
-    import glob
     import pandas as pd
-    star_dfs = []
-    if active_zone_indices is not None:
-        for idx in active_zone_indices:
-            star_file = aunps_dir / f"aunp_tm_BP_active_zone_{idx}.star"
-            print("[viz] Trying to load:", star_file)
-            if star_file.exists():
-                star_data = starfile.read(star_file)
-                if isinstance(star_data, dict):
-                    for v in star_data.values():
-                        if isinstance(v, pd.DataFrame):
-                            v = v.copy()
-                            v['active_zone'] = idx  # Add active zone identifier
-                            star_dfs.append(v)
-                            break
-                elif isinstance(star_data, pd.DataFrame):
-                    star_data = star_data.copy()
-                    star_data['active_zone'] = idx  # Add active zone identifier
-                    star_dfs.append(star_data)
-    else:
-        print("[viz] active_zone_indices is None, loading all aunp_tm_BP_active_zone_*.star files")
+    
+    # Load from the filtered output file (aunp_clusters.star)
+    cluster_star = aunps_results_dir / "aunp_clusters.star"
+    
+    if not cluster_star.exists():
+        print(f"[viz] Warning: Filtered AuNP file not found at {cluster_star}")
+        print("[viz] Falling back to original input files (this should not happen if analysis was run)")
+        # Fallback to original files if filtered file doesn't exist (for backward compatibility)
+        aunps_dir = Path(tomo_path) / 'best_alignment' / 'aunps'
+        import glob
         import re
-        pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
-        for file in glob.glob(pattern):
-            fname = Path(file).name
-            m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
-            if m:
-                az_id = int(m.group(1))
-                star_data = starfile.read(Path(file))
-                if isinstance(star_data, dict):
-                    for v in star_data.values():
-                        if isinstance(v, pd.DataFrame):
-                            v = v.copy()
-                            v['active_zone'] = az_id  # Add active zone identifier
-                            star_dfs.append(v)
-                            break
-                elif isinstance(star_data, pd.DataFrame):
-                    star_data = star_data.copy()
-                    star_data['active_zone'] = az_id  # Add active zone identifier
-                    star_dfs.append(star_data)
+        star_dfs = []
+        if active_zone_indices is not None:
+            for idx in active_zone_indices:
+                star_file = aunps_dir / f"aunp_tm_BP_active_zone_{idx}.star"
+                print("[viz] Fallback: Trying to load:", star_file)
+                if star_file.exists():
+                    star_data = starfile.read(star_file)
+                    if isinstance(star_data, dict):
+                        for v in star_data.values():
+                            if isinstance(v, pd.DataFrame):
+                                v = v.copy()
+                                if 'active_zone' not in v.columns:
+                                    v['active_zone'] = idx
+                                star_dfs.append(v)
+                                break
+                    elif isinstance(star_data, pd.DataFrame):
+                        star_data = star_data.copy()
+                        if 'active_zone' not in star_data.columns:
+                            star_data['active_zone'] = idx
+                        star_dfs.append(star_data)
+        else:
+            pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
+            for file in glob.glob(pattern):
+                fname = Path(file).name
+                m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
+                if m:
+                    az_id = int(m.group(1))
+                    star_data = starfile.read(Path(file))
+                    if isinstance(star_data, dict):
+                        for v in star_data.values():
+                            if isinstance(v, pd.DataFrame):
+                                v = v.copy()
+                                if 'active_zone' not in v.columns:
+                                    v['active_zone'] = az_id
+                                star_dfs.append(v)
+                                break
+                    elif isinstance(star_data, pd.DataFrame):
+                        star_data = star_data.copy()
+                        if 'active_zone' not in star_data.columns:
+                            star_data['active_zone'] = az_id
+                        star_dfs.append(star_data)
         if not star_dfs:
-            print("[viz] No numeric aunp_tm_BP_active_zone_*.star files found and _all.star fallback is disabled.")
+            print("[viz] No AuNP files found.")
             return None
-    return pd.concat(star_dfs, ignore_index=True)
+        return pd.concat(star_dfs, ignore_index=True)
+    
+    # Load filtered AuNP data
+    print(f"[viz] Loading filtered AuNPs from: {cluster_star}")
+    star_data = starfile.read(cluster_star)
+    
+    # Handle both dict and DataFrame formats
+    if isinstance(star_data, dict):
+        # Extract DataFrame from dict (usually has 'particles' key or similar)
+        for v in star_data.values():
+            if isinstance(v, pd.DataFrame):
+                df = v.copy()
+                break
+        else:
+            print("[viz] Error: Could not find DataFrame in star file dict")
+            return None
+    elif isinstance(star_data, pd.DataFrame):
+        df = star_data.copy()
+    else:
+        print("[viz] Error: Unexpected star file format")
+        return None
+    
+    # Filter by active_zone_indices if specified
+    if active_zone_indices is not None:
+        if 'active_zone' not in df.columns:
+            print("[viz] Warning: 'active_zone' column not found in filtered AuNP file")
+            return None
+        df = df[df['active_zone'].isin(active_zone_indices)].copy()
+        print(f"[viz] Filtered to {len(df)} AuNPs in active zones {active_zone_indices}")
+    
+    return df
 
 def load_fusion_points(tomo_path):
     """Load fusion points for vesicles within 20nm of active zone."""
@@ -296,24 +338,64 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
     # Process active zones - auto-detect if none specified in CSV
     if aunp_active_zone_indices is None or len(aunp_active_zone_indices) == 0:
         print("No active zones specified in CSV, auto-detecting all available active zones")
-        # Auto-detect all available active zone numbers from AuNP files
-        aunps_dir = Path(tomo_path) / "best_alignment" / "aunps"
-        import glob
-        import re
+        # Auto-detect all available active zone numbers from filtered AuNP file
+        aunps_results_dir = Path(tomo_path) / "best_alignment" / "STT_results" / "aunps"
+        cluster_star = aunps_results_dir / "aunp_clusters.star"
         
-        # Find all aunp_tm_BP_active_zone_*.star files and extract their numbers
-        pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
-        aunp_az_numbers = []
-        for file in glob.glob(pattern):
-            fname = Path(file).name
-            m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
-            if m:
-                aunp_az_numbers.append(int(m.group(1)))
-        
-        # Sort the numbers to get consistent ordering
-        aunp_az_numbers.sort()
-        aunp_active_zone_indices = aunp_az_numbers
-        print(f"Auto-detected active zones: {aunp_active_zone_indices}")
+        if cluster_star.exists():
+            try:
+                import starfile
+                star_data = starfile.read(cluster_star)
+                if isinstance(star_data, dict):
+                    for v in star_data.values():
+                        if isinstance(v, pd.DataFrame):
+                            df = v
+                            break
+                    else:
+                        df = None
+                else:
+                    df = star_data
+                
+                if df is not None and 'active_zone' in df.columns:
+                    aunp_az_numbers = sorted(df['active_zone'].unique().tolist())
+                    # Remove -1 if present (means "not in any active zone")
+                    aunp_az_numbers = [az for az in aunp_az_numbers if az != -1]
+                    aunp_active_zone_indices = aunp_az_numbers
+                    print(f"Auto-detected active zones from filtered AuNP file: {aunp_active_zone_indices}")
+                else:
+                    print("Warning: Could not extract active zones from filtered file, falling back to input files")
+                    raise ValueError("No active_zone column in filtered file")
+            except Exception as e:
+                print(f"Error reading filtered file for auto-detection: {e}")
+                # Fallback to original method
+                aunps_dir = Path(tomo_path) / "best_alignment" / "aunps"
+                import glob
+                import re
+                pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
+                aunp_az_numbers = []
+                for file in glob.glob(pattern):
+                    fname = Path(file).name
+                    m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
+                    if m:
+                        aunp_az_numbers.append(int(m.group(1)))
+                aunp_az_numbers.sort()
+                aunp_active_zone_indices = aunp_az_numbers
+                print(f"Auto-detected active zones (fallback): {aunp_active_zone_indices}")
+        else:
+            print("Warning: Filtered AuNP file not found, falling back to input files")
+            aunps_dir = Path(tomo_path) / "best_alignment" / "aunps"
+            import glob
+            import re
+            pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
+            aunp_az_numbers = []
+            for file in glob.glob(pattern):
+                fname = Path(file).name
+                m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
+                if m:
+                    aunp_az_numbers.append(int(m.group(1)))
+            aunp_az_numbers.sort()
+            aunp_active_zone_indices = aunp_az_numbers
+            print(f"Auto-detected active zones (fallback): {aunp_active_zone_indices}")
     
     # Load only the active zone membranes for CSV-specified or auto-detected active zones, matched by distance to AuNPs
     azs_pre, azs_post = load_specific_active_zone_coords(tomo_path, aunp_active_zone_indices, aunps)
@@ -696,67 +778,68 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
 
     # --- AuNP Cluster Visualization ---
     # Use the same filtered AuNPs that were used in the analysis
-    aunp_clusters = aunps  # Use the filtered AuNPs from load_aunps()
+    # aunps already comes from aunp_clusters.star which includes cluster assignments
+    aunp_clusters = aunps.copy() if aunps is not None else None
     
     if aunp_clusters is not None and not aunp_clusters.empty:
-        # Try to load cluster assignments from the filtered AuNPs
-        aunps_results_dir = Path(tomo_path) / "best_alignment" / "STT_results" / "aunps"
-        cluster_star = aunps_results_dir / "aunp_clusters.star"
-        cluster_csv = aunps_results_dir / "aunp_nearest_neighbor_distances.csv"
-        
-        # Load cluster assignments
-        cluster_assignments = None
-        if cluster_star.exists():
-            try:
-                import starfile
-                cluster_data = starfile.read(cluster_star)
-                if isinstance(cluster_data, dict):
-                    for v in cluster_data.values():
-                        if isinstance(v, pd.DataFrame):
-                            cluster_assignments = v
-                            break
-                elif isinstance(cluster_data, pd.DataFrame):
-                    cluster_assignments = cluster_data
-            except Exception:
-                cluster_assignments = None
-        
-        if cluster_assignments is None and cluster_csv.exists():
-            try:
-                cluster_assignments = pd.read_csv(cluster_csv)
-            except Exception:
-                cluster_assignments = None
-        
-        # Filter cluster assignments to match the filtered AuNPs
-        if cluster_assignments is not None and not cluster_assignments.empty:
-            # Match AuNPs by coordinates to get their cluster assignments
-            if 'faCoordinateX' in aunp_clusters.columns and 'faCoordinateX' in cluster_assignments.columns:
-                # Create coordinate-based matching
-                from scipy.spatial.distance import cdist
-                coords_viz = aunp_clusters[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values
-                coords_cluster = cluster_assignments[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values
-                
-                # Find closest matches
-                distances = cdist(coords_viz, coords_cluster)
-                closest_indices = np.argmin(distances, axis=1)
-                
-                # Only keep matches that are very close (within 1 pixel)
-                close_matches = distances[np.arange(len(closest_indices)), closest_indices] < 1.0
-                
-                if np.any(close_matches):
-                    # Add cluster assignments to the filtered AuNPs
-                    aunp_clusters = aunp_clusters.copy()
-                    aunp_clusters['aunp_cluster'] = -1  # Default to noise
-                    aunp_clusters.loc[close_matches, 'aunp_cluster'] = cluster_assignments.iloc[closest_indices[close_matches]]['aunp_cluster'].values
-                    print(f"Matched {np.sum(close_matches)} AuNPs with cluster assignments")
+        # Check if cluster assignments are already in the dataframe (should be if loaded from aunp_clusters.star)
+        if 'aunp_cluster' not in aunp_clusters.columns:
+            # Fallback: Try to load cluster assignments separately (shouldn't be needed but kept for backward compatibility)
+            aunps_results_dir = Path(tomo_path) / "best_alignment" / "STT_results" / "aunps"
+            cluster_star = aunps_results_dir / "aunp_clusters.star"
+            cluster_csv = aunps_results_dir / "aunp_nearest_neighbor_distances.csv"
+            
+            # Load cluster assignments
+            cluster_assignments = None
+            if cluster_star.exists():
+                try:
+                    import starfile
+                    cluster_data = starfile.read(cluster_star)
+                    if isinstance(cluster_data, dict):
+                        for v in cluster_data.values():
+                            if isinstance(v, pd.DataFrame):
+                                cluster_assignments = v
+                                break
+                    elif isinstance(cluster_data, pd.DataFrame):
+                        cluster_assignments = cluster_data
+                except Exception:
+                    cluster_assignments = None
+            
+            if cluster_assignments is None and cluster_csv.exists():
+                try:
+                    cluster_assignments = pd.read_csv(cluster_csv)
+                except Exception:
+                    cluster_assignments = None
+            
+            # Match cluster assignments to filtered AuNPs by coordinates
+            if cluster_assignments is not None and not cluster_assignments.empty:
+                if 'faCoordinateX' in aunp_clusters.columns and 'faCoordinateX' in cluster_assignments.columns:
+                    # Create coordinate-based matching
+                    from scipy.spatial.distance import cdist
+                    coords_viz = aunp_clusters[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values
+                    coords_cluster = cluster_assignments[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values
+                    
+                    # Find closest matches
+                    distances = cdist(coords_viz, coords_cluster)
+                    closest_indices = np.argmin(distances, axis=1)
+                    
+                    # Only keep matches that are very close (within 1 pixel)
+                    close_matches = distances[np.arange(len(closest_indices)), closest_indices] < 1.0
+                    
+                    if np.any(close_matches) and 'aunp_cluster' in cluster_assignments.columns:
+                        # Add cluster assignments to the filtered AuNPs
+                        aunp_clusters['aunp_cluster'] = -1  # Default to noise
+                        aunp_clusters.loc[close_matches, 'aunp_cluster'] = cluster_assignments.iloc[closest_indices[close_matches]]['aunp_cluster'].values
+                        print(f"Matched {np.sum(close_matches)} AuNPs with cluster assignments")
+                    else:
+                        print("Warning: Could not match filtered AuNPs with cluster assignments")
+                        aunp_clusters['aunp_cluster'] = -1
                 else:
-                    print("Warning: Could not match filtered AuNPs with cluster assignments")
+                    print("Warning: Coordinate columns not found for cluster matching")
                     aunp_clusters['aunp_cluster'] = -1
             else:
-                print("Warning: Coordinate columns not found for cluster matching")
+                print("Warning: No cluster assignments found")
                 aunp_clusters['aunp_cluster'] = -1
-        else:
-            print("Warning: No cluster assignments found")
-            aunp_clusters['aunp_cluster'] = -1
         
         # Assign colors to clusters using shared color scheme
         clusters = aunp_clusters['aunp_cluster'].values
@@ -1002,8 +1085,9 @@ def select_aunps_findingampa_style(active_zone_data, aunp_data, tomogram_path, a
     """
     from pathlib import Path
     import numpy as np
+    import pandas as pd
     
-    # Load AuNP data
+    # Load AuNP data from filtered output file
     aunp_file = Path(tomogram_path) / "best_alignment" / "STT_results" / "aunps" / "aunp_clusters.star"
 
     if not aunp_file.exists():
@@ -1011,12 +1095,30 @@ def select_aunps_findingampa_style(active_zone_data, aunp_data, tomogram_path, a
     
     try:
         import starfile
-        aunp_df = starfile.read(aunp_file)
+        star_data = starfile.read(aunp_file)
+        # Handle both dict and DataFrame formats
+        if isinstance(star_data, dict):
+            for v in star_data.values():
+                if isinstance(v, pd.DataFrame):
+                    aunp_df = v
+                    break
+            else:
+                return []
+        elif isinstance(star_data, pd.DataFrame):
+            aunp_df = star_data
+        else:
+            return []
+        
         # Filter AuNPs by active zone
+        if 'active_zone' not in aunp_df.columns:
+            return []
         aunp_df = aunp_df[aunp_df['active_zone'] == active_zone_id]
+        if aunp_df.empty:
+            return []
         aunp_positions = aunp_df[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values
 
-    except:
+    except Exception as e:
+        print(f"Error loading AuNPs in select_aunps_findingampa_style: {e}")
         return []
     
     # Use proper transformation if original zone data is available
@@ -1044,8 +1146,9 @@ def select_aunps_by_cluster_findingampa_style(active_zone_data, cluster_data, to
     """
     from pathlib import Path
     import numpy as np
+    import pandas as pd
     
-    # Load cluster data
+    # Load cluster data from filtered output file
     cluster_file = Path(tomogram_path) / "best_alignment" / "STT_results" / "aunps" / "aunp_clusters.star"
 
     if not cluster_file.exists():
@@ -1053,12 +1156,34 @@ def select_aunps_by_cluster_findingampa_style(active_zone_data, cluster_data, to
     
     try:
         import starfile
-        cluster_df = starfile.read(cluster_file)
+        star_data = starfile.read(cluster_file)
+        # Handle both dict and DataFrame formats
+        if isinstance(star_data, dict):
+            for v in star_data.values():
+                if isinstance(v, pd.DataFrame):
+                    cluster_df = v
+                    break
+            else:
+                return [], []
+        elif isinstance(star_data, pd.DataFrame):
+            cluster_df = star_data
+        else:
+            return [], []
+        
         # Filter AuNPs by active zone
+        if 'active_zone' not in cluster_df.columns:
+            return [], []
         cluster_df = cluster_df[cluster_df['active_zone'] == active_zone_id]
+        if cluster_df.empty:
+            return [], []
         aunp_positions = cluster_df[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values
-        cluster_assignments = cluster_df['aunp_cluster'].values
-    except:
+        # Get cluster assignments (default to -1 if column missing)
+        if 'aunp_cluster' in cluster_df.columns:
+            cluster_assignments = cluster_df['aunp_cluster'].values
+        else:
+            cluster_assignments = np.full(len(cluster_df), -1)
+    except Exception as e:
+        print(f"Error loading cluster data in select_aunps_by_cluster_findingampa_style: {e}")
         return [], []
     
     # Use proper transformation if original zone data is available
@@ -1121,12 +1246,31 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
             aunp_star_path = Path(tomogram_path) / "best_alignment" / "STT_results" / "aunps" / "aunp_clusters.star"
             if aunp_star_path.exists():
                 import starfile
-                aunp_data = starfile.read(aunp_star_path)
-                # Loaded AuNP data for smart active zone matching
+                star_data = starfile.read(aunp_star_path)
+                # Handle both dict and DataFrame formats
+                if isinstance(star_data, dict):
+                    for v in star_data.values():
+                        if isinstance(v, pd.DataFrame):
+                            aunp_data = v
+                            break
+                    else:
+                        aunp_data = None
+                elif isinstance(star_data, pd.DataFrame):
+                    aunp_data = star_data
+                else:
+                    aunp_data = None
+                if aunp_data is not None:
+                    # Loaded AuNP data for smart active zone matching
+                    pass
+                else:
+                    print(f"Warning: Could not extract DataFrame from {aunp_star_path}, smart matching will not be available")
+                    aunp_data = None
             else:
                 print(f"Warning: AuNP data not found at {aunp_star_path}, smart matching will not be available")
+                aunp_data = None
         except Exception as e:
             print(f"Warning: Error loading AuNP data: {e}, smart matching will not be available")
+            aunp_data = None
         
         # Filter active zones based on CSV specification using smart matching
         if aunp_active_zones is not None and aunp_active_zones != []:
@@ -1159,25 +1303,64 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
             print("No active zone filtering specified, proceeding with all active zones")
             selected_az_indices = None
         
-        # If no specific active zones were specified, get all available active zone numbers from AuNP files
+        # If no specific active zones were specified, get all available active zone numbers from filtered AuNP file
         if selected_az_indices is None:
-            aunps_dir = Path(tomogram_path) / "best_alignment" / "aunps"
-            import glob
-            import re
+            aunps_results_dir = Path(tomogram_path) / "best_alignment" / "STT_results" / "aunps"
+            cluster_star = aunps_results_dir / "aunp_clusters.star"
             
-            # Find all aunp_tm_BP_active_zone_*.star files and extract their numbers
-            pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
-            aunp_az_numbers = []
-            for file in glob.glob(pattern):
-                fname = Path(file).name
-                m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
-                if m:
-                    aunp_az_numbers.append(int(m.group(1)))
-            
-            # Sort the numbers to get consistent ordering
-            aunp_az_numbers.sort()
-            selected_az_indices = aunp_az_numbers
-            print(f"Using all available active zones from AuNP files: {selected_az_indices}")
+            if cluster_star.exists():
+                try:
+                    import starfile
+                    star_data = starfile.read(cluster_star)
+                    if isinstance(star_data, dict):
+                        for v in star_data.values():
+                            if isinstance(v, pd.DataFrame):
+                                df = v
+                                break
+                        else:
+                            df = None
+                    else:
+                        df = star_data
+                    
+                    if df is not None and 'active_zone' in df.columns:
+                        aunp_az_numbers = sorted(df['active_zone'].unique().tolist())
+                        # Remove -1 if present (means "not in any active zone")
+                        aunp_az_numbers = [az for az in aunp_az_numbers if az != -1]
+                        selected_az_indices = aunp_az_numbers
+                        print(f"Using all available active zones from filtered AuNP file: {selected_az_indices}")
+                    else:
+                        raise ValueError("No active_zone column in filtered file")
+                except Exception as e:
+                    print(f"Error reading filtered file for active zone detection: {e}, falling back to input files")
+                    # Fallback to original method
+                    aunps_dir = Path(tomogram_path) / "best_alignment" / "aunps"
+                    import glob
+                    import re
+                    pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
+                    aunp_az_numbers = []
+                    for file in glob.glob(pattern):
+                        fname = Path(file).name
+                        m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
+                        if m:
+                            aunp_az_numbers.append(int(m.group(1)))
+                    aunp_az_numbers.sort()
+                    selected_az_indices = aunp_az_numbers
+                    print(f"Using all available active zones from input files (fallback): {selected_az_indices}")
+            else:
+                print("Warning: Filtered AuNP file not found, falling back to input files")
+                aunps_dir = Path(tomogram_path) / "best_alignment" / "aunps"
+                import glob
+                import re
+                pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
+                aunp_az_numbers = []
+                for file in glob.glob(pattern):
+                    fname = Path(file).name
+                    m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
+                    if m:
+                        aunp_az_numbers.append(int(m.group(1)))
+                aunp_az_numbers.sort()
+                selected_az_indices = aunp_az_numbers
+                print(f"Using all available active zones from input files (fallback): {selected_az_indices}")
         
         # Use saved mapping from activezone.py (created by define_active_zone)
         from .activezone import load_active_zone_mapping

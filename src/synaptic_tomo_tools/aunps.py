@@ -345,69 +345,18 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         
         coord_cols = ['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']
         coords = np.asarray(df_valid[coord_cols]).astype(float)
-        # KDTree nearest neighbor analysis
-        tree = KDTree(coords)
-        dists, idxs = tree.query(coords, k=2)
-        df_valid['nearest_neighbor_distance'] = dists[:, 1]
-
-        # --- AuNP clustering analysis using DBSCAN ---
-        try:
-            # Use DBSCAN with min_samples=1, then filter out clusters with < 4 points
-            db = DBSCAN(eps=16, min_samples=1).fit(coords)
-            initial_labels = db.labels_
-            
-            # Count points in each cluster
-            unique_labels, counts = np.unique(initial_labels, return_counts=True)
-            
-            # Create a mapping: clusters with < 4 points become noise (-1)
-            label_mapping = {}
-            valid_cluster_count = 0
-            for label, count in zip(unique_labels, counts):
-                if label == -1:  # Keep noise as noise
-                    label_mapping[label] = -1
-                elif count < 4:  # Small clusters become noise
-                    label_mapping[label] = -1
-                else:  # Renumber larger clusters starting from 1
-                    valid_cluster_count += 1
-                    label_mapping[label] = valid_cluster_count
-            
-            # Apply the mapping to get final cluster assignments
-            final_labels = np.array([label_mapping[label] for label in initial_labels])
-            df_valid['aunp_cluster'] = final_labels
-            
-            # Count final clusters (excluding noise)
-            n_clusters = len(set(final_labels)) - (1 if -1 in final_labels else 0)
-            n_small_clusters_filtered = len([count for label, count in zip(unique_labels, counts) 
-                                           if label != -1 and count < 4])
-            
-            print(f"DBSCAN found {n_clusters} AuNP clusters (eps=16 nm, min_samples=1)")
-            print(f"Filtered out {n_small_clusters_filtered} small clusters (< 4 points) and reassigned to noise")
-        except Exception as e:
-            print(f"Error in DBSCAN clustering: {e}")
-            df_valid['aunp_cluster'] = -1
-        # --- End clustering ---
+        
+        # Note: Nearest neighbor and clustering analysis will be done AFTER membrane filtering
 
         aunps_results_dir = Path(tomogram_path) / "best_alignment" / "STT_results" / "aunps"
         aunps_results_dir.mkdir(parents=True, exist_ok=True)
         output_file = aunps_results_dir / "aunp_nearest_neighbor_distances.csv"
 
-        # --- New: Output .star file with cluster assignments ---
-        try:
-            # Use the same columns as the imported .star, plus aunp_cluster
-            star_cols = [col for col in df.columns if col in df_valid.columns] + ['aunp_cluster']
-            star_df = df_valid[star_cols].copy()
-            if not isinstance(star_df, pd.DataFrame):
-                star_df = pd.DataFrame(star_df)
-            star_outfile = aunps_results_dir / "aunp_clusters.star"
-            starfile.write(star_df, star_outfile, overwrite=True)
-            print(f"Saved AuNP cluster assignments to {star_outfile}")
-        except Exception as e:
-            print(f"Error writing .star file with clusters: {e}")
-        # --- End .star output ---
-
-        # --- Output cluster summary CSV ---
+        # --- Output cluster summary CSV (must come after clustering) ---
         try:
             from scipy.spatial import ConvexHull, distance_matrix
+            if db is None:
+                raise ValueError("Clustering was not successful, cannot generate cluster summary")
             cluster_labels = np.unique(db.labels_)
             cluster_rows = []
             for label in cluster_labels:
@@ -472,7 +421,65 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
             print(f"Error writing aunp_clusters.csv: {e}")
         # --- End cluster summary ---
 
-        # Calculate distance to active zone center
+        # --- Calculate distance to closest pre/post membrane segmentation (before filtering to determine filter) ---
+        membranes = import_membrane_segmentations(tomogram_path)
+        # Ensure all arrays are 2D and have shape (N, 3)
+        pre_arrays = [np.atleast_2d(arr) for arr in membranes['presynaptic'] if np.atleast_2d(arr).shape[1] == 3]
+        post_arrays = [np.atleast_2d(arr) for arr in membranes['postsynaptic'] if np.atleast_2d(arr).shape[1] == 3]
+        pre_points = np.concatenate(pre_arrays, axis=0) if pre_arrays else np.zeros((0, 3))
+        post_points = np.concatenate(post_arrays, axis=0) if post_arrays else np.zeros((0, 3))
+        if len(pre_points) > 0:
+            pre_tree = KDTree(pre_points)
+            pre_dists, _ = pre_tree.query(coords)
+        else:
+            pre_dists = np.full(coords.shape[0], np.nan)
+        if len(post_points) > 0:
+            post_tree = KDTree(post_points)
+            post_dists, _ = post_tree.query(coords)
+        else:
+            post_dists = np.full(coords.shape[0], np.nan)
+        df_valid['distance_to_presynaptic'] = pre_dists
+        df_valid['distance_to_postsynaptic'] = post_dists
+        # --- End new ---
+        
+        # --- Apply membrane distance filtering (findingampa-style: within 40nm of both membranes) ---
+        print(f"Applying membrane distance filtering (findingampa-style: < 40nm from both presynaptic and postsynaptic)...")
+        n_before_filter = len(df_valid)
+        
+        # Filter: keep AuNPs within 40nm of both presynaptic AND postsynaptic membranes
+        # Only include AuNPs with valid (non-NaN) distance measurements
+        valid_pre = ~np.isnan(df_valid['distance_to_presynaptic'])
+        valid_post = ~np.isnan(df_valid['distance_to_postsynaptic'])
+        within_pre_threshold = df_valid['distance_to_presynaptic'] < 40
+        within_post_threshold = df_valid['distance_to_postsynaptic'] < 40
+        
+        membrane_filter_mask = np.logical_and.reduce([
+            valid_pre,
+            valid_post,
+            within_pre_threshold,
+            within_post_threshold
+        ])
+        
+        df_valid = df_valid[membrane_filter_mask].copy()
+        n_after_filter = len(df_valid)
+        n_filtered = n_before_filter - n_after_filter
+        
+        print(f"  Filtered {n_filtered} AuNPs ({n_before_filter} -> {n_after_filter})")
+        print(f"  Kept {n_after_filter} AuNPs within 40nm of both membranes")
+        
+        if df_valid.empty:
+            print("No AuNPs remaining after membrane distance filtering.")
+            return {
+                'aunp_count': 0,
+                'status': 'completed',
+                'error': 'No AuNPs within 40nm of both membranes'
+            }
+        
+        # Update coordinates array to match filtered dataframe
+        coords = np.asarray(df_valid[coord_cols]).astype(float)
+        # --- End membrane distance filtering ---
+        
+        # --- Calculate distance to active zone center (on filtered AuNPs) ---
         try:
             az_segmentations = import_active_zone_segmentations(tomogram_path)
             all_az_points = []
@@ -493,28 +500,66 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
             az_center = np.array([np.nan, np.nan, np.nan])
             distances_to_center = np.full(coords.shape[0], np.nan)
         df_valid['distance_to_active_zone_center'] = distances_to_center
-        # --- End new ---
-
-        # --- New: Calculate distance to closest pre/post membrane segmentation ---
-        membranes = import_membrane_segmentations(tomogram_path)
-        # Ensure all arrays are 2D and have shape (N, 3)
-        pre_arrays = [np.atleast_2d(arr) for arr in membranes['presynaptic'] if np.atleast_2d(arr).shape[1] == 3]
-        post_arrays = [np.atleast_2d(arr) for arr in membranes['postsynaptic'] if np.atleast_2d(arr).shape[1] == 3]
-        pre_points = np.concatenate(pre_arrays, axis=0) if pre_arrays else np.zeros((0, 3))
-        post_points = np.concatenate(post_arrays, axis=0) if post_arrays else np.zeros((0, 3))
-        if len(pre_points) > 0:
-            pre_tree = KDTree(pre_points)
-            pre_dists, _ = pre_tree.query(coords)
-        else:
-            pre_dists = np.full(coords.shape[0], np.nan)
-        if len(post_points) > 0:
-            post_tree = KDTree(post_points)
-            post_dists, _ = post_tree.query(coords)
-        else:
-            post_dists = np.full(coords.shape[0], np.nan)
-        df_valid['distance_to_presynaptic'] = pre_dists
-        df_valid['distance_to_postsynaptic'] = post_dists
-        # --- End new ---
+        # --- End active zone center calculation ---
+        
+        # --- KDTree nearest neighbor analysis (on filtered AuNPs) ---
+        tree = KDTree(coords)
+        dists, idxs = tree.query(coords, k=2)
+        df_valid['nearest_neighbor_distance'] = dists[:, 1]
+        
+        # --- AuNP clustering analysis using DBSCAN (on filtered AuNPs) ---
+        db = None  # Initialize so it's accessible for cluster summary
+        try:
+            # Use DBSCAN with min_samples=1, then filter out clusters with < 4 points
+            db = DBSCAN(eps=16, min_samples=1).fit(coords)
+            initial_labels = db.labels_
+            
+            # Count points in each cluster
+            unique_labels, counts = np.unique(initial_labels, return_counts=True)
+            
+            # Create a mapping: clusters with < 4 points become noise (-1)
+            label_mapping = {}
+            valid_cluster_count = 0
+            for label, count in zip(unique_labels, counts):
+                if label == -1:  # Keep noise as noise
+                    label_mapping[label] = -1
+                elif count < 4:  # Small clusters become noise
+                    label_mapping[label] = -1
+                else:  # Renumber larger clusters starting from 1
+                    valid_cluster_count += 1
+                    label_mapping[label] = valid_cluster_count
+            
+            # Apply the mapping to get final cluster assignments
+            final_labels = np.array([label_mapping[label] for label in initial_labels])
+            df_valid['aunp_cluster'] = final_labels
+            
+            # Count final clusters (excluding noise)
+            n_clusters = len(set(final_labels)) - (1 if -1 in final_labels else 0)
+            n_small_clusters_filtered = len([count for label, count in zip(unique_labels, counts) 
+                                           if label != -1 and count < 4])
+            
+            print(f"DBSCAN found {n_clusters} AuNP clusters (eps=16 nm, min_samples=1)")
+            print(f"Filtered out {n_small_clusters_filtered} small clusters (< 4 points) and reassigned to noise")
+        except Exception as e:
+            print(f"Error in DBSCAN clustering: {e}")
+            df_valid['aunp_cluster'] = -1
+            db = None  # Ensure db is None if clustering failed
+        # --- End clustering ---
+        
+        # --- Output .star file with cluster assignments (after filtering and clustering) ---
+        try:
+            # Use the same columns as the imported .star, plus aunp_cluster
+            star_cols = [col for col in df.columns if col in df_valid.columns] + ['aunp_cluster']
+            star_df = df_valid[star_cols].copy()
+            if not isinstance(star_df, pd.DataFrame):
+                star_df = pd.DataFrame(star_df)
+            star_outfile = aunps_results_dir / "aunp_clusters.star"
+            starfile.write(star_df, star_outfile, overwrite=True)
+            print(f"Saved AuNP cluster assignments (filtered) to {star_outfile}")
+        except Exception as e:
+            print(f"Error writing .star file with clusters: {e}")
+        # --- End .star output ---
+        
         # Save nearest neighbor distances in STT_results/aunps directory
         # Compute fusion points
         fusion_points = compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0)
