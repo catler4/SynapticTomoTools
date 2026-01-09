@@ -166,7 +166,31 @@ def load_aunps(tomo_path, active_zone_indices=None):
         if 'active_zone' not in df.columns:
             print("[viz] Warning: 'active_zone' column not found in filtered AuNP file")
             return None
-        df = df[df['active_zone'].isin(active_zone_indices)].copy()
+        
+        # Convert active_zone column to int if needed, and handle any NaN values
+        df['active_zone'] = pd.to_numeric(df['active_zone'], errors='coerce').astype('Int64')
+        
+        # Show what active zones are actually in the file for debugging
+        unique_azs = sorted(df['active_zone'].dropna().unique().tolist())
+        print(f"[viz] Active zones in file: {unique_azs}, filtering for: {active_zone_indices}")
+        
+        # Filter by active zone indices (convert to same type for comparison)
+        active_zone_indices_int = [int(az) for az in active_zone_indices]
+        df_filtered = df[df['active_zone'].isin(active_zone_indices_int)].copy()
+        
+        if len(df_filtered) == 0:
+            # If no AuNPs found, check if all active_zone values are 0 (common issue from old data)
+            # This can happen if the input files had active_zone=0 instead of the file index
+            unique_azs = sorted(df['active_zone'].dropna().unique().tolist())
+            if len(unique_azs) == 1 and unique_azs[0] == 0:
+                print(f"[viz] Warning: All AuNPs have active_zone=0, but filtering for {active_zone_indices}")
+                print(f"[viz] This suggests the analysis needs to be re-run with the fixed active_zone assignment.")
+                print(f"[viz] Returning empty result - please re-run AuNP analysis to fix active_zone values.")
+            else:
+                print(f"[viz] Warning: No AuNPs found in active zones {active_zone_indices}")
+                print(f"[viz] Available active zones in file: {unique_azs}")
+        
+        df = df_filtered
         print(f"[viz] Filtered to {len(df)} AuNPs in active zones {active_zone_indices}")
     
     return df

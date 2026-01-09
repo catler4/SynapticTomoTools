@@ -286,10 +286,16 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
                     if isinstance(star_data, dict):
                         for v in star_data.values():
                             if isinstance(v, pd.DataFrame):
-                                star_dfs.append(v)
+                                df = v.copy()
+                                # Ensure active_zone column matches the file index
+                                df['active_zone'] = idx
+                                star_dfs.append(df)
                                 break
                     elif isinstance(star_data, pd.DataFrame):
-                        star_dfs.append(star_data)
+                        df = star_data.copy()
+                        # Ensure active_zone column matches the file index
+                        df['active_zone'] = idx
+                        star_dfs.append(df)
         else:
             # Load all aunp_tm_BP_active_zone_*.star files with numeric suffix (not _all.star)
             pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
@@ -297,14 +303,21 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
                 fname = Path(file).name
                 m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
                 if m:
+                    az_id = int(m.group(1))
                     star_data = starfile.read(Path(file))
                     if isinstance(star_data, dict):
                         for v in star_data.values():
                             if isinstance(v, pd.DataFrame):
-                                star_dfs.append(v)
+                                df = v.copy()
+                                # Ensure active_zone column matches the file index
+                                df['active_zone'] = az_id
+                                star_dfs.append(df)
                                 break
                     elif isinstance(star_data, pd.DataFrame):
-                        star_dfs.append(star_data)
+                        df = star_data.copy()
+                        # Ensure active_zone column matches the file index
+                        df['active_zone'] = az_id
+                        star_dfs.append(df)
         
         if not star_dfs:
             print("No numeric aunp_tm_BP_active_zone_*.star files found and _all.star fallback is disabled.")
