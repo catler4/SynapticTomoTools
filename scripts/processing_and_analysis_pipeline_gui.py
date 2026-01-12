@@ -48,18 +48,75 @@ class AnalysisPipelineGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Synaptic TomoTools Analysis Pipeline GUI")
-        self.geometry("800x700")
+        self.geometry("900x900")
         self.csv_path = tk.StringVar()
         self.root_dir = tk.StringVar()
         self.start_tomogram = tk.StringVar()
         self.log_text = None
         self._img_refs = []  # Keep references to PhotoImage objects
         self._current_process = None  # Track running process for stopping
+        
+        # Initialize parameter variables with defaults
+        self.use_custom_params = tk.BooleanVar(value=False)
+        # Active zone parameters
+        self.az_distance_min = tk.StringVar(value="10.0")
+        self.az_distance_max = tk.StringVar(value="40.0")
+        # Vesicle analysis parameters
+        self.vesicle_distance_threshold = tk.StringVar(value="20.0")
+        # AuNP analysis parameters
+        self.dbscan_eps = tk.StringVar(value="16.0")
+        self.dbscan_min_samples = tk.StringVar(value="1")
+        # Visualization parameters
+        self.sphere_size = tk.StringVar(value="36")
+        self.sphere_color = tk.StringVar(value="gold")
+        self.aunp_distance_min = tk.StringVar(value="")
+        self.aunp_distance_max = tk.StringVar(value="")
+        
         self._build_tabs()
 
     def _build_home_tab_content(self, tab):
-        frame = ttk.Frame(tab)
-        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        # Create a scrollable frame
+        # Create canvas and scrollbar
+        canvas = tk.Canvas(tab, highlightthickness=0)
+        self._home_canvas = canvas  # Store reference for scroll region updates
+        scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        def configure_scroll_region(event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        
+        scrollable_frame.bind("<Configure>", configure_scroll_region)
+        
+        canvas_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        
+        def configure_canvas_width(event):
+            canvas_width = event.width
+            canvas.itemconfig(canvas_window, width=canvas_width)
+        
+        canvas.bind('<Configure>', configure_canvas_width)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack canvas and scrollbar
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Bind mousewheel to canvas (works on Windows and Mac)
+        def _on_mousewheel(event):
+            # For Windows and Mac
+            if event.delta:
+                canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            # For Linux
+            elif event.num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                canvas.yview_scroll(1, "units")
+        
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind_all("<Button-4>", _on_mousewheel)
+        canvas.bind_all("<Button-5>", _on_mousewheel)
+        
+        # Use scrollable_frame as the main frame
+        frame = scrollable_frame
         # Home figure
         img = self._load_and_display_image(FIG_HOME, frame, max_width=700, max_height=320)
         if img:
@@ -99,12 +156,83 @@ class AnalysisPipelineGUI(tk.Tk):
         separator = ttk.Separator(frame, orient='horizontal')
         separator.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
         
+        # Analysis Parameters section
+        ttk.Label(frame, text="Analysis Parameters:", font=('TkDefaultFont', 10, 'bold')).grid(row=6, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
+        
+        # Parameter mode switch
+        params_mode_frame = ttk.Frame(frame)
+        params_mode_frame.grid(row=7, column=0, columnspan=3, sticky=tk.W, pady=5)
+        ttk.Label(params_mode_frame, text="Parameter mode:").pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Radiobutton(params_mode_frame, text="Default", variable=self.use_custom_params, value=False, 
+                       command=self._toggle_custom_params).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(params_mode_frame, text="Custom", variable=self.use_custom_params, value=True,
+                       command=self._toggle_custom_params).pack(side=tk.LEFT, padx=5)
+        
+        # Custom parameters frame (initially hidden)
+        self.custom_params_frame = ttk.LabelFrame(frame, text="Custom Parameters", padding=10)
+        self.custom_params_frame.grid(row=8, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5, padx=0)
+        
+        # Active zone parameters
+        az_frame = ttk.LabelFrame(self.custom_params_frame, text="Active Zone Parameters", padding=5)
+        az_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        ttk.Label(az_frame, text="Distance range (nm):").grid(row=0, column=0, sticky=tk.W, padx=5)
+        ttk.Entry(az_frame, textvariable=self.az_distance_min, width=8).grid(row=0, column=1, padx=2)
+        ttk.Label(az_frame, text="to").grid(row=0, column=2, padx=2)
+        ttk.Entry(az_frame, textvariable=self.az_distance_max, width=8).grid(row=0, column=3, padx=2)
+        ttk.Label(az_frame, text="(default: 10.0 - 40.0)").grid(row=0, column=4, padx=5, sticky=tk.W)
+        
+        # Vesicle analysis parameters
+        vesicle_frame = ttk.LabelFrame(self.custom_params_frame, text="Vesicle Analysis Parameters", padding=5)
+        vesicle_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        ttk.Label(vesicle_frame, text="Distance from active zone for 'close' vesicles (nm):").grid(row=0, column=0, sticky=tk.W, padx=5)
+        ttk.Entry(vesicle_frame, textvariable=self.vesicle_distance_threshold, width=8).grid(row=0, column=1, padx=5)
+        ttk.Label(vesicle_frame, text="(default: 20.0)").grid(row=0, column=2, padx=5, sticky=tk.W)
+        
+        # AuNP analysis parameters
+        aunp_frame = ttk.LabelFrame(self.custom_params_frame, text="AuNP Analysis Parameters", padding=5)
+        aunp_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        ttk.Label(aunp_frame, text="DBSCAN eps (nm):").grid(row=0, column=0, sticky=tk.W, padx=5)
+        ttk.Entry(aunp_frame, textvariable=self.dbscan_eps, width=8).grid(row=0, column=1, padx=5)
+        ttk.Label(aunp_frame, text="(default: 16.0)").grid(row=0, column=2, padx=5, sticky=tk.W)
+        ttk.Label(aunp_frame, text="DBSCAN min_samples:").grid(row=1, column=0, sticky=tk.W, padx=5)
+        ttk.Entry(aunp_frame, textvariable=self.dbscan_min_samples, width=8).grid(row=1, column=1, padx=5)
+        ttk.Label(aunp_frame, text="(default: 1)").grid(row=1, column=2, padx=5, sticky=tk.W)
+        
+        # Visualization parameters
+        viz_frame = ttk.LabelFrame(self.custom_params_frame, text="Visualization Parameters", padding=5)
+        viz_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        ttk.Label(viz_frame, text="Sphere size for active zonogram overlays:").grid(row=0, column=0, sticky=tk.W, padx=5)
+        ttk.Entry(viz_frame, textvariable=self.sphere_size, width=8).grid(row=0, column=1, padx=5)
+        ttk.Label(viz_frame, text="(default: 36)").grid(row=0, column=2, padx=5, sticky=tk.W)
+        ttk.Label(viz_frame, text="Sphere color:").grid(row=1, column=0, sticky=tk.W, padx=5)
+        # Color dropdown with matplotlib-compatible colors
+        color_options = ['gold', 'purple', 'blue', 'red', 'green', 'orange', 'yellow', 
+                        'cyan', 'magenta', 'pink', 'brown', 'black', 'white', 'gray', 
+                        'navy', 'lime', 'olive', 'teal', 'maroon', 'silver']
+        self.sphere_color_combo = ttk.Combobox(viz_frame, textvariable=self.sphere_color, 
+                                                values=color_options, width=6, state="readonly")
+        self.sphere_color_combo.grid(row=1, column=1, padx=5)
+        self.sphere_color_combo.set('gold')  # Set default
+        ttk.Label(viz_frame, text="(default: gold)").grid(row=1, column=2, padx=5, sticky=tk.W)
+        ttk.Label(viz_frame, text="AuNP distance range for color scale (nm):").grid(row=2, column=0, sticky=tk.W, padx=5)
+        ttk.Entry(viz_frame, textvariable=self.aunp_distance_min, width=8).grid(row=2, column=1, padx=2)
+        ttk.Label(viz_frame, text="to").grid(row=2, column=2, padx=2)
+        ttk.Entry(viz_frame, textvariable=self.aunp_distance_max, width=8).grid(row=2, column=3, padx=2)
+        ttk.Label(viz_frame, text="(default: auto from data)").grid(row=2, column=4, padx=5, sticky=tk.W)
+        
+        # Initially hide custom params frame
+        self.custom_params_frame.grid_remove()
+        
+        # Add separator before Results Management
+        separator2 = ttk.Separator(frame, orient='horizontal')
+        separator2.grid(row=9, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        
         # Results management section
-        ttk.Label(frame, text="Results Management:", font=('TkDefaultFont', 10, 'bold')).grid(row=6, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
+        ttk.Label(frame, text="Results Management:", font=('TkDefaultFont', 10, 'bold')).grid(row=10, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
         
         # Archive current results
         archive_frame = ttk.Frame(frame)
-        archive_frame.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+        archive_frame.grid(row=11, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
         ttk.Label(archive_frame, text="Archive note:").pack(side=tk.LEFT, padx=(0, 5))
         self.archive_note_var = tk.StringVar()
         archive_entry = ttk.Entry(archive_frame, textvariable=self.archive_note_var, width=30)
@@ -115,7 +243,7 @@ class AnalysisPipelineGUI(tk.Tk):
         
         # Delete previous results
         delete_btn = ttk.Button(frame, text="Delete previous results", command=self._delete_previous_results)
-        delete_btn.grid(row=8, column=0, columnspan=3, sticky=tk.W, pady=5)
+        delete_btn.grid(row=12, column=0, columnspan=3, sticky=tk.W, pady=5)
         ToolTip(delete_btn, "Delete results from individual tomogram STT_results directories (for tomograms in CSV) and the results directory. Does NOT delete archived results.")
 
     def _load_and_display_image(self, path, parent, max_width=400, max_height=180):
@@ -562,6 +690,19 @@ Do you want to continue?"""
             self.start_tomogram_label.grid_remove()
             self.start_tomogram_combo.grid_remove()
     
+    def _toggle_custom_params(self):
+        """Handle custom parameters toggle to show/hide custom parameters frame."""
+        if self.use_custom_params.get():
+            # Show custom parameters frame
+            self.custom_params_frame.grid()
+        else:
+            # Hide custom parameters frame
+            self.custom_params_frame.grid_remove()
+        # Update scroll region after showing/hiding
+        if hasattr(self, '_home_canvas'):
+            self._home_canvas.update_idletasks()
+            self._home_canvas.configure(scrollregion=self._home_canvas.bbox("all"))
+    
     def _archive_results(self):
         """Archive current results directory to a dated directory with user note."""
         results_dir = Path("results")
@@ -776,6 +917,59 @@ Do you want to continue?"""
             cli += ["--analysis", "all"]
             if generate_pdf:
                 cli += ["--generate-pdf-summary"]
+        # Add custom parameters if custom mode is selected
+        if self.use_custom_params.get():
+            # Active zone parameters
+            if self.az_distance_min.get():
+                try:
+                    cli += ["--az-distance-min", str(float(self.az_distance_min.get()))]
+                except ValueError:
+                    pass
+            if self.az_distance_max.get():
+                try:
+                    cli += ["--az-distance-max", str(float(self.az_distance_max.get()))]
+                except ValueError:
+                    pass
+            
+            # Vesicle analysis parameters
+            if self.vesicle_distance_threshold.get():
+                try:
+                    cli += ["--vesicle-distance-threshold", str(float(self.vesicle_distance_threshold.get()))]
+                except ValueError:
+                    pass
+            
+            # AuNP analysis parameters
+            if self.dbscan_eps.get():
+                try:
+                    cli += ["--dbscan-eps", str(float(self.dbscan_eps.get()))]
+                except ValueError:
+                    pass
+            if self.dbscan_min_samples.get():
+                try:
+                    cli += ["--dbscan-min-samples", str(int(self.dbscan_min_samples.get()))]
+                except ValueError:
+                    pass
+            
+            # Visualization parameters
+            if self.sphere_size.get():
+                try:
+                    cli += ["--sphere-size", str(int(self.sphere_size.get()))]
+                except ValueError:
+                    pass
+            if self.sphere_color.get():
+                cli += ["--sphere-color", str(self.sphere_color.get())]
+            # AuNP distance range for color scale
+            if self.aunp_distance_min.get():
+                try:
+                    cli += ["--aunp-distance-min", str(float(self.aunp_distance_min.get()))]
+                except ValueError:
+                    pass
+            if self.aunp_distance_max.get():
+                try:
+                    cli += ["--aunp-distance-max", str(float(self.aunp_distance_max.get()))]
+                except ValueError:
+                    pass
+        
         # Add flags from checkboxes
         rerun_var, checkfiles_var = getattr(tab, '_flag_vars', (None, None))
         if rerun_var and rerun_var.get():

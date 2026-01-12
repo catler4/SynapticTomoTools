@@ -575,13 +575,14 @@ def save_nearby_vesicles(vesicles: List[Dict[str, Any]], tomogram_path,
 
 
 
-def detect_vesicles(tomogram_path, set_name=None) -> Dict[str, Any]:
+def detect_vesicles(tomogram_path, set_name=None, vesicle_distance_threshold=20.0) -> Dict[str, Any]:
     """
     Detect synaptic vesicles in tomogram.
     
     Args:
         tomogram_path (str or Path): Path to the tomogram file.
         set_name (str, optional): Name of the experimental set.
+        vesicle_distance_threshold (float): Distance threshold for "close" vesicles (nm). Default: 20.0.
     
     Returns:
         Dictionary containing vesicle detection results.
@@ -635,7 +636,7 @@ def detect_vesicles(tomogram_path, set_name=None) -> Dict[str, Any]:
             nearby_vesicles = []
             for vesicle in vesicles:
                 distance_to_az = vesicle.get('distance_to_az', 0.0)
-                if distance_to_az <= 20.0:
+                if distance_to_az <= vesicle_distance_threshold:
                     nearby_vesicles.append(vesicle)
             nearby_vesicle_count = len(nearby_vesicles)
             

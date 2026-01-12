@@ -109,7 +109,7 @@ SYNAPTIC TOMO TOOLS
 """
     print(synapse_art)
 
-def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True):
+def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True, az_distance_min=None, az_distance_max=None):
     if print_ascii:
         print_synapse_ascii_art()
     for i, (tomo, set_name, aunp_active_zones) in enumerate(tomo_paths):
@@ -148,7 +148,14 @@ def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True):
                 if len(az_indices) == 0:
                     az_indices = None
             
-            az_results = define_active_zone(tomo, active_zone_indices=az_indices)
+            # Use custom distance range if provided, otherwise use defaults
+            distance_range = None
+            if az_distance_min is not None or az_distance_max is not None:
+                min_dist = az_distance_min if az_distance_min is not None else 10.0
+                max_dist = az_distance_max if az_distance_max is not None else 40.0
+                distance_range = (min_dist, max_dist)
+            
+            az_results = define_active_zone(tomo, active_zone_indices=az_indices, distance_range=distance_range)
             cleft_results = calculate_cleft_width(tomo, active_zone_indices=az_indices, set_name=set_name)
             combined_results = {
                 'active_zone': az_results,
@@ -170,7 +177,7 @@ def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True):
             }
             results_manager.store_tomogram_results(tomogram_name, 'activezone', error_results, overwrite=True, set_name=set_name)
 
-def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True):
+def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True, vesicle_distance_threshold=None):
     if print_ascii:
         print_synapse_ascii_art()
     for i, (tomo, set_name, aunp_active_zones) in enumerate(tomo_paths):
@@ -197,7 +204,9 @@ def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True):
             # Note: Active zones are already filtered by the active zone analysis step
             # to only include zones with AuNPs, so vesicle analysis will automatically
             # use only the relevant active zones
-            vesicle_results = detect_vesicles(tomo, set_name=set_name)
+            # Use custom vesicle distance threshold if provided, otherwise use default (20.0)
+            threshold = vesicle_distance_threshold if vesicle_distance_threshold is not None else 20.0
+            vesicle_results = detect_vesicles(tomo, set_name=set_name, vesicle_distance_threshold=threshold)
             distance_results = measure_distances_to_az(tomo)
             combined_results = {
                 'vesicle_detection': vesicle_results,
@@ -220,7 +229,8 @@ def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True):
             }
             results_manager.store_tomogram_results(tomogram_name, 'vesicles', error_results, overwrite=True, set_name=set_name)
 
-def generate_visualizations(tomo_paths, results_manager, rerun=False, print_ascii=True, csv_path=None):
+def generate_visualizations(tomo_paths, results_manager, rerun=False, print_ascii=True, csv_path=None, 
+                            sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None):
     """Generate visualization images for each tomogram after analysis is complete."""
     if print_ascii:
         print_synapse_ascii_art()
@@ -285,10 +295,14 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
             
             # Generate the three visualization types
             # 1. In tomogram's own directory
-            plot_tomogram_overlays(tomo, viz_output_dir, az_indices, rerun=rerun)
+            plot_tomogram_overlays(tomo, viz_output_dir, az_indices, rerun=rerun,
+                                   sphere_size=sphere_size, sphere_color=sphere_color,
+                                   aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max)
             
             # 2. In the new organized structure
-            plot_tomogram_overlays(tomo, tomogram_viz_dir, az_indices, rerun=rerun)
+            plot_tomogram_overlays(tomo, tomogram_viz_dir, az_indices, rerun=rerun,
+                                   sphere_size=sphere_size, sphere_color=sphere_color,
+                                   aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max)
             
             print("✅")
         except Exception as e:
@@ -328,14 +342,19 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
             if first_tomo_path.parent.name == "TOP_TOMOS":
                 root_dir = str(first_tomo_path.parent.parent.parent)
         
-        run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=csv_path, root_dir=root_dir, rerun=rerun)
+        run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=csv_path, root_dir=root_dir, rerun=rerun,
+                                                 sphere_size=sphere_size, sphere_color=sphere_color,
+                                                 aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max)
         print("Active zonogram analysis completed successfully!")
     except Exception as e:
         print(f"Error in active zonogram analysis: {e}")
         import traceback
         traceback.print_exc()
 
-def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None):
+def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None, 
+                     az_distance_min=None, az_distance_max=None, vesicle_distance_threshold=None,
+                     dbscan_eps=None, dbscan_min_samples=None, sphere_size=None, sphere_color=None,
+                     aunp_distance_min=None, aunp_distance_max=None):
     """Run all analyses in the correct order: activezone, vesicles, aunps, visualizations."""
     print_synapse_ascii_art()
     print("="*80)
@@ -348,31 +367,38 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None):
     print("\n" + "="*80)
     print("STEP 1: ACTIVE ZONE ANALYSIS")
     print("="*80)
-    run_activezone(tomo_paths, results_manager, rerun, print_ascii=False)
+    run_activezone(tomo_paths, results_manager, rerun, print_ascii=False, 
+                   az_distance_min=az_distance_min, az_distance_max=az_distance_max)
     
     # Step 2: Vesicle Analysis
     print("\n" + "="*80)
     print("STEP 2: VESICLE ANALYSIS")
     print("="*80)
-    run_vesicles(tomo_paths, results_manager, rerun, print_ascii=False)
+    run_vesicles(tomo_paths, results_manager, rerun, print_ascii=False, 
+                 vesicle_distance_threshold=vesicle_distance_threshold)
     
     # Step 3: AuNP Analysis
     print("\n" + "="*80)
     print("STEP 3: AUNP ANALYSIS")
     print("="*80)
-    run_aunps(tomo_paths, results_manager, rerun, print_ascii=False)
+    run_aunps(tomo_paths, results_manager, rerun, print_ascii=False, 
+              vesicle_distance_threshold=vesicle_distance_threshold,
+              dbscan_eps=dbscan_eps, dbscan_min_samples=dbscan_min_samples)
     
     # Step 4: Visualizations
     print("\n" + "="*80)
     print("STEP 4: VISUALIZATION GENERATION")
     print("="*80)
-    generate_visualizations(tomo_paths, results_manager, rerun, print_ascii=False, csv_path=csv_path)
+    generate_visualizations(tomo_paths, results_manager, rerun, print_ascii=False, csv_path=csv_path,
+                            sphere_size=sphere_size, sphere_color=sphere_color,
+                            aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max)
     
     print("\n" + "="*80)
     print("ALL ANALYSES COMPLETED!")
     print("="*80)
 
-def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True):
+def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True, 
+              vesicle_distance_threshold=None, dbscan_eps=None, dbscan_min_samples=None):
     if print_ascii:
         print_synapse_ascii_art()
     for i, (tomo, set_name, aunp_active_zones) in enumerate(tomo_paths):
@@ -412,8 +438,15 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True):
                         az_indices.append(int(x))
                     elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
                         az_indices.append(int(float(x)))
+            # Use custom parameters if provided, otherwise use defaults
+            vesicle_threshold = vesicle_distance_threshold if vesicle_distance_threshold is not None else 20.0
+            eps = dbscan_eps if dbscan_eps is not None else 16.0
+            min_samples = dbscan_min_samples if dbscan_min_samples is not None else 1
+            
             # Run analyses and collect results
-            aunp_results = analyze_aunps(tomo, az_indices, set_name=set_name)
+            aunp_results = analyze_aunps(tomo, az_indices, set_name=set_name, 
+                                         vesicle_distance_threshold=vesicle_threshold,
+                                         dbscan_eps=eps, dbscan_min_samples=min_samples)
             
             # Store combined results
             combined_results = {
@@ -605,6 +638,44 @@ def main():
         "--show-status", action="store_true",
         help="Show detailed status of all analyses for the selected tomograms."
     )
+    
+    # Custom parameter arguments
+    parser.add_argument(
+        "--az-distance-min", type=float, default=None,
+        help="Custom minimum distance for active zone definition (nm). Default: 10.0"
+    )
+    parser.add_argument(
+        "--az-distance-max", type=float, default=None,
+        help="Custom maximum distance for active zone definition (nm). Default: 40.0"
+    )
+    parser.add_argument(
+        "--vesicle-distance-threshold", type=float, default=None,
+        help="Custom distance threshold for 'close' vesicles (nm). Default: 20.0"
+    )
+    parser.add_argument(
+        "--dbscan-eps", type=float, default=None,
+        help="Custom DBSCAN eps parameter for AuNP clustering (nm). Default: 16.0"
+    )
+    parser.add_argument(
+        "--dbscan-min-samples", type=int, default=None,
+        help="Custom DBSCAN min_samples parameter for AuNP clustering. Default: 1"
+    )
+    parser.add_argument(
+        "--sphere-size", type=int, default=None,
+        help="Custom sphere size for active zonogram overlays. Default: 36"
+    )
+    parser.add_argument(
+        "--sphere-color", type=str, default=None,
+        help="Custom sphere color for active zonogram overlays. Default: 'gold'"
+    )
+    parser.add_argument(
+        "--aunp-distance-min", type=float, default=None,
+        help="Custom minimum distance for AuNP distance color scale (nm). Default: auto from data"
+    )
+    parser.add_argument(
+        "--aunp-distance-max", type=float, default=None,
+        help="Custom maximum distance for AuNP distance color scale (nm). Default: auto from data"
+    )
 
     args = parser.parse_args()
 
@@ -712,16 +783,38 @@ def main():
         print("Visualizations that have already been generated will be skipped.")
         print("Use --rerun to force re-generation of existing visualizations.")
 
+    # Extract custom parameters from args
+    az_distance_min = args.az_distance_min
+    az_distance_max = args.az_distance_max
+    vesicle_distance_threshold = args.vesicle_distance_threshold
+    dbscan_eps = args.dbscan_eps
+    dbscan_min_samples = args.dbscan_min_samples
+    sphere_size = args.sphere_size
+    sphere_color = args.sphere_color
+    aunp_distance_min = args.aunp_distance_min
+    aunp_distance_max = args.aunp_distance_max
+    
     if args.analysis == "activezone":
-        run_activezone(tomos, results_manager, rerun=args.rerun)
+        run_activezone(tomos, results_manager, rerun=args.rerun, 
+                       az_distance_min=az_distance_min, az_distance_max=az_distance_max)
     elif args.analysis == "vesicles":
-        run_vesicles(tomos, results_manager, rerun=args.rerun)
+        run_vesicles(tomos, results_manager, rerun=args.rerun, 
+                     vesicle_distance_threshold=vesicle_distance_threshold)
     elif args.analysis == "aunps":
-        run_aunps(tomos, results_manager, rerun=args.rerun)
+        run_aunps(tomos, results_manager, rerun=args.rerun, 
+                  vesicle_distance_threshold=vesicle_distance_threshold,
+                  dbscan_eps=dbscan_eps, dbscan_min_samples=dbscan_min_samples)
     elif args.analysis == "visualizations":
-        generate_visualizations(tomos, results_manager, rerun=args.rerun, csv_path=args.csv)
+        generate_visualizations(tomos, results_manager, rerun=args.rerun, csv_path=args.csv,
+                                sphere_size=sphere_size, sphere_color=sphere_color,
+                                aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max)
     elif args.analysis == "all":
-        run_all_analyses(tomos, results_manager, rerun=args.rerun, csv_path=args.csv)
+        run_all_analyses(tomos, results_manager, rerun=args.rerun, csv_path=args.csv,
+                         az_distance_min=az_distance_min, az_distance_max=az_distance_max,
+                         vesicle_distance_threshold=vesicle_distance_threshold,
+                         dbscan_eps=dbscan_eps, dbscan_min_samples=dbscan_min_samples,
+                         sphere_size=sphere_size, sphere_color=sphere_color,
+                         aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max)
 
     # Always export summary CSVs at the end
     print("\nExporting all summary CSVs from stored results...")

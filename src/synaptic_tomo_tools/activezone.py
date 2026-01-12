@@ -657,7 +657,7 @@ def load_active_zone_mapping(tomogram_path) -> Dict[int, str]:
     return {}
 
 
-def define_active_zone(tomogram_path, active_zone_indices=None) -> Dict[str, Any]:
+def define_active_zone(tomogram_path, active_zone_indices=None, distance_range=None) -> Dict[str, Any]:
     """
     Define active zone in tomogram.
     If active_zone_indices is specified, only includes active zones that correspond to those indices.
@@ -665,18 +665,23 @@ def define_active_zone(tomogram_path, active_zone_indices=None) -> Dict[str, Any
     Args:
         tomogram_path: Path to the tomogram file.
         active_zone_indices: List of active zone indices to include (None = all).
+        distance_range: Tuple of (min_distance, max_distance) in nm for active zone definition (default: (10.0, 40.0)).
     
     Returns:
         Dictionary containing active zone analysis results.
     """
     print(f"Defining active zone in {Path(tomogram_path).name}")
     
+    # Use custom distance range if provided, otherwise use default
+    if distance_range is None:
+        distance_range = (10.0, 40.0)
+    
     # Import membrane segmentations from GLB
     try:
         membranes = import_membrane_segmentations_from_glb(tomogram_path)
         
         # Find active zones from GLB
-        active_zones = find_active_zones_from_glb(membranes, distance_range=(10.0, 40.0))
+        active_zones = find_active_zones_from_glb(membranes, distance_range=distance_range)
         
         # Filter active zones if indices are specified using smart matching based on AuNP locations
         az_mapping = {}

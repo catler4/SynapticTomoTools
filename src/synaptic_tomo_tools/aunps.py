@@ -262,13 +262,18 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
     
     return pd.DataFrame(results)
 
-def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
+def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, 
+                  vesicle_distance_threshold=20.0, dbscan_eps=16.0, dbscan_min_samples=1):
     """
     Performs analysis of gold nanoparticles (AuNPs) in the tomogram.
 
     Parameters:
         tomogram_path (str or Path): Path to the tomogram file.
         active_zone_indices (list of int or None): Which active zone .star files to read. If None, read all.
+        set_name (str, optional): Name of the experimental set.
+        vesicle_distance_threshold (float): Distance threshold for "close" vesicles (nm). Default: 20.0.
+        dbscan_eps (float): DBSCAN eps parameter for clustering (nm). Default: 16.0.
+        dbscan_min_samples (int): DBSCAN min_samples parameter for clustering. Default: 1.
     """
     print(f"Analyzing AuNPs in {Path(tomogram_path).name}")
     
@@ -523,8 +528,8 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         # --- AuNP clustering analysis using DBSCAN (on filtered AuNPs) ---
         db = None  # Initialize so it's accessible for cluster summary
         try:
-            # Use DBSCAN with min_samples=1, then filter out clusters with < 4 points
-            db = DBSCAN(eps=16, min_samples=1).fit(coords)
+            # Use DBSCAN with custom parameters, then filter out clusters with < 4 points
+            db = DBSCAN(eps=dbscan_eps, min_samples=dbscan_min_samples).fit(coords)
             initial_labels = db.labels_
             
             # Count points in each cluster
@@ -551,7 +556,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
             n_small_clusters_filtered = len([count for label, count in zip(unique_labels, counts) 
                                            if label != -1 and count < 4])
             
-            print(f"DBSCAN found {n_clusters} AuNP clusters (eps=16 nm, min_samples=1)")
+            print(f"DBSCAN found {n_clusters} AuNP clusters (eps={dbscan_eps} nm, min_samples={dbscan_min_samples})")
             print(f"Filtered out {n_small_clusters_filtered} small clusters (< 4 points) and reassigned to noise")
         except Exception as e:
             print(f"Error in DBSCAN clustering: {e}")
@@ -561,8 +566,14 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         
         # --- Output .star file with cluster assignments (after filtering and clustering) ---
         try:
-            # Use the same columns as the imported .star, plus aunp_cluster
-            star_cols = [col for col in df.columns if col in df_valid.columns] + ['aunp_cluster']
+            # Use the same columns as the imported .star, plus calculated distance columns and aunp_cluster
+            # Get base columns from original star file
+            base_cols = [col for col in df.columns if col in df_valid.columns]
+            # Add calculated distance columns if they exist
+            distance_cols = ['nearest_neighbor_distance', 'distance_to_presynaptic', 'distance_to_postsynaptic',
+                           'distance_to_fusion_point', 'distance_to_active_zone_center']
+            additional_cols = [col for col in distance_cols if col in df_valid.columns]
+            star_cols = base_cols + additional_cols + ['aunp_cluster']
             star_df = df_valid[star_cols].copy()
             if not isinstance(star_df, pd.DataFrame):
                 star_df = pd.DataFrame(star_df)
@@ -575,7 +586,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         
         # Save nearest neighbor distances in STT_results/aunps directory
         # Compute fusion points
-        fusion_points = compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0)
+        fusion_points = compute_fusion_points(tomogram_path, vesicle_distance_threshold=vesicle_distance_threshold)
         fusion_points = np.asarray(fusion_points)
         if len(fusion_points) > 0 and fusion_points.shape[0] > 0:
             fusion_tree = KDTree(fusion_points)
@@ -673,7 +684,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         print("Computing AuNP distance histograms for close vesicles (bin5)...")
         df_vesicle_aunp_hist_bin5 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
-            vesicle_distance_threshold=20.0,
+            vesicle_distance_threshold=vesicle_distance_threshold,
             fusion_point_threshold=20.0,
             max_distance=500.0,
             bin_width=5.0
@@ -684,7 +695,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         print("Computing AuNP distance histograms for close vesicles (bin10)...")
         df_vesicle_aunp_hist_bin10 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
-            vesicle_distance_threshold=20.0,
+            vesicle_distance_threshold=vesicle_distance_threshold,
             fusion_point_threshold=20.0,
             max_distance=500.0,
             bin_width=10.0
@@ -695,7 +706,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         print("Computing AuNP distance histograms for close vesicles (bin50)...")
         df_vesicle_aunp_hist_bin50 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
-            vesicle_distance_threshold=20.0,
+            vesicle_distance_threshold=vesicle_distance_threshold,
             fusion_point_threshold=20.0,
             max_distance=500.0,
             bin_width=50.0
@@ -707,7 +718,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         print("Computing AuNP distance histograms for fusing vesicles (perimeter within 5 nm of AZ, bin5)...")
         df_fusing_vesicle_aunp_hist_bin5 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
-            vesicle_distance_threshold=20.0,
+            vesicle_distance_threshold=vesicle_distance_threshold,
             fusion_point_threshold=20.0,
             max_distance=500.0,
             bin_width=5.0,
@@ -720,7 +731,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         print("Computing AuNP distance histograms for fusing vesicles (perimeter within 5 nm of AZ, bin10)...")
         df_fusing_vesicle_aunp_hist_bin10 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
-            vesicle_distance_threshold=20.0,
+            vesicle_distance_threshold=vesicle_distance_threshold,
             fusion_point_threshold=20.0,
             max_distance=500.0,
             bin_width=10.0,
@@ -733,7 +744,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None):
         print("Computing AuNP distance histograms for fusing vesicles (perimeter within 5 nm of AZ, bin50)...")
         df_fusing_vesicle_aunp_hist_bin50 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
-            vesicle_distance_threshold=20.0,
+            vesicle_distance_threshold=vesicle_distance_threshold,
             fusion_point_threshold=20.0,
             max_distance=500.0,
             bin_width=50.0,
