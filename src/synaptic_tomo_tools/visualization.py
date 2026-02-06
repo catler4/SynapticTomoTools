@@ -352,7 +352,8 @@ def load_specific_active_zone_coords(tomo_path, active_zone_indices, aunps):
     return azs_pre, azs_post
 
 def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None, rerun=False, 
-                           sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None):
+                           sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None,
+                           aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None):
     """Generate 2D overlay plot and save to file. Only processes CSV-specified active zones."""
     vesicles = load_vesicles(tomo_path)
     pre_mem = load_membrane_coords(tomo_path, 'presynatptic')
@@ -931,7 +932,8 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
 
 
 def run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=None, root_dir=None, rerun=False,
-                                            sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None):
+                                            sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None,
+                                            aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None):
     """Run active zonogram analysis for all tomograms and generate PDF summaries."""
     try:
         # Import the combined zonogram analysis function
@@ -964,7 +966,9 @@ def run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=Non
                 # Run the combined active zonogram analysis for this tomogram
                 result = run_combined_zonogram_analysis_single_tomogram(tomo_path, None, aunp_active_zones, rerun,
                                                                          sphere_size=sphere_size, sphere_color=sphere_color,
-                                                                         aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max)
+                                                                         aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
+                                                                         aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
+                                                                         aunp_distance_cutoff_value=aunp_distance_cutoff_value)
                 
                 if result.get('success', False):
                     print("✅")
@@ -1311,7 +1315,8 @@ def select_aunps_by_cluster_findingampa_style(active_zone_data, cluster_data, to
 
 
 def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_active_zones=None, rerun=False,
-                                                    sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None):
+                                                    sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None,
+                                                    aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None):
     """Run combined active zonogram analysis for a single tomogram - EXACT SAME CODE as original script."""
     from .activezone import (
         define_active_zone, define_active_zonogram, extract_active_zonogram,
@@ -1711,6 +1716,81 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                             plt.close(fig)
                             print(f"    ✓ Saved PNG: {dist_filename}")
                             files_created.append(dist_filename)
+                            
+                            # Generate filtered distance-colored AuNP visualization (with cutoff)
+                            # Use defaults if not provided
+                            cutoff_direction = aunp_distance_cutoff_direction if aunp_distance_cutoff_direction is not None else "below"
+                            cutoff_value = aunp_distance_cutoff_value if aunp_distance_cutoff_value is not None else 15.0
+                            
+                            # Filter AuNPs based on cutoff
+                            if cutoff_direction == "below":
+                                filter_mask = post_distances < cutoff_value
+                            else:  # "above"
+                                filter_mask = post_distances > cutoff_value
+                            
+                            # Also filter out NaN values
+                            filter_mask = filter_mask & ~np.isnan(post_distances)
+                            
+                            filtered_positions = selected_aunps_dist[filter_mask]
+                            filtered_distances = post_distances[filter_mask]
+                            
+                            if len(filtered_positions) > 0:
+                                cutoff_filename = f"{tomogram_name}_active_zonogram_{zone_name}_selected_aunps_by_distance_to_post_{cutoff_direction}_{cutoff_value}nm{suffix}.png"
+                                cutoff_path_results_organized = results_active_zonograms_dir_full / cutoff_filename
+                                cutoff_path_tomogram = tomogram_active_zonograms_dir / cutoff_filename
+                                
+                                if cutoff_path_results_organized.exists() and cutoff_path_tomogram.exists() and not rerun:
+                                    print(f"    Skipping {cutoff_filename}, already exists.")
+                                    files_created.append(cutoff_filename)
+                                else:
+                                    fig = render_active_zonograms_findingampa_style(zonogram_findingampa)
+                                    (axxy, axxz, axyz) = fig.get_axes()
+                                    
+                                    # Use custom sphere size if provided, otherwise use default
+                                    circle_size = sphere_size if sphere_size is not None else 36
+                                    
+                                    # Create colormap for distances
+                                    import matplotlib.cm as cm
+                                    import matplotlib.colors as mcolors
+                                    
+                                    # Normalize distances for colormap - use range of filtered values only
+                                    valid_distances = filtered_distances[~np.isnan(filtered_distances)]
+                                    if len(valid_distances) > 0:
+                                        # Always calculate colormap range from filtered values only
+                                        vmin = np.min(valid_distances)
+                                        vmax = np.max(valid_distances)
+                                        if vmin == vmax:
+                                            # All distances are the same, use a single color
+                                            vmin = max(0, vmin - 1)
+                                            vmax = vmax + 1
+                                        norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+                                        cmap = cm.get_cmap('viridis')
+                                        
+                                        # Get colors for each AuNP
+                                        colors = cmap(norm(filtered_distances))
+                                        
+                                        # Plot filtered AuNPs with distance-based colors
+                                        for i, pos in enumerate(filtered_positions):
+                                            if not np.isnan(filtered_distances[i]):
+                                                color = colors[i]
+                                                axxy.scatter(pos[0], pos[1], s=circle_size, c='none', alpha=1.0, edgecolors=color, linewidth=1.5)
+                                                axxz.scatter(pos[2], pos[1], s=circle_size, c='none', alpha=1.0, edgecolors=color, linewidth=1.5)
+                                                axyz.scatter(pos[0], pos[2], s=circle_size, c='none', alpha=1.0, edgecolors=color, linewidth=1.5)
+                                        
+                                        # Add colorbar
+                                        sm = cm.ScalarMappable(cmap=cmap, norm=norm)
+                                        sm.set_array([])
+                                        cbar = fig.colorbar(sm, ax=[axxy, axxz, axyz], orientation='vertical', 
+                                                           pad=0.02, aspect=30, shrink=0.8)
+                                        cbar.set_label('Distance to Postsynaptic Membrane (nm)', rotation=270, labelpad=20, fontsize=9)
+                                    
+                                    fig.savefig(cutoff_path_results_organized, bbox_inches='tight')
+                                    fig.savefig(cutoff_path_tomogram, bbox_inches='tight')
+                                    plt.close(fig)
+                                    print(f"    ✓ Saved PNG: {cutoff_filename}")
+                                    files_created.append(cutoff_filename)
+                            else:
+                                print(f"    No AuNPs found {cutoff_direction} {cutoff_value} nm from postsynaptic membrane for {zone_name}")
                     
                     # Generate cluster-colored AuNP visualization
                     selected_aunps, cluster_assignments = select_aunps_by_cluster_findingampa_style(zonogram_findingampa, None, tomogram_path, active_zone_id, original_zone_data)

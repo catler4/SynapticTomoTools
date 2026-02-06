@@ -230,7 +230,8 @@ def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True, ves
             results_manager.store_tomogram_results(tomogram_name, 'vesicles', error_results, overwrite=True, set_name=set_name)
 
 def generate_visualizations(tomo_paths, results_manager, rerun=False, print_ascii=True, csv_path=None, 
-                            sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None):
+                            sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None,
+                            aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None):
     """Generate visualization images for each tomogram after analysis is complete."""
     if print_ascii:
         print_synapse_ascii_art()
@@ -297,12 +298,16 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
             # 1. In tomogram's own directory
             plot_tomogram_overlays(tomo, viz_output_dir, az_indices, rerun=rerun,
                                    sphere_size=sphere_size, sphere_color=sphere_color,
-                                   aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max)
+                                   aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
+                                   aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
+                                   aunp_distance_cutoff_value=aunp_distance_cutoff_value)
             
             # 2. In the new organized structure
             plot_tomogram_overlays(tomo, tomogram_viz_dir, az_indices, rerun=rerun,
                                    sphere_size=sphere_size, sphere_color=sphere_color,
-                                   aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max)
+                                   aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
+                                   aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
+                                   aunp_distance_cutoff_value=aunp_distance_cutoff_value)
             
             print("✅")
         except Exception as e:
@@ -344,7 +349,9 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
         
         run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=csv_path, root_dir=root_dir, rerun=rerun,
                                                  sphere_size=sphere_size, sphere_color=sphere_color,
-                                                 aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max)
+                                                 aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
+                                                 aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
+                                                 aunp_distance_cutoff_value=aunp_distance_cutoff_value)
         print("Active zonogram analysis completed successfully!")
     except Exception as e:
         print(f"Error in active zonogram analysis: {e}")
@@ -354,7 +361,8 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
 def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None, 
                      az_distance_min=None, az_distance_max=None, vesicle_distance_threshold=None,
                      dbscan_eps=None, dbscan_min_samples=None, sphere_size=None, sphere_color=None,
-                     aunp_distance_min=None, aunp_distance_max=None):
+                     aunp_distance_min=None, aunp_distance_max=None,
+                     aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None):
     """Run all analyses in the correct order: activezone, vesicles, aunps, visualizations."""
     print_synapse_ascii_art()
     print("="*80)
@@ -391,7 +399,9 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
     print("="*80)
     generate_visualizations(tomo_paths, results_manager, rerun, print_ascii=False, csv_path=csv_path,
                             sphere_size=sphere_size, sphere_color=sphere_color,
-                            aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max)
+                            aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
+                            aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
+                            aunp_distance_cutoff_value=aunp_distance_cutoff_value)
     
     print("\n" + "="*80)
     print("ALL ANALYSES COMPLETED!")
@@ -676,6 +686,15 @@ def main():
         "--aunp-distance-max", type=float, default=None,
         help="Custom maximum distance for AuNP distance color scale (nm). Default: auto from data"
     )
+    parser.add_argument(
+        "--aunp-distance-cutoff-direction", type=str, default="below",
+        choices=["below", "above"],
+        help="Direction for AuNP distance cutoff filter. Options: 'below' or 'above'. Default: 'below'"
+    )
+    parser.add_argument(
+        "--aunp-distance-cutoff-value", type=float, default=15.0,
+        help="Cutoff value for AuNP distance filter (nm). Default: 15.0"
+    )
 
     args = parser.parse_args()
 
@@ -793,6 +812,8 @@ def main():
     sphere_color = args.sphere_color
     aunp_distance_min = args.aunp_distance_min
     aunp_distance_max = args.aunp_distance_max
+    aunp_distance_cutoff_direction = args.aunp_distance_cutoff_direction
+    aunp_distance_cutoff_value = args.aunp_distance_cutoff_value
     
     if args.analysis == "activezone":
         run_activezone(tomos, results_manager, rerun=args.rerun, 
@@ -807,14 +828,18 @@ def main():
     elif args.analysis == "visualizations":
         generate_visualizations(tomos, results_manager, rerun=args.rerun, csv_path=args.csv,
                                 sphere_size=sphere_size, sphere_color=sphere_color,
-                                aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max)
+                                aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
+                                aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
+                                aunp_distance_cutoff_value=aunp_distance_cutoff_value)
     elif args.analysis == "all":
         run_all_analyses(tomos, results_manager, rerun=args.rerun, csv_path=args.csv,
                          az_distance_min=az_distance_min, az_distance_max=az_distance_max,
                          vesicle_distance_threshold=vesicle_distance_threshold,
                          dbscan_eps=dbscan_eps, dbscan_min_samples=dbscan_min_samples,
                          sphere_size=sphere_size, sphere_color=sphere_color,
-                         aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max)
+                         aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
+                         aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
+                         aunp_distance_cutoff_value=aunp_distance_cutoff_value)
 
     # Always export summary CSVs at the end
     print("\nExporting all summary CSVs from stored results...")

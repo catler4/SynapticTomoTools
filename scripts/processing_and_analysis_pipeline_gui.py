@@ -71,6 +71,8 @@ class AnalysisPipelineGUI(tk.Tk):
         self.sphere_color = tk.StringVar(value="gold")
         self.aunp_distance_min = tk.StringVar(value="")
         self.aunp_distance_max = tk.StringVar(value="")
+        self.aunp_distance_cutoff_direction = tk.StringVar(value="below")
+        self.aunp_distance_cutoff_value = tk.StringVar(value="15")
         
         self._build_tabs()
 
@@ -219,6 +221,14 @@ class AnalysisPipelineGUI(tk.Tk):
         ttk.Label(viz_frame, text="to").grid(row=2, column=2, padx=2)
         ttk.Entry(viz_frame, textvariable=self.aunp_distance_max, width=8).grid(row=2, column=3, padx=2)
         ttk.Label(viz_frame, text="(default: auto from data)").grid(row=2, column=4, padx=5, sticky=tk.W)
+        ttk.Label(viz_frame, text="AuNP distance cutoff filter:").grid(row=3, column=0, sticky=tk.W, padx=5)
+        cutoff_direction_combo = ttk.Combobox(viz_frame, textvariable=self.aunp_distance_cutoff_direction, 
+                                              values=['below', 'above'], width=6, state="readonly")
+        cutoff_direction_combo.grid(row=3, column=1, padx=2)
+        cutoff_direction_combo.set('below')
+        ttk.Label(viz_frame, text="(nm)").grid(row=3, column=2, padx=2)
+        ttk.Entry(viz_frame, textvariable=self.aunp_distance_cutoff_value, width=8).grid(row=3, column=3, padx=2)
+        ttk.Label(viz_frame, text="(default: below 15 nm)").grid(row=3, column=4, padx=5, sticky=tk.W)
         
         # Initially hide custom params frame
         self.custom_params_frame.grid_remove()
@@ -967,6 +977,14 @@ Do you want to continue?"""
             if self.aunp_distance_max.get():
                 try:
                     cli += ["--aunp-distance-max", str(float(self.aunp_distance_max.get()))]
+                except ValueError:
+                    pass
+            # AuNP distance cutoff filter
+            if self.aunp_distance_cutoff_direction.get():
+                cli += ["--aunp-distance-cutoff-direction", str(self.aunp_distance_cutoff_direction.get())]
+            if self.aunp_distance_cutoff_value.get():
+                try:
+                    cli += ["--aunp-distance-cutoff-value", str(float(self.aunp_distance_cutoff_value.get()))]
                 except ValueError:
                     pass
         
@@ -1840,6 +1858,7 @@ Do you want to continue?"""
                 cli_original = ["python", "-u", "scripts/run_ampa_poses_analysis.py"]
                 cli_original += ["--tomogram-path", tomogram_path]
                 cli_original += ["--output-dir", original_output_dir]
+                cli_original += ["--method", "original"]  # Explicitly set method to original
                 
                 # Add distance parameters only if cutoffs are enabled
                 if not aunp_no_cutoff:
@@ -1936,75 +1955,104 @@ Do you want to continue?"""
                 for method_type, cli in tomogram_commands:
                     self._log(f"\nRunning {method_type} method for {tomogram_name}...\n")
                     self._log(f"Command: {' '.join(cli)}\n")
-                
-                # Run the subprocess and wait for completion
-                self._run_subprocess(cli, os.environ.copy())
-                
-                # Try to load the results for combining
-                try:
-                    import starfile
-                    import pandas as pd
+                    # Check if --method is in the command
+                    if '--method' in cli:
+                        method_idx = cli.index('--method')
+                        if method_idx + 1 < len(cli):
+                            self._log(f"Method specified in command: {cli[method_idx + 1]}\n")
+                    else:
+                        self._log(f"WARNING: --method flag not found in command!\n")
                     
-                    # Determine output directory based on method
-                    if method_type == "all_poses":
-                        individual_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative, "all_poses")
-                    else:  # optimized method - use the actual method directory
-                        optimization_method = self.ampa_optimization_method.get()
-                        if optimization_method == "ilp":
-                            method_dir = "ilp"
+                    # Run the subprocess and wait for completion
+                    self._run_subprocess(cli, os.environ.copy())
+                    
+                    # Try to load the results for combining
+                    try:
+                        import starfile
+                        import pandas as pd
+                        
+                        # Determine output directory based on method
+                        if method_type == "all_poses":
+                            # Try the direct all_poses directory first
+                            individual_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative, "all_poses")
+                            # If that doesn't exist, check for greedy subdirectory (legacy/fallback)
+                            if not os.path.exists(individual_output_dir):
+                                greedy_fallback = os.path.join(tomogram_path, "best_alignment", output_dir_relative, "all_poses", "greedy")
+                                if os.path.exists(greedy_fallback):
+                                    individual_output_dir = greedy_fallback
+                                    self._log(f"Using fallback directory: {greedy_fallback}\n")
+                        else:  # optimized method - use the actual method directory
+                            optimization_method = self.ampa_optimization_method.get()
+                            if optimization_method == "ilp":
+                                method_dir = "ilp"
+                            else:
+                                method_dir = "greedy"
+                            individual_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative, method_dir)
+                        
+                        # Load the particles file
+                        if not os.path.exists(individual_output_dir):
+                            self._log(f"Warning: Output directory does not exist: {individual_output_dir}\n")
                         else:
-                            method_dir = "greedy"
-                        individual_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative, method_dir)
-                        
-                    # Load the particles file
-                    particles_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and 'ampa_poses' in f and '_aunps' not in f and '_unpaired' not in f and '_all_aunps' not in f]
-                    if particles_files:
-                        particles_file_path = os.path.join(individual_output_dir, particles_files[0])
-                        particles_data = starfile.read(particles_file_path)
-                        if 'particles' in particles_data:
-                            particles_df = particles_data['particles'].copy()
-                            particles_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
-                            if method_type == "all_poses":
-                                all_particles_data_original.append(particles_df)
+                            particles_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and 'ampa_poses' in f and '_aunps' not in f and '_unpaired' not in f and '_all_aunps' not in f]
+                            if particles_files:
+                                particles_file_path = os.path.join(individual_output_dir, particles_files[0])
+                                self._log(f"Loading particles from: {particles_file_path}\n")
+                                particles_data = starfile.read(particles_file_path)
+                                if 'particles' in particles_data:
+                                    particles_df = particles_data['particles'].copy()
+                                    particles_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
+                                    if method_type == "all_poses":
+                                        all_particles_data_original.append(particles_df)
+                                        self._log(f"Added {len(particles_df)} particles to all_poses collection (total: {len(all_particles_data_original)} tomograms)\n")
+                                    else:
+                                        all_particles_data_optimized.append(particles_df)
+                                        self._log(f"Added {len(particles_df)} particles to optimized collection (total: {len(all_particles_data_optimized)} tomograms)\n")
                             else:
-                                all_particles_data_optimized.append(particles_df)
-                        
-                    # Load the AuNPs file
-                    aunps_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and 'ampa_poses' in f and '_paired_aunps' in f]
-                    if aunps_files:
-                        aunps_file_path = os.path.join(individual_output_dir, aunps_files[0])
-                        aunps_data = starfile.read(aunps_file_path)
-                        if 'particles' in aunps_data:
-                            aunps_df = aunps_data['particles'].copy()
-                            aunps_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
-                            if method_type == "all_poses":
-                                all_aunps_data_original.append(aunps_df)
-                            else:
-                                all_aunps_data_optimized.append(aunps_df)
+                                self._log(f"Warning: No particles files found in {individual_output_dir}\n")
+                            
+                            # Load the AuNPs file
+                            aunps_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and 'ampa_poses' in f and '_paired_aunps' in f]
+                            if aunps_files:
+                                aunps_file_path = os.path.join(individual_output_dir, aunps_files[0])
+                                aunps_data = starfile.read(aunps_file_path)
+                                if 'particles' in aunps_data:
+                                    aunps_df = aunps_data['particles'].copy()
+                                    aunps_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
+                                    if method_type == "all_poses":
+                                        all_aunps_data_original.append(aunps_df)
+                                    else:
+                                        all_aunps_data_optimized.append(aunps_df)
+                            
+                            # Load unpaired AuNPs file (both methods now have this)
+                            unpaired_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and '_unpaired_aunps' in f]
+                            if unpaired_files:
+                                unpaired_file_path = os.path.join(individual_output_dir, unpaired_files[0])
+                                unpaired_data = starfile.read(unpaired_file_path)
+                                if 'particles' in unpaired_data:
+                                    unpaired_df = unpaired_data['particles'].copy()
+                                    unpaired_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
+                                    if method_type == "all_poses":
+                                        all_unpaired_data_original.append(unpaired_df)
+                                    else:
+                                        all_unpaired_data_optimized.append(unpaired_df)
                     
-                    # Load unpaired AuNPs file (both methods now have this)
-                    unpaired_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and '_unpaired_aunps' in f]
-                    if unpaired_files:
-                        unpaired_file_path = os.path.join(individual_output_dir, unpaired_files[0])
-                        unpaired_data = starfile.read(unpaired_file_path)
-                        if 'particles' in unpaired_data:
-                            unpaired_df = unpaired_data['particles'].copy()
-                            unpaired_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
-                            if method_type == "all_poses":
-                                all_unpaired_data_original.append(unpaired_df)
-                            else:
-                                all_unpaired_data_optimized.append(unpaired_df)
-                
-                except Exception as e:
-                    self._log(f"Warning: Could not load results for {tomogram_name} ({method_type}): {e}\n")
+                    except Exception as e:
+                        self._log(f"Warning: Could not load results for {tomogram_name} ({method_type}): {e}\n")
                 
                 successful_tomograms.append(tomogram_name)
             
             # Save combined star files
+            self._log(f"\n{'='*60}\n")
+            self._log(f"Preparing to save combined results...\n")
+            self._log(f"all_poses data: {len(all_particles_data_original)} tomograms\n")
+            self._log(f"optimized data: {len(all_particles_data_optimized)} tomograms\n")
+            self._log(f"{'='*60}\n")
+            
             try:
                 # Create results/ampa_poses directory
                 combined_output_dir = "results/ampa_poses"
                 os.makedirs(combined_output_dir, exist_ok=True)
+                self._log(f"Created/verified directory: {combined_output_dir}\n")
                 
                 # Build parameter strings for filenames (same format as individual tomogram files)
                 if aunp_no_cutoff:
@@ -2019,6 +2067,7 @@ Do you want to continue?"""
                 
                 # Save original method results (all poses)
                 if all_particles_data_original:
+                    self._log(f"Combining {len(all_particles_data_original)} all_poses datasets...\n")
                     combined_particles_original = pd.concat(all_particles_data_original, ignore_index=True)
                     original_filename = f"all_ampa_poses_all_poses_{aunp_str}_{membrane_str}.star"
                     starfile.write({
@@ -2092,7 +2141,9 @@ Do you want to continue?"""
                     )
                     
             except Exception as e:
+                import traceback
                 self._log(f"Error saving combined results: {e}\n")
+                self._log(f"Traceback: {traceback.format_exc()}\n")
             
             self._log(f"\n{method_names[method]} AMPA poses analysis completed for {len(all_commands)} tomograms.\n")
             self._log(f"Results saved to: {output_dir_relative} within each tomogram's STT_results directory\n")

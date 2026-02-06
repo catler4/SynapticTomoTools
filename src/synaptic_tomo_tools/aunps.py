@@ -519,7 +519,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             distances_to_center = np.full(coords.shape[0], np.nan)
         df_valid['distance_to_active_zone_center'] = distances_to_center
         # --- End active zone center calculation ---
-        
+
         # --- KDTree nearest neighbor analysis (on filtered AuNPs) ---
         tree = KDTree(coords)
         dists, idxs = tree.query(coords, k=2)
