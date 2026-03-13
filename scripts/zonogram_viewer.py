@@ -195,7 +195,7 @@ def main():
     st.caption("Browse position + main zonogram images by group, tomogram, and alignment directory.")
 
     # Sidebar: data root
-    default_data = str(PROJECT_ROOT / "data")
+    default_data = "/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/tomograms"
     data_root = st.sidebar.text_input(
         "Data root directory",
         value=default_data,
