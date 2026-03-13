@@ -34,6 +34,7 @@ psutil>=5.8
 
 # Optional dependencies for analysis scripts
 seaborn>=0.11       # Used in analysis scripts for enhanced plotting
+streamlit>=1.28     # For zonogram viewer: streamlit run scripts/zonogram_viewer.py
 reportlab
 pillow
 PyPDF2

@@ -73,6 +73,10 @@ class AnalysisPipelineGUI(tk.Tk):
         self.aunp_distance_max = tk.StringVar(value="")
         self.aunp_distance_cutoff_direction = tk.StringVar(value="below")
         self.aunp_distance_cutoff_value = tk.StringVar(value="15")
+        self.cylinder_radius = tk.StringVar(value="25.0")
+        self.receptor_crosssection = tk.StringVar(value="122.0")
+        self.aunps_per_receptor = tk.StringVar(value="2.0")
+        self.vertex_sampling_step = tk.StringVar(value="50")
         
         self._build_tabs()
 
@@ -229,6 +233,18 @@ class AnalysisPipelineGUI(tk.Tk):
         ttk.Label(viz_frame, text="(nm)").grid(row=3, column=2, padx=2)
         ttk.Entry(viz_frame, textvariable=self.aunp_distance_cutoff_value, width=8).grid(row=3, column=3, padx=2)
         ttk.Label(viz_frame, text="(default: below 15 nm)").grid(row=3, column=4, padx=5, sticky=tk.W)
+        ttk.Label(viz_frame, text="Sliding cylinder radius (nm) for packing density heat map:").grid(row=4, column=0, sticky=tk.W, padx=5)
+        ttk.Entry(viz_frame, textvariable=self.cylinder_radius, width=8).grid(row=4, column=1, padx=5)
+        ttk.Label(viz_frame, text="(default: 25.0)").grid(row=4, column=2, padx=5, sticky=tk.W)
+        ttk.Label(viz_frame, text="Receptor cross-sectional area (nm²):").grid(row=5, column=0, sticky=tk.W, padx=5)
+        ttk.Entry(viz_frame, textvariable=self.receptor_crosssection, width=8).grid(row=5, column=1, padx=5)
+        ttk.Label(viz_frame, text="(default: 122.0)").grid(row=5, column=2, padx=5, sticky=tk.W)
+        ttk.Label(viz_frame, text="AuNPs per receptor (e.g. cylinder < AuNP pair distance may need 1):").grid(row=6, column=0, sticky=tk.W, padx=5)
+        ttk.Entry(viz_frame, textvariable=self.aunps_per_receptor, width=8).grid(row=6, column=1, padx=5)
+        ttk.Label(viz_frame, text="(default: 2.0)").grid(row=6, column=2, padx=5, sticky=tk.W)
+        ttk.Label(viz_frame, text="Vertex sampling step (1=all, 50=every 50th):").grid(row=7, column=0, sticky=tk.W, padx=5)
+        ttk.Entry(viz_frame, textvariable=self.vertex_sampling_step, width=8).grid(row=7, column=1, padx=5)
+        ttk.Label(viz_frame, text="(default: 50)").grid(row=7, column=2, padx=5, sticky=tk.W)
         
         # Initially hide custom params frame
         self.custom_params_frame.grid_remove()
@@ -985,6 +1001,26 @@ Do you want to continue?"""
             if self.aunp_distance_cutoff_value.get():
                 try:
                     cli += ["--aunp-distance-cutoff-value", str(float(self.aunp_distance_cutoff_value.get()))]
+                except ValueError:
+                    pass
+            if self.cylinder_radius.get():
+                try:
+                    cli += ["--cylinder-radius", str(float(self.cylinder_radius.get()))]
+                except ValueError:
+                    pass
+            if self.receptor_crosssection.get():
+                try:
+                    cli += ["--receptor-crosssection", str(float(self.receptor_crosssection.get()))]
+                except ValueError:
+                    pass
+            if self.aunps_per_receptor.get():
+                try:
+                    cli += ["--aunps-per-receptor", str(float(self.aunps_per_receptor.get()))]
+                except ValueError:
+                    pass
+            if self.vertex_sampling_step.get():
+                try:
+                    cli += ["--vertex-sampling-step", str(int(self.vertex_sampling_step.get()))]
                 except ValueError:
                     pass
         

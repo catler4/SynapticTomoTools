@@ -1993,11 +1993,18 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                             if zone_name in packing_density_data:
                                 zone_packing_data = packing_density_data[zone_name]
                                 v_array = np.array(zone_packing_data['v_array'])
-                                packing_coefficient = np.array(zone_packing_data['packing_coefficient'])
-                                
+                                # Convert None (JSON null) back to NaN for masked edge vertices
+                                packing_coefficient = np.array(
+                                    [np.nan if x is None else x for x in zone_packing_data['packing_coefficient']]
+                                )
+                                # Use only interior vertices (non-NaN) for interpolation to avoid edge artifacts
+                                valid_mask = ~np.isnan(packing_coefficient)
+                                v_array_valid = v_array[valid_mask]
+                                packing_valid = packing_coefficient[valid_mask]
+
                                 # Transform coordinates to active zonogram space
-                                transformed_v = transform_coordinates_to_active_zonogram(v_array, original_zone_data)
-                                
+                                transformed_v = transform_coordinates_to_active_zonogram(v_array_valid, original_zone_data)
+
                                 if len(transformed_v) > 0:
                                     # Create figure EXACTLY the same way as regular active zonogram
                                     fig_packing = render_active_zonograms_findingampa_style(zonogram_findingampa)
@@ -2015,15 +2022,14 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                                     # Create grid for interpolation matching the base image shape exactly
                                     grid_y, grid_x = np.mgrid[0:base_image_shape[0], 0:base_image_shape[1]]
                                     
-                                    # Interpolate packing density onto the grid
-                                    # transformed_v[:, :2] gives (x, y) coordinates
-                                    # griddata expects (xi, yi) as the grid, which is (grid_x, grid_y)
+                                    # Interpolate packing density onto the grid (only interior vertices)
+                                    # fill_value=nan so extrapolated regions stay transparent
                                     density_map = griddata(
                                         transformed_v[:, :2],  # (x, y) points
-                                        packing_coefficient, 
+                                        packing_valid,
                                         (grid_x, grid_y),  # Grid points (x, y)
-                                        method='linear', 
-                                        fill_value=0
+                                        method='linear',
+                                        fill_value=np.nan
                                     )
                                     
                                     # Verify density_map shape matches base image exactly
@@ -2034,12 +2040,12 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                                                        base_image_shape[1] / density_map.shape[1])
                                         density_map = zoom(density_map, zoom_factors, order=1)
                                     
-                                    # Overlay the heatmap on the XY view (main view)
-                                    # Use the EXACT same extent as the base image to ensure perfect alignment
+                                    # Overlay the heatmap (mask NaN/edge regions so they stay transparent)
+                                    density_masked = np.ma.masked_invalid(density_map)
                                     im = axxy_packing.imshow(
-                                        density_map, 
-                                        cmap='hot', 
-                                        alpha=0.6, 
+                                        density_masked,
+                                        cmap='hot',
+                                        alpha=0.6,
                                         origin='lower',
                                         vmin=0.0,
                                         vmax=1.0,

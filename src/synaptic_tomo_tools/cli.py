@@ -362,7 +362,9 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
                      az_distance_min=None, az_distance_max=None, vesicle_distance_threshold=None,
                      dbscan_eps=None, dbscan_min_samples=None, sphere_size=None, sphere_color=None,
                      aunp_distance_min=None, aunp_distance_max=None,
-                     aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None):
+                     aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None,
+                     cylinder_radius=None, receptor_crosssection=None, aunps_per_receptor=None,
+                     vertex_sampling_step=None):
     """Run all analyses in the correct order: activezone, vesicles, aunps, visualizations."""
     print_synapse_ascii_art()
     print("="*80)
@@ -391,7 +393,9 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
     print("="*80)
     run_aunps(tomo_paths, results_manager, rerun, print_ascii=False, 
               vesicle_distance_threshold=vesicle_distance_threshold,
-              dbscan_eps=dbscan_eps, dbscan_min_samples=dbscan_min_samples)
+              dbscan_eps=dbscan_eps, dbscan_min_samples=dbscan_min_samples,
+              cylinder_radius=cylinder_radius, receptor_crosssection=receptor_crosssection,
+              aunps_per_receptor=aunps_per_receptor, vertex_sampling_step=vertex_sampling_step)
     
     # Step 4: Visualizations
     print("\n" + "="*80)
@@ -408,7 +412,9 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
     print("="*80)
 
 def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True, 
-              vesicle_distance_threshold=None, dbscan_eps=None, dbscan_min_samples=None):
+              vesicle_distance_threshold=None, dbscan_eps=None, dbscan_min_samples=None,
+              cylinder_radius=None, receptor_crosssection=None, aunps_per_receptor=None,
+              vertex_sampling_step=None):
     if print_ascii:
         print_synapse_ascii_art()
     for i, (tomo, set_name, aunp_active_zones) in enumerate(tomo_paths):
@@ -454,9 +460,17 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
             min_samples = dbscan_min_samples if dbscan_min_samples is not None else 1
             
             # Run analyses and collect results
+            cylinder_rad = cylinder_radius if cylinder_radius is not None else 25.0
+            receptor_cs = receptor_crosssection if receptor_crosssection is not None else 122.0
+            aunps_per_rec = aunps_per_receptor if aunps_per_receptor is not None else 2.0
+            vert_step = vertex_sampling_step if vertex_sampling_step is not None else 50
             aunp_results = analyze_aunps(tomo, az_indices, set_name=set_name, 
                                          vesicle_distance_threshold=vesicle_threshold,
-                                         dbscan_eps=eps, dbscan_min_samples=min_samples)
+                                         dbscan_eps=eps, dbscan_min_samples=min_samples,
+                                         cylinder_radius=cylinder_rad,
+                                         receptor_crosssection=receptor_cs,
+                                         aunps_per_receptor=aunps_per_rec,
+                                         vertex_sampling_step=vert_step)
             
             # Store combined results
             combined_results = {
@@ -695,6 +709,22 @@ def main():
         "--aunp-distance-cutoff-value", type=float, default=15.0,
         help="Cutoff value for AuNP distance filter (nm). Default: 15.0"
     )
+    parser.add_argument(
+        "--cylinder-radius", type=float, default=None,
+        help="Sliding cylinder radius for packing density heat map (nm). Default: 25.0"
+    )
+    parser.add_argument(
+        "--receptor-crosssection", type=float, default=None,
+        help="Receptor cross-sectional area for packing density (nm²). Default: 122.0"
+    )
+    parser.add_argument(
+        "--aunps-per-receptor", type=float, default=None,
+        help="AuNPs per receptor for packing density (2=dimer, 1=monomer). Default: 2.0"
+    )
+    parser.add_argument(
+        "--vertex-sampling-step", type=int, default=None,
+        help="Sample every Nth mesh vertex for packing density (1=all, 50=every 50th). Default: 50"
+    )
 
     args = parser.parse_args()
 
@@ -814,6 +844,10 @@ def main():
     aunp_distance_max = args.aunp_distance_max
     aunp_distance_cutoff_direction = args.aunp_distance_cutoff_direction
     aunp_distance_cutoff_value = args.aunp_distance_cutoff_value
+    cylinder_radius = args.cylinder_radius
+    receptor_crosssection = args.receptor_crosssection
+    aunps_per_receptor = args.aunps_per_receptor
+    vertex_sampling_step = args.vertex_sampling_step
     
     if args.analysis == "activezone":
         run_activezone(tomos, results_manager, rerun=args.rerun, 
@@ -824,7 +858,9 @@ def main():
     elif args.analysis == "aunps":
         run_aunps(tomos, results_manager, rerun=args.rerun, 
                   vesicle_distance_threshold=vesicle_distance_threshold,
-                  dbscan_eps=dbscan_eps, dbscan_min_samples=dbscan_min_samples)
+                  dbscan_eps=dbscan_eps, dbscan_min_samples=dbscan_min_samples,
+                  cylinder_radius=cylinder_radius, receptor_crosssection=receptor_crosssection,
+                  aunps_per_receptor=aunps_per_receptor, vertex_sampling_step=vertex_sampling_step)
     elif args.analysis == "visualizations":
         generate_visualizations(tomos, results_manager, rerun=args.rerun, csv_path=args.csv,
                                 sphere_size=sphere_size, sphere_color=sphere_color,
@@ -839,7 +875,11 @@ def main():
                          sphere_size=sphere_size, sphere_color=sphere_color,
                          aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
                          aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
-                         aunp_distance_cutoff_value=aunp_distance_cutoff_value)
+                         aunp_distance_cutoff_value=aunp_distance_cutoff_value,
+                         cylinder_radius=cylinder_radius,
+                         receptor_crosssection=receptor_crosssection,
+                         aunps_per_receptor=aunps_per_receptor,
+                         vertex_sampling_step=vertex_sampling_step)
 
     # Always export summary CSVs at the end
     print("\nExporting all summary CSVs from stored results...")

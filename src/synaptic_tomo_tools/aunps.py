@@ -22,6 +22,8 @@ def calculate_packing_density_using_sliding_cylinder(
     aunp_coordinates: np.ndarray,
     cylinder_radius: float = 25.0,
     receptor_crosssection_nm_squared: float = 122.0,
+    aunps_per_receptor: float = 2.0,
+    vertex_sampling_step: int = 50,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Calculate packing density of AuNPs (receptors) on postsynaptic membrane using sliding cylinder method.
@@ -32,14 +34,16 @@ def calculate_packing_density_using_sliding_cylinder(
         aunp_coordinates: Array of shape (N, 3) with AuNP 3D coordinates in nm
         cylinder_radius: Radius of the sliding cylinder probe in nm (default: 25.0)
         receptor_crosssection_nm_squared: Cross-sectional area of a single receptor in nm² (default: 122.0)
+        aunps_per_receptor: AuNPs per receptor (e.g. 2 for full receptor, 1 for dimer half) (default: 2.0)
+        vertex_sampling_step: Sample every Nth mesh vertex (1=all, 50=every 50th) (default: 50)
     
     Returns:
         Tuple of (v_array, packing_coefficient) where:
-        - v_array: Subset of postsynaptic mesh vertices used (every 50th vertex)
+        - v_array: Subset of postsynaptic mesh vertices used (every vertex_sampling_step-th)
         - packing_coefficient: Calculated packing density values for each vertex
     """
     ps_mesh = active_zone['active_postsynaptic_mesh']
-    subset_vertices = ps_mesh.vertices[::50]  # Use every 50th vertex for efficiency
+    subset_vertices = ps_mesh.vertices[::vertex_sampling_step]
     
     tree = cKDTree(ps_mesh.vertices)
     # Generate a cKDTree of aunps
@@ -62,7 +66,25 @@ def calculate_packing_density_using_sliding_cylinder(
 
     v_array = np.array(subset_vertices)
     area_of_circle = np.pi * (cylinder_radius ** 2)  # Area = πr²
-    packing_coefficient = ((np.array(num_aunps_at_vertex)/2) * receptor_crosssection_nm_squared) / area_of_circle   
+    packing_coefficient = ((np.array(num_aunps_at_vertex) / aunps_per_receptor) * receptor_crosssection_nm_squared) / area_of_circle
+
+    # Mask vertices near mesh boundary to avoid edge artifacts (cylinder extends past boundary)
+    try:
+        import trimesh
+        boundary_edge_indices = trimesh.grouping.group_rows(ps_mesh.edges_sorted, require_count=1)
+        if len(boundary_edge_indices) > 0:
+            boundary_edges = ps_mesh.edges_sorted[boundary_edge_indices]
+            boundary_vertex_indices = np.unique(boundary_edges.flatten())
+            boundary_vertex_coords = ps_mesh.vertices[boundary_vertex_indices]
+            boundary_tree = cKDTree(boundary_vertex_coords)
+            dist_to_boundary, _ = boundary_tree.query(subset_vertices, k=1)
+            # Set packing to NaN where cylinder would extend past mesh boundary
+            edge_mask = dist_to_boundary < cylinder_radius
+            packing_coefficient = np.asarray(packing_coefficient, dtype=float)
+            packing_coefficient[edge_mask] = np.nan
+    except Exception:
+        # If boundary detection fails (e.g. watertight mesh), skip masking
+        pass
 
     return (v_array, packing_coefficient)
 
@@ -263,7 +285,9 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
     return pd.DataFrame(results)
 
 def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, 
-                  vesicle_distance_threshold=20.0, dbscan_eps=16.0, dbscan_min_samples=1):
+                  vesicle_distance_threshold=20.0, dbscan_eps=16.0, dbscan_min_samples=1,
+                  cylinder_radius=25.0, receptor_crosssection=122.0, aunps_per_receptor=2.0,
+                  vertex_sampling_step=1):
     """
     Performs analysis of gold nanoparticles (AuNPs) in the tomogram.
 
@@ -274,6 +298,10 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         vesicle_distance_threshold (float): Distance threshold for "close" vesicles (nm). Default: 20.0.
         dbscan_eps (float): DBSCAN eps parameter for clustering (nm). Default: 16.0.
         dbscan_min_samples (int): DBSCAN min_samples parameter for clustering. Default: 1.
+        cylinder_radius (float): Sliding cylinder radius for packing density heat map (nm). Default: 25.0.
+        receptor_crosssection (float): Receptor cross-sectional area for packing density (nm²). Default: 122.0.
+        aunps_per_receptor (float): AuNPs per receptor (e.g. 2 for dimer, 1 for monomer). Default: 2.0.
+        vertex_sampling_step (int): Sample every Nth mesh vertex for packing (1=all, 50=every 50th). Default: 50.
     """
     print(f"Analyzing AuNPs in {Path(tomogram_path).name}")
     
@@ -808,22 +836,35 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                             v_array, packing_coefficient = calculate_packing_density_using_sliding_cylinder(
                                 zone_data,
                                 zonogram_data,
-                                zone_aunps
+                                zone_aunps,
+                                cylinder_radius=cylinder_radius,
+                                receptor_crosssection_nm_squared=receptor_crosssection,
+                                aunps_per_receptor=aunps_per_receptor,
+                                vertex_sampling_step=vertex_sampling_step
                             )
                             
-                            # Store results for this zone
+                            # Store results (NaN -> None for JSON compatibility)
+                            packing_list = [None if np.isnan(x) else float(x) for x in packing_coefficient]
+                            valid = packing_coefficient[~np.isnan(packing_coefficient)]
+                            if len(valid) > 0:
+                                pmax, pmin = float(np.nanmax(packing_coefficient)), float(np.nanmin(packing_coefficient))
+                                pavg, pstd = float(np.nanmean(packing_coefficient)), float(np.nanstd(packing_coefficient))
+                            else:
+                                pmax = pmin = pavg = pstd = None
                             packing_density_results[zone_name] = {
                                 'v_array': v_array.tolist(),  # Convert to list for JSON serialization
-                                'packing_coefficient': packing_coefficient.tolist(),
-                                'max_packing_coefficient': float(np.max(packing_coefficient)),
-                                'avg_packing_coefficient': float(np.mean(packing_coefficient)),
-                                'min_packing_coefficient': float(np.min(packing_coefficient)),
-                                'std_packing_coefficient': float(np.std(packing_coefficient))
+                                'packing_coefficient': packing_list,
+                                'max_packing_coefficient': pmax,
+                                'avg_packing_coefficient': pavg,
+                                'min_packing_coefficient': pmin,
+                                'std_packing_coefficient': pstd,
                             }
+                            all_packing_coefficients.extend([x for x in packing_coefficient if not np.isnan(x)])
                             
-                            all_packing_coefficients.extend(packing_coefficient.tolist())
-                            
-                            print(f"  ✓ Calculated packing density for {zone_name}: max={packing_density_results[zone_name]['max_packing_coefficient']:.4f}, avg={packing_density_results[zone_name]['avg_packing_coefficient']:.4f}")
+                            m = packing_density_results[zone_name]
+                            max_s = f"{m['max_packing_coefficient']:.4f}" if m['max_packing_coefficient'] is not None else "N/A"
+                            avg_s = f"{m['avg_packing_coefficient']:.4f}" if m['avg_packing_coefficient'] is not None else "N/A"
+                            print(f"  ✓ Calculated packing density for {zone_name}: max={max_s}, avg={avg_s}")
                         except Exception as e:
                             print(f"  Error calculating packing density for {zone_name}: {e}")
                             continue
@@ -908,16 +949,14 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         
         # Add packing density statistics
         if packing_density_results:
-            # Calculate overall max and average across all active zones
-            all_max_values = [zone_data['max_packing_coefficient'] for zone_data in packing_density_results.values()]
-            all_avg_values = [zone_data['avg_packing_coefficient'] for zone_data in packing_density_results.values()]
-            
-            if not all_max_values:
-                raise ValueError("No packing density values found. Cannot calculate packing density statistics.")
-            
-            summary_stats['packing_density_max'] = float(np.max(all_max_values))
-            summary_stats['packing_density_avg'] = float(np.mean(all_avg_values))
-            summary_stats['packing_density_min'] = float(np.min([zone_data['min_packing_coefficient'] for zone_data in packing_density_results.values()]))
+            # Calculate overall max and average across all active zones (filter None from masked edge zones)
+            all_max_values = [x for x in (z['max_packing_coefficient'] for z in packing_density_results.values()) if x is not None]
+            all_avg_values = [x for x in (z['avg_packing_coefficient'] for z in packing_density_results.values()) if x is not None]
+            all_min_values = [x for x in (z['min_packing_coefficient'] for z in packing_density_results.values()) if x is not None]
+            if all_max_values and all_avg_values and all_min_values:
+                summary_stats['packing_density_max'] = float(np.max(all_max_values))
+                summary_stats['packing_density_avg'] = float(np.mean(all_avg_values))
+                summary_stats['packing_density_min'] = float(np.min(all_min_values))
         else:
             # Packing density calculation was attempted but no results were produced
             # This is acceptable - not all analyses may have packing density data
