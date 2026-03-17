@@ -23,6 +23,8 @@ import streamlit as st
 
 ASSIGNMENTS_CSV = "zonogram_viewer_assignments.csv"
 PROPERTY_OPTIONS = ["", "include", "improve", "exclude"]
+# Sample/morphology options (alternatives: strongly/moderately tissue-like, tissue-like/partially tissue-like)
+SAMPLE_TYPE_OPTIONS = ["", "tissue", "semi-tissue", "synaptosome"]
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -112,9 +114,9 @@ def get_tomogram_path(data_root: Path, set_name: str, tomo_name: str) -> Path | 
     return None
 
 
-def load_assignments(csv_path: Path) -> dict[tuple[str, str, str, str], str]:
-    """Load assignments from CSV. Key = (group, tomoname, alignment_dir, active_zone), value = property."""
-    out: dict[tuple[str, str, str, str], str] = {}
+def load_assignments(csv_path: Path) -> dict[tuple[str, str, str, str], dict[str, str]]:
+    """Load assignments from CSV. Key = (group, tomoname, alignment_dir, active_zone), value = {property, sample_type}."""
+    out: dict[tuple[str, str, str, str], dict[str, str]] = {}
     if not csv_path.exists():
         return out
     with open(csv_path, newline="", encoding="utf-8") as f:
@@ -123,9 +125,11 @@ def load_assignments(csv_path: Path) -> dict[tuple[str, str, str, str], str]:
             t = row.get("tomoname", "").strip()
             al = row.get("alignment_directory", "").strip()
             az = str(row.get("active_zone", "")).strip()
-            p = row.get("property", "").strip()
             if g and t:
-                out[(g, t, al, az)] = p
+                out[(g, t, al, az)] = {
+                    "property": row.get("property", "").strip(),
+                    "sample_type": row.get("sample_type", "").strip(),
+                }
     return out
 
 
@@ -136,6 +140,7 @@ def save_assignment(
     alignment_directory: str,
     active_zone: str,
     property_value: str,
+    sample_type_value: str,
 ) -> None:
     """Update one assignment and write CSV. Preserves other rows and their timestamps."""
     key = (group, tomoname, alignment_directory, active_zone)
@@ -155,6 +160,7 @@ def save_assignment(
                         "alignment_directory": al,
                         "active_zone": az,
                         "property": row.get("property", "").strip(),
+                        "sample_type": row.get("sample_type", "").strip(),
                         "updated_at": row.get("updated_at", ""),
                     }
     now = datetime.now().isoformat()
@@ -164,12 +170,13 @@ def save_assignment(
         "alignment_directory": alignment_directory,
         "active_zone": active_zone,
         "property": property_value,
+        "sample_type": sample_type_value,
         "updated_at": now,
     }
     rows = sorted(rows_dict.values(), key=lambda r: (r["group"], r["tomoname"], r["alignment_directory"], r["active_zone"]))
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["group", "tomoname", "alignment_directory", "active_zone", "property", "updated_at"])
+        w = csv.DictWriter(f, fieldnames=["group", "tomoname", "alignment_directory", "active_zone", "property", "sample_type", "updated_at"])
         w.writeheader()
         w.writerows(rows)
 
@@ -272,6 +279,7 @@ def main():
     pairs = get_az_pairs(az_dir)
     az_pair_idx = min(az_pair_idx, len(pairs) - 1) if pairs else 0
     idx, pos_path, main_path = pairs[az_pair_idx]
+    selected_aunps_path = az_dir / f"active_zonogram_{idx}_selected_aunps.png"
 
     # Dropdowns for manual navigation; changing them updates flat_pos
     def find_flat_pos(target_ti: int, target_ai: int, target_pi: int) -> int:
@@ -313,39 +321,49 @@ def main():
             st.session_state.flat_pos = new_flat
             st.rerun()
 
-    # Property assignment (include / improve / exclude)
+    # Property assignment (include / improve / exclude) and sample type
     assignments_path = data_path / ASSIGNMENTS_CSV
     assignments = load_assignments(assignments_path)
     az_key = (selected_group, selected_tomo, selected_align_name, str(idx))
-    current_prop = assignments.get(az_key, "")
+    current_row = assignments.get(az_key, {"property": "", "sample_type": ""})
+    current_prop = current_row.get("property", "")
+    current_sample_type = current_row.get("sample_type", "")
 
     prop_labels = ["— (none)", "include", "improve", "exclude"]
     prop_values = ["", "include", "improve", "exclude"]
+    sample_labels = ["— (none)", "tissue", "semi-tissue", "synaptosome"]
+    sample_values = ["", "tissue", "semi-tissue", "synaptosome"]
 
     prop_key = f"prop_radio_{selected_group}_{selected_tomo}_{selected_align_name}_{idx}"
+    sample_key = f"sample_radio_{selected_group}_{selected_tomo}_{selected_align_name}_{idx}"
 
     def on_property_change():
         radio_idx = st.session_state.get(prop_key, 0)
         new_val = prop_values[radio_idx] if 0 <= radio_idx < len(prop_values) else ""
         save_assignment(
-            assignments_path,
-            selected_group,
-            selected_tomo,
-            selected_align_name,
-            str(idx),
-            new_val,
+            assignments_path, selected_group, selected_tomo, selected_align_name, str(idx),
+            property_value=new_val, sample_type_value=current_sample_type,
+        )
+
+    def on_sample_type_change():
+        radio_idx = st.session_state.get(sample_key, 0)
+        new_val = sample_values[radio_idx] if 0 <= radio_idx < len(sample_values) else ""
+        save_assignment(
+            assignments_path, selected_group, selected_tomo, selected_align_name, str(idx),
+            property_value=current_prop, sample_type_value=new_val,
         )
 
     prop_idx = prop_values.index(current_prop) if current_prop in prop_values else 0
+    sample_idx = sample_values.index(current_sample_type) if current_sample_type in sample_values else 0
 
     st.header("Current view")
     st.write(f"**Tomogram:** {selected_tomo}")
     st.write(f"**Alignment directory:** {selected_align_name}")
     st.write(f"**Active Zone:** {idx}")
 
-    st.subheader("Assign property")
+    st.subheader("Data curation")
     st.radio(
-        "Saved to CSV when changed",
+        "Include / Improve / Exclude",
         range(len(prop_labels)),
         format_func=lambda i: prop_labels[i],
         index=prop_idx,
@@ -353,8 +371,20 @@ def main():
         key=prop_key,
         on_change=on_property_change,
     )
-    if current_prop:
-        st.caption(f"Current: {current_prop}  (output: {assignments_path})")
+
+    st.subheader("Sample properties")
+    st.radio(
+        "Morphology",
+        range(len(sample_labels)),
+        format_func=lambda i: sample_labels[i],
+        index=sample_idx,
+        horizontal=True,
+        key=sample_key,
+        on_change=on_sample_type_change,
+    )
+    if current_prop or current_sample_type:
+        parts = [p for p in [current_prop, current_sample_type] if p]
+        st.caption(f"Current: {' | '.join(parts)}  (output: {assignments_path})")
     st.caption(str(az_dir))
 
     col1, col2 = st.columns(2)
@@ -372,6 +402,10 @@ def main():
         else:
             st.subheader("Zonogram")
             st.info("No main zonogram image found")
+
+        if selected_aunps_path.exists():
+            st.subheader("Selected AuNPs")
+            st.image(str(selected_aunps_path), use_container_width=True)
 
     # Quick navigation
     st.sidebar.markdown("---")
