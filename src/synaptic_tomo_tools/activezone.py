@@ -242,6 +242,8 @@ def find_active_zones(membranes: Dict[str, List[np.ndarray]], distance_threshold
     Find active zones by identifying presynaptic points within distance_threshold of postsynaptic points.
     Uses KD-tree for efficient spatial queries.
     
+    Note: This function is not used in the current pipeline, after switching to using the find_active_zones_from_glb function.
+
     Args:
         membranes: Dictionary containing membrane coordinate arrays
         distance_threshold: Distance threshold in nm (default: 40.0)

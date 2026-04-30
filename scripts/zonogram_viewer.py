@@ -19,12 +19,17 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import mrcfile
+import numpy as np
 import streamlit as st
+from PIL import Image
 
 ASSIGNMENTS_CSV = "zonogram_viewer_assignments.csv"
 PROPERTY_OPTIONS = ["", "include", "improve", "exclude"]
-# Sample/morphology options (alternatives: strongly/moderately tissue-like, tissue-like/partially tissue-like)
 SAMPLE_TYPE_OPTIONS = ["", "tissue", "semi-tissue", "synaptosome"]
+AUNP_PICK_QUALITY_OPTIONS = ["", "good", "a few missing", "many missing/wrong"]
+MEMBRANE_SEG_QUALITY_OPTIONS = ["", "complete", "small issues", "significant issues"]
+REDEPOSITION_ISSUES_OPTIONS = ["", "yes", "no"]
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -115,7 +120,7 @@ def get_tomogram_path(data_root: Path, set_name: str, tomo_name: str) -> Path | 
 
 
 def load_assignments(csv_path: Path) -> dict[tuple[str, str, str, str], dict[str, str]]:
-    """Load assignments from CSV. Key = (group, tomoname, alignment_dir, active_zone), value = {property, sample_type}."""
+    """Load assignments from CSV. Key = (group, tomoname, alignment_dir, active_zone)."""
     out: dict[tuple[str, str, str, str], dict[str, str]] = {}
     if not csv_path.exists():
         return out
@@ -129,6 +134,9 @@ def load_assignments(csv_path: Path) -> dict[tuple[str, str, str, str], dict[str
                 out[(g, t, al, az)] = {
                     "property": row.get("property", "").strip(),
                     "sample_type": row.get("sample_type", "").strip(),
+                    "aunp_pick_quality": row.get("aunp_pick_quality", "").strip(),
+                    "membrane_segmentation_quality": row.get("membrane_segmentation_quality", "").strip(),
+                    "redeposition_issues": row.get("redeposition_issues", "").strip(),
                 }
     return out
 
@@ -141,6 +149,9 @@ def save_assignment(
     active_zone: str,
     property_value: str,
     sample_type_value: str,
+    aunp_pick_quality_value: str,
+    membrane_segmentation_quality_value: str,
+    redeposition_issues_value: str,
 ) -> None:
     """Update one assignment and write CSV. Preserves other rows and their timestamps."""
     key = (group, tomoname, alignment_directory, active_zone)
@@ -161,6 +172,9 @@ def save_assignment(
                         "active_zone": az,
                         "property": row.get("property", "").strip(),
                         "sample_type": row.get("sample_type", "").strip(),
+                        "aunp_pick_quality": row.get("aunp_pick_quality", "").strip(),
+                        "membrane_segmentation_quality": row.get("membrane_segmentation_quality", "").strip(),
+                        "redeposition_issues": row.get("redeposition_issues", "").strip(),
                         "updated_at": row.get("updated_at", ""),
                     }
     now = datetime.now().isoformat()
@@ -171,12 +185,29 @@ def save_assignment(
         "active_zone": active_zone,
         "property": property_value,
         "sample_type": sample_type_value,
+        "aunp_pick_quality": aunp_pick_quality_value,
+        "membrane_segmentation_quality": membrane_segmentation_quality_value,
+        "redeposition_issues": redeposition_issues_value,
         "updated_at": now,
     }
     rows = sorted(rows_dict.values(), key=lambda r: (r["group"], r["tomoname"], r["alignment_directory"], r["active_zone"]))
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["group", "tomoname", "alignment_directory", "active_zone", "property", "sample_type", "updated_at"])
+        w = csv.DictWriter(
+            f,
+            fieldnames=[
+                "group",
+                "tomoname",
+                "alignment_directory",
+                "active_zone",
+                "property",
+                "sample_type",
+                "aunp_pick_quality",
+                "membrane_segmentation_quality",
+                "redeposition_issues",
+                "updated_at",
+            ],
+        )
         w.writeheader()
         w.writerows(rows)
 
@@ -194,6 +225,87 @@ def get_alignment_dirs(tomo_path: Path) -> list[tuple[str, Path]]:
         for az_dir in az_dirs:
             results.append((sub.name, az_dir))
     return results
+
+
+def infer_alignment_dir_from_az_dir(az_dir: Path, tomo_path: Path) -> Path | None:
+    """Infer alignment directory from an active_zonograms directory path."""
+    for candidate in [az_dir, *az_dir.parents]:
+        if candidate.parent == tomo_path:
+            return candidate
+    return None
+
+
+def get_ddw_mrc_path(alignment_dir: Path) -> Path | None:
+    """Find a *ddw.mrc tomogram file in an alignment directory."""
+    ddw_files = sorted(alignment_dir.glob("*ddw.mrc"))
+    if not ddw_files:
+        return None
+    # Prefer full reconstruction naming if present.
+    for p in ddw_files:
+        if "full_rec" in p.name:
+            return p
+    return ddw_files[0]
+
+
+def get_slice_index(nz: int, slice_mode: str) -> int:
+    if slice_mode == "-2":
+        return int(2.0 / 8.0 * (nz - 1))
+    if slice_mode == "-1":
+        return int(3.0 / 8.0 * (nz - 1))
+    if slice_mode == "central":
+        return int(4.0 / 8.0 * (nz - 1))
+    if slice_mode == "+1":
+        return int(5.0 / 8.0 * (nz - 1))
+    if slice_mode == "+2":
+        return int(6.0 / 8.0 * (nz - 1))
+    return nz // 2
+
+
+def get_slice_suffix(slice_mode: str) -> str:
+    if slice_mode == "-2":
+        return "_q1_slice.png"
+    if slice_mode == "-1":
+        return "_eighth3_slice.png"
+    if slice_mode == "central":
+        return "_central_slice.png"
+    if slice_mode == "+1":
+        return "_eighth5_slice.png"
+    if slice_mode == "+2":
+        return "_q3_slice.png"
+    return "_central_slice.png"
+
+
+def ensure_tomogram_slice_png(ddw_mrc_path: Path, slice_mode: str) -> Path:
+    """
+    Return cached PNG path for selected tomogram slice.
+    Generates (or regenerates) PNG if needed.
+    """
+    snapshots_dir = ddw_mrc_path.parent / "ddw_snapshots"
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
+    png_path = snapshots_dir / f"{ddw_mrc_path.stem}{get_slice_suffix(slice_mode)}"
+    if png_path.exists() and png_path.stat().st_mtime >= ddw_mrc_path.stat().st_mtime:
+        return png_path
+
+    with mrcfile.open(ddw_mrc_path, permissive=True) as mrc:
+        vol = np.asarray(mrc.data)
+    if vol.ndim != 3:
+        raise ValueError(f"Expected 3D MRC volume, got shape {vol.shape}")
+
+    z_idx = get_slice_index(vol.shape[0], slice_mode)
+    sl = vol[z_idx].astype(np.float32)
+
+    # Robust normalization for display.
+    lo, hi = np.percentile(sl, [1, 99])
+    if hi <= lo:
+        lo, hi = float(np.min(sl)), float(np.max(sl))
+    if hi <= lo:
+        norm = np.zeros_like(sl, dtype=np.uint8)
+    else:
+        clipped = np.clip(sl, lo, hi)
+        norm = ((clipped - lo) / (hi - lo) * 255.0).astype(np.uint8)
+
+    Image.fromarray(norm, mode="L").save(png_path)
+    return png_path
 
 
 def main():
@@ -325,24 +437,49 @@ def main():
     assignments_path = data_path / ASSIGNMENTS_CSV
     assignments = load_assignments(assignments_path)
     az_key = (selected_group, selected_tomo, selected_align_name, str(idx))
-    current_row = assignments.get(az_key, {"property": "", "sample_type": ""})
+    current_row = assignments.get(
+        az_key,
+        {
+            "property": "",
+            "sample_type": "",
+            "aunp_pick_quality": "",
+            "membrane_segmentation_quality": "",
+            "redeposition_issues": "",
+        },
+    )
     current_prop = current_row.get("property", "")
     current_sample_type = current_row.get("sample_type", "")
+    current_aunp_pick_quality = current_row.get("aunp_pick_quality", "")
+    current_membrane_seg_quality = current_row.get("membrane_segmentation_quality", "")
+    current_redeposition_issues = current_row.get("redeposition_issues", "")
 
     prop_labels = ["— (none)", "include", "improve", "exclude"]
     prop_values = ["", "include", "improve", "exclude"]
     sample_labels = ["— (none)", "tissue", "semi-tissue", "synaptosome"]
     sample_values = ["", "tissue", "semi-tissue", "synaptosome"]
+    aunp_pick_quality_labels = ["none", "good", "a few missing", "many missing/wrong"]
+    aunp_pick_quality_values = ["", "good", "a few missing", "many missing/wrong"]
+    membrane_seg_quality_labels = ["none", "complete", "small issues", "significant issues"]
+    membrane_seg_quality_values = ["", "complete", "small issues", "significant issues"]
+    redeposition_issues_labels = ["none", "yes", "no"]
+    redeposition_issues_values = ["", "yes", "no"]
 
     prop_key = f"prop_radio_{selected_group}_{selected_tomo}_{selected_align_name}_{idx}"
     sample_key = f"sample_radio_{selected_group}_{selected_tomo}_{selected_align_name}_{idx}"
+    aunp_pick_quality_key = f"aunp_pick_quality_radio_{selected_group}_{selected_tomo}_{selected_align_name}_{idx}"
+    membrane_seg_quality_key = f"membrane_seg_quality_radio_{selected_group}_{selected_tomo}_{selected_align_name}_{idx}"
+    redeposition_issues_key = f"redeposition_issues_radio_{selected_group}_{selected_tomo}_{selected_align_name}_{idx}"
 
     def on_property_change():
         radio_idx = st.session_state.get(prop_key, 0)
         new_val = prop_values[radio_idx] if 0 <= radio_idx < len(prop_values) else ""
         save_assignment(
             assignments_path, selected_group, selected_tomo, selected_align_name, str(idx),
-            property_value=new_val, sample_type_value=current_sample_type,
+            property_value=new_val,
+            sample_type_value=current_sample_type,
+            aunp_pick_quality_value=current_aunp_pick_quality,
+            membrane_segmentation_quality_value=current_membrane_seg_quality,
+            redeposition_issues_value=current_redeposition_issues,
         )
 
     def on_sample_type_change():
@@ -350,11 +487,78 @@ def main():
         new_val = sample_values[radio_idx] if 0 <= radio_idx < len(sample_values) else ""
         save_assignment(
             assignments_path, selected_group, selected_tomo, selected_align_name, str(idx),
-            property_value=current_prop, sample_type_value=new_val,
+            property_value=current_prop,
+            sample_type_value=new_val,
+            aunp_pick_quality_value=current_aunp_pick_quality,
+            membrane_segmentation_quality_value=current_membrane_seg_quality,
+            redeposition_issues_value=current_redeposition_issues,
+        )
+
+    def on_aunp_pick_quality_change():
+        radio_idx = st.session_state.get(aunp_pick_quality_key, 0)
+        new_val = aunp_pick_quality_values[radio_idx] if 0 <= radio_idx < len(aunp_pick_quality_values) else ""
+        save_assignment(
+            assignments_path,
+            selected_group,
+            selected_tomo,
+            selected_align_name,
+            str(idx),
+            property_value=current_prop,
+            sample_type_value=current_sample_type,
+            aunp_pick_quality_value=new_val,
+            membrane_segmentation_quality_value=current_membrane_seg_quality,
+            redeposition_issues_value=current_redeposition_issues,
+        )
+
+    def on_membrane_seg_quality_change():
+        radio_idx = st.session_state.get(membrane_seg_quality_key, 0)
+        new_val = membrane_seg_quality_values[radio_idx] if 0 <= radio_idx < len(membrane_seg_quality_values) else ""
+        save_assignment(
+            assignments_path,
+            selected_group,
+            selected_tomo,
+            selected_align_name,
+            str(idx),
+            property_value=current_prop,
+            sample_type_value=current_sample_type,
+            aunp_pick_quality_value=current_aunp_pick_quality,
+            membrane_segmentation_quality_value=new_val,
+            redeposition_issues_value=current_redeposition_issues,
+        )
+
+    def on_redeposition_issues_change():
+        radio_idx = st.session_state.get(redeposition_issues_key, 0)
+        new_val = redeposition_issues_values[radio_idx] if 0 <= radio_idx < len(redeposition_issues_values) else ""
+        save_assignment(
+            assignments_path,
+            selected_group,
+            selected_tomo,
+            selected_align_name,
+            str(idx),
+            property_value=current_prop,
+            sample_type_value=current_sample_type,
+            aunp_pick_quality_value=current_aunp_pick_quality,
+            membrane_segmentation_quality_value=current_membrane_seg_quality,
+            redeposition_issues_value=new_val,
         )
 
     prop_idx = prop_values.index(current_prop) if current_prop in prop_values else 0
     sample_idx = sample_values.index(current_sample_type) if current_sample_type in sample_values else 0
+    aunp_pick_quality_idx = (
+        aunp_pick_quality_values.index(current_aunp_pick_quality)
+        if current_aunp_pick_quality in aunp_pick_quality_values
+        else 0
+    )
+    membrane_seg_quality_idx = (
+        membrane_seg_quality_values.index(current_membrane_seg_quality)
+        if current_membrane_seg_quality in membrane_seg_quality_values
+        else 0
+    )
+    redeposition_issues_idx = (
+        redeposition_issues_values.index(current_redeposition_issues)
+        if current_redeposition_issues in redeposition_issues_values
+        else 0
+    )
 
     st.header("Current view")
     st.write(f"**Tomogram:** {selected_tomo}")
@@ -372,7 +576,6 @@ def main():
         on_change=on_property_change,
     )
 
-    st.subheader("Sample properties")
     st.radio(
         "Morphology",
         range(len(sample_labels)),
@@ -382,8 +585,51 @@ def main():
         key=sample_key,
         on_change=on_sample_type_change,
     )
-    if current_prop or current_sample_type:
-        parts = [p for p in [current_prop, current_sample_type] if p]
+    st.radio(
+        "AuNP pick quality",
+        range(len(aunp_pick_quality_labels)),
+        format_func=lambda i: aunp_pick_quality_labels[i],
+        index=aunp_pick_quality_idx,
+        horizontal=True,
+        key=aunp_pick_quality_key,
+        on_change=on_aunp_pick_quality_change,
+    )
+    st.radio(
+        "Membrane segmentation quality",
+        range(len(membrane_seg_quality_labels)),
+        format_func=lambda i: membrane_seg_quality_labels[i],
+        index=membrane_seg_quality_idx,
+        horizontal=True,
+        key=membrane_seg_quality_key,
+        on_change=on_membrane_seg_quality_change,
+    )
+    st.radio(
+        "Redeposition issues",
+        range(len(redeposition_issues_labels)),
+        format_func=lambda i: redeposition_issues_labels[i],
+        index=redeposition_issues_idx,
+        horizontal=True,
+        key=redeposition_issues_key,
+        on_change=on_redeposition_issues_change,
+    )
+    if (
+        current_prop
+        or current_sample_type
+        or current_aunp_pick_quality
+        or current_membrane_seg_quality
+        or current_redeposition_issues
+    ):
+        parts = [
+            p
+            for p in [
+                current_prop,
+                current_sample_type,
+                current_aunp_pick_quality,
+                current_membrane_seg_quality,
+                current_redeposition_issues,
+            ]
+            if p
+        ]
         st.caption(f"Current: {' | '.join(parts)}  (output: {assignments_path})")
     st.caption(str(az_dir))
 
@@ -395,6 +641,28 @@ def main():
         else:
             st.subheader("Position")
             st.info("No position image found")
+
+        st.subheader("Tomogram slice")
+        slice_options = ["-2", "-1", "central", "+1", "+2"]
+        slice_mode = st.select_slider(
+            "Slice position",
+            options=slice_options,
+            value="central",
+            key=f"slice_mode_{selected_group}_{selected_tomo}_{selected_align_name}",
+        )
+        alignment_dir = infer_alignment_dir_from_az_dir(az_dir, tomo_path)
+        if alignment_dir is None:
+            st.info("Could not infer alignment directory for tomogram slice.")
+        else:
+            ddw_mrc_path = get_ddw_mrc_path(alignment_dir)
+            if ddw_mrc_path is None:
+                st.info("No *ddw.mrc found for this alignment.")
+            else:
+                try:
+                    slice_png = ensure_tomogram_slice_png(ddw_mrc_path, slice_mode)
+                    st.image(str(slice_png), use_container_width=True)
+                except Exception as exc:
+                    st.info(f"Could not load tomogram slice: {exc}")
     with col2:
         if main_path and main_path.exists():
             st.subheader("Zonogram")
