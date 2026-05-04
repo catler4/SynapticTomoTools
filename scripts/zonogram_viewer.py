@@ -392,6 +392,7 @@ def main():
     az_pair_idx = min(az_pair_idx, len(pairs) - 1) if pairs else 0
     idx, pos_path, main_path = pairs[az_pair_idx]
     selected_aunps_path = az_dir / f"active_zonogram_{idx}_selected_aunps.png"
+    selected_aunps_manual_path = az_dir / f"active_zonogram_{idx}_selected_aunps_manual.png"
 
     # Dropdowns for manual navigation; changing them updates flat_pos
     def find_flat_pos(target_ti: int, target_ai: int, target_pi: int) -> int:
@@ -674,6 +675,10 @@ def main():
         if selected_aunps_path.exists():
             st.subheader("Selected AuNPs")
             st.image(str(selected_aunps_path), use_container_width=True)
+
+        if selected_aunps_manual_path.exists():
+            st.subheader("Selected AuNPs (Manual)")
+            st.image(str(selected_aunps_manual_path), use_container_width=True)
 
     # Quick navigation
     st.sidebar.markdown("---")
