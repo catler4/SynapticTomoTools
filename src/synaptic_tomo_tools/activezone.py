@@ -1052,6 +1052,7 @@ def calculate_cleft_width(tomogram_path, active_zone_indices=None, set_name=None
             cleft_row = {
                 'tomogram_name': tomogram_name,
                 'set_name': set_name,
+                'alignment_dir': alignment_dir,
                 'average_cleft_width_nm': avg_cleft_width,
                 'n_measurements': len(all_distances)
             }
@@ -1063,8 +1064,15 @@ def calculate_cleft_width(tomogram_path, active_zone_indices=None, set_name=None
             if global_csv.exists():
                 try:
                     df_existing = pd.read_csv(global_csv)
-                    # Remove existing data for this tomogram
-                    df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
+                    if 'alignment_dir' not in df_existing.columns:
+                        df_existing['alignment_dir'] = ''
+                    # Remove existing data for this tomogram+alignment pair
+                    df_existing = df_existing[
+                        ~(
+                            (df_existing['tomogram_name'] == tomogram_name) &
+                            (df_existing['alignment_dir'] == alignment_dir)
+                        )
+                    ]
                     df_combined = pd.concat([df_existing, df_cleft], ignore_index=True)
                     df_combined.to_csv(global_csv, index=False)
                 except Exception as e:

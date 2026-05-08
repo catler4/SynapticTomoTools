@@ -606,6 +606,7 @@ def detect_vesicles(
                 row = {
                     'tomogram_name': tomogram_name,
                     'set_name': set_name,
+                    'alignment_dir': alignment_dir,
                     'vesicle_id': i,
                     'center_x': vesicle['center'][0],
                     'center_y': vesicle['center'][1],
@@ -629,8 +630,15 @@ def detect_vesicles(
             if global_csv.exists():
                 try:
                     df_existing = pd.read_csv(global_csv)
-                    # Remove existing data for this tomogram
-                    df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
+                    if 'alignment_dir' not in df_existing.columns:
+                        df_existing['alignment_dir'] = ''
+                    # Remove existing data for this tomogram+alignment pair
+                    df_existing = df_existing[
+                        ~(
+                            (df_existing['tomogram_name'] == tomogram_name) &
+                            (df_existing['alignment_dir'] == alignment_dir)
+                        )
+                    ]
                     df_combined = pd.concat([df_existing, df_vesicles], ignore_index=True)
                     df_combined.to_csv(global_csv, index=False)
                 except Exception as e:

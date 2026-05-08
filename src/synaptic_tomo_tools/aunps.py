@@ -236,6 +236,7 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
         # Create result row
         result_row = {
             'tomogram_name': tomogram_name,
+            'alignment_dir': alignment_dir,
             'vesicle_name': vesicle_name,
             'vesicle_id': vesicle_idx,
             'distance_to_presynaptic_az_nm': distance_to_az,
@@ -429,12 +430,20 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
                         break
             cluster_df['tomogram_name'] = tomogram_name
             cluster_df['set_name'] = set_name
+            cluster_df['alignment_dir'] = alignment_dir
             global_csv = Path("results/aunps/aunp_cluster_results.csv")
             global_csv.parent.mkdir(parents=True, exist_ok=True)
             if global_csv.exists():
                 try:
                     df_existing = pd.read_csv(global_csv)
-                    df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
+                    if 'alignment_dir' not in df_existing.columns:
+                        df_existing['alignment_dir'] = ''
+                    df_existing = df_existing[
+                        ~(
+                            (df_existing['tomogram_name'] == tomogram_name) &
+                            (df_existing['alignment_dir'] == alignment_dir)
+                        )
+                    ]
                     df_combined = pd.concat([df_existing, cluster_df], ignore_index=True)
                     df_combined.to_csv(global_csv, index=False)
                 except Exception as e:
@@ -674,6 +683,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
         # Add tomogram and set info to the dataframe
         df_valid['tomogram_name'] = tomogram_name
         df_valid['set_name'] = set_name
+        df_valid['alignment_dir'] = alignment_dir
         
         # Create a copy with renamed columns for global CSV (add units to distance/coordinate columns)
         df_global = df_valid.copy()
@@ -702,8 +712,15 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
         if global_csv.exists():
             try:
                 df_existing = pd.read_csv(global_csv)
-                # Remove existing data for this tomogram
-                df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
+                if 'alignment_dir' not in df_existing.columns:
+                    df_existing['alignment_dir'] = ''
+                # Remove existing data for this tomogram+alignment pair
+                df_existing = df_existing[
+                    ~(
+                        (df_existing['tomogram_name'] == tomogram_name) &
+                        (df_existing['alignment_dir'] == alignment_dir)
+                    )
+                ]
                 df_combined = pd.concat([df_existing, df_global], ignore_index=True)
                 df_combined.to_csv(global_csv, index=False)
             except Exception as e:
@@ -720,13 +737,21 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
             if not df_hist.empty:
                 # Add set info (tomogram_name already included in the dataframe)
                 df_hist['set_name'] = set_name
+                df_hist['alignment_dir'] = alignment_dir
                 
                 csv_path.parent.mkdir(parents=True, exist_ok=True)
                 if csv_path.exists():
                     try:
                         df_existing = pd.read_csv(csv_path)
-                        # Remove existing data for this tomogram
-                        df_existing = df_existing[df_existing['tomogram_name'] != tomogram_name]
+                        if 'alignment_dir' not in df_existing.columns:
+                            df_existing['alignment_dir'] = ''
+                        # Remove existing data for this tomogram+alignment pair
+                        df_existing = df_existing[
+                            ~(
+                                (df_existing['tomogram_name'] == tomogram_name) &
+                                (df_existing['alignment_dir'] == alignment_dir)
+                            )
+                        ]
                         df_combined = pd.concat([df_existing, df_hist], ignore_index=True)
                         df_combined.to_csv(csv_path, index=False)
                     except Exception as e:
