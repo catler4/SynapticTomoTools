@@ -561,8 +561,13 @@ def delete_csv_tomogram_results(csv_path, results_dir="results", data_dir="data"
     # Load CSV to get list of tomograms
     try:
         df = pd.read_csv(csv_path)
-        csv_tomograms = set(df['tomoname'].tolist())
-        print(f"Found {len(csv_tomograms)} tomograms in CSV")
+        if "alignment_dir" not in df.columns:
+            raise ValueError(
+                f"Column 'alignment_dir' not found in {csv_path}. "
+                "Cannot resolve results keys (tomogram__alignment_dir)."
+            )
+        csv_tomograms = set(df["tomoname"].astype(str).str.strip().tolist())
+        print(f"Found {len(csv_tomograms)} distinct tomogram names in CSV")
     except Exception as e:
         print(f"Error reading CSV file {csv_path}: {e}")
         return
@@ -574,18 +579,30 @@ def delete_csv_tomogram_results(csv_path, results_dir="results", data_dir="data"
         results_manager = ResultsManager(results_dir)
         existing_results = results_manager.get_all_results()
         
-        # Remove results for CSV tomograms only
+        # Keys in analysis_results.json are tomogram__alignment_dir (see run_* in this module).
+        # Also remove legacy bare tomogram_name keys when that tomogram appears in the CSV.
+        keys_to_remove = set()
+        for _, row in df.iterrows():
+            tomo = str(row["tomoname"]).strip()
+            alignment_dir = str(row["alignment_dir"]).strip()
+            if alignment_dir == "" or alignment_dir.lower() == "nan":
+                raise ValueError(
+                    f"Missing alignment_dir for tomogram '{tomo}' in {csv_path}."
+                )
+            keys_to_remove.add(f"{tomo}__{alignment_dir}")
+            keys_to_remove.add(tomo)
+
         deleted_count = 0
-        for tomogram_name in csv_tomograms:
-            if tomogram_name in existing_results:
-                del existing_results[tomogram_name]
+        for key in keys_to_remove:
+            if key in existing_results:
+                del existing_results[key]
                 deleted_count += 1
-                print(f"  Deleted results for {tomogram_name}")
+                print(f"  Deleted results for {key}")
         
         # Save updated results
         results_manager.results = existing_results
         results_manager._save_results()
-        print(f"Deleted results for {deleted_count} tomograms from results directory")
+        print(f"Deleted {deleted_count} results entries from results directory")
     
     # Delete STT_results directories for CSV tomograms only
     data_path = Path(data_dir)
@@ -614,9 +631,13 @@ def delete_csv_tomogram_results(csv_path, results_dir="results", data_dir="data"
     print(f"Deleted STT_results directories for {deleted_stt_count} tomograms")
     print(f"Total: Deleted results for {len(csv_tomograms)} tomograms specified in CSV")
 
-def check_analysis_status(results_manager, tomogram_name, analysis_type):
-    """Check if an analysis completed successfully, failed, or hasn't been run."""
-    existing_results = results_manager.get_tomogram_results(tomogram_name, analysis_type)
+def check_analysis_status(results_manager, results_key, analysis_type):
+    """Check if an analysis completed successfully, failed, or hasn't been run.
+
+    results_key must match the top-level key in analysis_results.json
+    (typically tomogram_name__alignment_dir).
+    """
+    existing_results = results_manager.get_tomogram_results(results_key, analysis_type)
     
     if not existing_results:
         return 'not_run'
@@ -659,10 +680,12 @@ def print_analysis_summary(results_manager, tomos):
     analysis_types = ['activezone', 'vesicles', 'aunps']
     status_counts = {analysis_type: {'completed': 0, 'failed': 0, 'not_run': 0} for analysis_type in analysis_types}
     
-    for tomogram_name, set_name, _ in tomos:
-        print(f"\n{Path(tomogram_name).name}:")
+    for tomo_path, _set_name, _, alignment_dir in tomos:
+        tomogram_name = Path(tomo_path).name
+        results_key = f"{tomogram_name}__{alignment_dir}"
+        print(f"\n{tomogram_name} ({alignment_dir}):")
         for analysis_type in analysis_types:
-            status = check_analysis_status(results_manager, tomogram_name, analysis_type)
+            status = check_analysis_status(results_manager, results_key, analysis_type)
             status_counts[analysis_type][status] += 1
             
             status_symbol = {

@@ -380,83 +380,6 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
         aunps_results_dir.mkdir(parents=True, exist_ok=True)
         output_file = aunps_results_dir / "aunp_nearest_neighbor_distances.csv"
 
-        # --- Output cluster summary CSV (must come after clustering) ---
-        try:
-            from scipy.spatial import ConvexHull, distance_matrix
-            if db is None:
-                raise ValueError("Clustering was not successful, cannot generate cluster summary")
-            cluster_labels = np.unique(db.labels_)
-            cluster_rows = []
-            for label in cluster_labels:
-                if label == -1:
-                    continue  # Skip noise
-                cluster_points = coords[db.labels_ == label]
-                n_points = len(cluster_points)
-                if n_points < 3:
-                    area = np.nan
-                    max_dim = np.nan
-                else:
-                    try:
-                        hull = ConvexHull(cluster_points)
-                        area = hull.area / 2.0
-                    except Exception:
-                        area = np.nan
-                    try:
-                        dists = distance_matrix(cluster_points, cluster_points)
-                        max_dim = np.nanmax(dists)
-                    except Exception:
-                        max_dim = np.nan
-                density = n_points / area if area and area > 0 else np.nan
-                cluster_rows.append({
-                    'cluster_label': label,
-                    'n_aunps': n_points,
-                    'cluster_area_nm2': area,
-                    'cluster_max_dimension_nm': max_dim,
-                    'cluster_density_aunps_per_nm2': density
-                })
-            cluster_df = pd.DataFrame(cluster_rows)
-            cluster_csv = aunps_results_dir / "aunp_clusters.csv"
-            cluster_df.to_csv(cluster_csv, index=False)
-            print(f"Saved AuNP cluster summary to {cluster_csv}")
-            # --- Append to global results/aunps/aunp_cluster_results.csv ---
-            tomogram_name = Path(tomogram_path).name
-            # Use provided set_name or extract from tomogram path
-            if set_name is None or set_name == "unknown":
-                path_parts = Path(tomogram_path).parts
-                set_name = "unknown"
-                for i, part in enumerate(path_parts):
-                    if part.endswith("_tomograms") and i > 0:
-                        set_name = part.replace("_tomograms", "")
-                        break
-            cluster_df['tomogram_name'] = tomogram_name
-            cluster_df['set_name'] = set_name
-            cluster_df['alignment_dir'] = alignment_dir
-            global_csv = Path("results/aunps/aunp_cluster_results.csv")
-            global_csv.parent.mkdir(parents=True, exist_ok=True)
-            if global_csv.exists():
-                try:
-                    df_existing = pd.read_csv(global_csv)
-                    if 'alignment_dir' not in df_existing.columns:
-                        df_existing['alignment_dir'] = ''
-                    df_existing = df_existing[
-                        ~(
-                            (df_existing['tomogram_name'] == tomogram_name) &
-                            (df_existing['alignment_dir'] == alignment_dir)
-                        )
-                    ]
-                    df_combined = pd.concat([df_existing, cluster_df], ignore_index=True)
-                    df_combined.to_csv(global_csv, index=False)
-                except Exception as e:
-                    print(f"Error updating global aunp_cluster_results.csv: {e}")
-                    cluster_df.to_csv(global_csv, index=False)
-            else:
-                cluster_df.to_csv(global_csv, index=False)
-            print(f"Appended cluster info to {global_csv}")
-            # --- End global results ---
-        except Exception as e:
-            print(f"Error writing aunp_clusters.csv: {e}")
-        # --- End cluster summary ---
-
         # --- Calculate distance to closest pre/post membrane segmentation (before filtering to determine filter) ---
         membranes = import_membrane_segmentations(tomogram_path)
         # Ensure all arrays are 2D and have shape (N, 3)
@@ -606,6 +529,78 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
             df_valid['aunp_cluster'] = -1
             db = None  # Ensure db is None if clustering failed
         # --- End clustering ---
+
+        # --- Output cluster summary CSV ---
+        try:
+            from scipy.spatial import ConvexHull, distance_matrix
+            cluster_labels = np.unique(df_valid['aunp_cluster'].to_numpy())
+            cluster_rows = []
+            for label in cluster_labels:
+                if label == -1:
+                    continue  # Skip noise
+                cluster_points = coords[df_valid['aunp_cluster'].to_numpy() == label]
+                n_points = len(cluster_points)
+                if n_points < 3:
+                    area = np.nan
+                    max_dim = np.nan
+                else:
+                    try:
+                        hull = ConvexHull(cluster_points)
+                        area = hull.area / 2.0
+                    except Exception:
+                        area = np.nan
+                    try:
+                        dists = distance_matrix(cluster_points, cluster_points)
+                        max_dim = np.nanmax(dists)
+                    except Exception:
+                        max_dim = np.nan
+                density = n_points / area if area and area > 0 else np.nan
+                cluster_rows.append({
+                    'cluster_label': label,
+                    'n_aunps': n_points,
+                    'cluster_area_nm2': area,
+                    'cluster_max_dimension_nm': max_dim,
+                    'cluster_density_aunps_per_nm2': density
+                })
+            cluster_df = pd.DataFrame(cluster_rows)
+            cluster_csv = aunps_results_dir / "aunp_clusters.csv"
+            cluster_df.to_csv(cluster_csv, index=False)
+            print(f"Saved AuNP cluster summary to {cluster_csv}")
+            # --- Append to global results/aunps/aunp_cluster_results.csv ---
+            tomogram_name = Path(tomogram_path).name
+            if set_name is None or set_name == "unknown":
+                path_parts = Path(tomogram_path).parts
+                set_name = "unknown"
+                for i, part in enumerate(path_parts):
+                    if part.endswith("_tomograms") and i > 0:
+                        set_name = part.replace("_tomograms", "")
+                        break
+            cluster_df['tomogram_name'] = tomogram_name
+            cluster_df['set_name'] = set_name
+            cluster_df['alignment_dir'] = alignment_dir
+            global_csv = Path("results/aunps/aunp_cluster_results.csv")
+            global_csv.parent.mkdir(parents=True, exist_ok=True)
+            if global_csv.exists():
+                try:
+                    df_existing = pd.read_csv(global_csv)
+                    if 'alignment_dir' not in df_existing.columns:
+                        df_existing['alignment_dir'] = ''
+                    df_existing = df_existing[
+                        ~(
+                            (df_existing['tomogram_name'] == tomogram_name) &
+                            (df_existing['alignment_dir'] == alignment_dir)
+                        )
+                    ]
+                    df_combined = pd.concat([df_existing, cluster_df], ignore_index=True)
+                    df_combined.to_csv(global_csv, index=False)
+                except Exception as e:
+                    print(f"Error updating global aunp_cluster_results.csv: {e}")
+                    cluster_df.to_csv(global_csv, index=False)
+            else:
+                cluster_df.to_csv(global_csv, index=False)
+            print(f"Appended cluster info to {global_csv}")
+        except Exception as e:
+            print(f"Error writing aunp_clusters.csv: {e}")
         
         # --- Output .star file with cluster assignments (after filtering and clustering) ---
         try:
@@ -978,7 +973,8 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
                 # Load active zone results (already filtered by active zone analysis step)
                 from .results_manager import ResultsManager
                 results_manager = ResultsManager("results")
-                active_zone_results = results_manager.get_tomogram_results(tomogram_name, 'activezone')
+                analysis_name = f"{tomogram_name}__{alignment_dir}"
+                active_zone_results = results_manager.get_tomogram_results(analysis_name, 'activezone')
                 
                 if active_zone_results and 'results' in active_zone_results:
                     az_data = active_zone_results['results'].get('active_zone', {})
@@ -994,7 +990,10 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
                     
                     summary_stats['aunp_density'] = float(n_aunps / total_active_zone_area)  # AuNPs per µm²
                 else:
-                    raise ValueError("No active zone results available. Cannot calculate AuNP density. Active zone analysis must be run first.")
+                    raise ValueError(
+                        f"No active zone results available for '{analysis_name}'. "
+                        "Cannot calculate AuNP density. Active zone analysis must be run first for this alignment_dir."
+                    )
                 
             except Exception as e:
                 print(f"Error getting active zone area for density calculation: {e}")
