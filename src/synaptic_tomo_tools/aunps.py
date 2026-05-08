@@ -387,7 +387,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         output_file = aunps_results_dir / "aunp_nearest_neighbor_distances.csv"
 
         # --- Calculate distance to closest pre/post membrane segmentation (before filtering to determine filter) ---
-        membranes = import_membrane_segmentations(tomogram_path)
+        membranes = import_membrane_segmentations(tomogram_path, alignment_dir=alignment_dir)
         # Ensure all arrays are 2D and have shape (N, 3)
         pre_arrays = [np.atleast_2d(arr) for arr in membranes['presynaptic'] if np.atleast_2d(arr).shape[1] == 3]
         post_arrays = [np.atleast_2d(arr) for arr in membranes['postsynaptic'] if np.atleast_2d(arr).shape[1] == 3]
