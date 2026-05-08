@@ -279,18 +279,37 @@ def load_postsynaptic_active_zone_coords(tomo_path):
     coords = [np.loadtxt(f) for f in files if f.exists()]
     return coords
 
-def load_specific_active_zone_coords(tomo_path, active_zone_indices, aunps):
-    """Load active zone coordinates only for the specified active zone indices, using saved mapping."""
+
+def _load_optional_az_surface_txt(path: Path) -> np.ndarray:
+    """Load Nx3 coordinates from an active-zone surface txt; return empty (0, 3) if missing or invalid."""
+    if not path.exists():
+        return np.zeros((0, 3))
+    try:
+        arr = np.loadtxt(path, delimiter=None)
+        arr = np.atleast_2d(arr)
+        if arr.size == 0:
+            return np.zeros((0, 3))
+        if arr.shape[1] < 3:
+            return np.zeros((0, 3))
+        return arr
+    except Exception:
+        return np.zeros((0, 3))
+
+
+def load_specific_active_zone_coords(tomo_path, active_zone_indices, aunps, alignment_dir: str = "best_alignment"):
+    """Load outer and inner active zone coordinates for the given indices, using saved mapping."""
     from .activezone import load_active_zone_mapping
     
-    az_dir = Path(tomo_path) / 'best_alignment' / 'STT_results' / 'activezone'
+    az_dir = Path(tomo_path) / alignment_dir / "STT_results" / "activezone"
     
     azs_pre = []
     azs_post = []
+    azs_pre_inner = []
+    azs_post_inner = []
     
     if active_zone_indices is not None:
         # Load saved mapping
-        az_mapping = load_active_zone_mapping(tomo_path)
+        az_mapping = load_active_zone_mapping(tomo_path, alignment_dir)
         
         if not az_mapping:
             # No mapping found - use all available zone files as fallback but print error
@@ -323,6 +342,8 @@ def load_specific_active_zone_coords(tomo_path, active_zone_indices, aunps):
                         if pre_coords.size > 0 and post_coords.size > 0:
                             azs_pre.append(pre_coords)
                             azs_post.append(post_coords)
+                            azs_pre_inner.append(_load_optional_az_surface_txt(az_dir / f"{zone_name}_pre_inner.txt"))
+                            azs_post_inner.append(_load_optional_az_surface_txt(az_dir / f"{zone_name}_post_inner.txt"))
                     except Exception as e:
                         print(f"Warning: Error loading {zone_name}: {e}")
         else:
@@ -342,6 +363,8 @@ def load_specific_active_zone_coords(tomo_path, active_zone_indices, aunps):
                             post_coords = np.loadtxt(post_file)
                             azs_pre.append(pre_coords)
                             azs_post.append(post_coords)
+                            azs_pre_inner.append(_load_optional_az_surface_txt(az_dir / f"{zone_name}_pre_inner.txt"))
+                            azs_post_inner.append(_load_optional_az_surface_txt(az_dir / f"{zone_name}_post_inner.txt"))
                         except Exception as e:
                             raise ValueError(f"Error loading zone {zone_name} from saved mapping: {e}")
                     else:
@@ -349,7 +372,7 @@ def load_specific_active_zone_coords(tomo_path, active_zone_indices, aunps):
                 else:
                     raise ValueError(f"Active zone index {az_id} not found in saved mapping. This indicates the active zone analysis was run with different indices.")
     
-    return azs_pre, azs_post
+    return azs_pre, azs_post, azs_pre_inner, azs_post_inner
 
 def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None, rerun=False, alignment_dir='best_alignment',
                            sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None,
@@ -424,7 +447,9 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
             print(f"Auto-detected active zones (fallback): {aunp_active_zone_indices}")
     
     # Load only the active zone membranes for CSV-specified or auto-detected active zones, matched by distance to AuNPs
-    azs_pre, azs_post = load_specific_active_zone_coords(tomo_path, aunp_active_zone_indices, aunps)
+    azs_pre, azs_post, azs_pre_inner, azs_post_inner = load_specific_active_zone_coords(
+        tomo_path, aunp_active_zone_indices, aunps, alignment_dir=alignment_dir
+    )
     
     if len(aunp_active_zone_indices) == 0:
         print("No active zones found, using middle of tomogram")
@@ -434,7 +459,7 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
             print(f"Could not load tomogram slice for {tomo_path}")
             return
         _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center, vesicles, 
-                                         pre_mem, post_mem, [], [], aunps, fusion_points, 
+                                         pre_mem, post_mem, [], [], [], [], aunps, fusion_points, 
                                          aunp_active_zone_indices, rerun, "middle")
     else:
         # Generate visualizations for each active zone (CSV-specified or auto-detected)
@@ -455,7 +480,8 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
                 continue
             
             _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center, vesicles, 
-                                             pre_mem, post_mem, azs_pre, azs_post, aunps, fusion_points, 
+                                             pre_mem, post_mem, azs_pre, azs_post, azs_pre_inner, azs_post_inner,
+                                             aunps, fusion_points, 
                                              aunp_active_zone_indices, rerun, f"az{az_id}")
 
 def _calculate_active_zone_center_from_aunps(aunps, active_zone_id):
@@ -540,7 +566,8 @@ def _get_cluster_colors(n_clusters):
     return colors, cmap
 
 def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center, vesicles, 
-                                     pre_mem, post_mem, azs_pre, azs_post, aunps, fusion_points, 
+                                     pre_mem, post_mem, azs_pre, azs_post, azs_pre_inner, azs_post_inner,
+                                     aunps, fusion_points, 
                                      aunp_active_zone_indices, rerun, suffix):
     """Generate all visualization types for a specific slice."""
     tomo_name = Path(tomo_path).name
@@ -556,7 +583,14 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
     vesicles_in_slice = filter_vesicles_in_slice(vesicles, z_center, z_thresh_vesicles)
     azs_pre_in_slice = filter_coords_in_slice(azs_pre, z_center, z_thresh_az, None)
     azs_post_in_slice = filter_coords_in_slice(azs_post, z_center, z_thresh_az, None)
+    azs_pre_inner_in_slice = filter_coords_in_slice(azs_pre_inner, z_center, z_thresh_az, None)
+    azs_post_inner_in_slice = filter_coords_in_slice(azs_post_inner, z_center, z_thresh_az, None)
     aunps_near = filter_aunps_near_slice(aunps, z_center, z_thresh_aunps_fusion)
+    
+    # Inner AZ colors: lighter red / green than pure outer; drawn under outer scatters
+    inner_pre_rgb = (1.0, 0.52, 0.52)
+    inner_post_rgb = (0.52, 1.0, 0.52)
+    inner_az_alpha = 0.06
     
     # Debug output (simplified)
     
@@ -585,22 +619,32 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
                              label='<=20nm' if '<=20nm' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
                 ax1.add_patch(circ)
         
-        # Overlay presynaptic active zone with transparent red
+        # Inner active zones (faded; underneath outer)
+        for coords in azs_pre_inner_in_slice:
+            ax1.scatter(coords[:, 0], coords[:, 1], color=inner_pre_rgb, s=3, alpha=inner_az_alpha,
+                        label='Presynaptic AZ (inner)' if 'Presynaptic AZ (inner)' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
+        for coords in azs_post_inner_in_slice:
+            ax1.scatter(coords[:, 0], coords[:, 1], color=inner_post_rgb, s=3, alpha=inner_az_alpha,
+                        label='Postsynaptic AZ (inner)' if 'Postsynaptic AZ (inner)' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
+        
+        # Overlay presynaptic active zone (outer)
         for coords in azs_pre_in_slice:
             ax1.scatter(coords[:,0], coords[:,1], color='red', s=3, alpha=0.1, 
-                    label='Presynaptic Active Zone' if 'Presynaptic Active Zone' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
+                    label='Presynaptic AZ (outer)' if 'Presynaptic AZ (outer)' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
         
-        # Overlay postsynaptic active zone with transparent green
+        # Overlay postsynaptic active zone (outer)
         for coords in azs_post_in_slice:
             ax1.scatter(coords[:,0], coords[:,1], color='green', s=3, alpha=0.1, 
-                    label='Postsynaptic Active Zone' if 'Postsynaptic Active Zone' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
+                    label='Postsynaptic AZ (outer)' if 'Postsynaptic AZ (outer)' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
         
         # Add note about distance filtering to legend
         legend_elements = [
             Line2D([0], [0], color='pink', lw=1.5, label='Vesicles (intersecting slice)'),
             Line2D([0], [0], color='aqua', lw=2, label='Vesicles <20 nm from AZ'),
-            Line2D([0], [0], color='red', lw=1.5, label='Presynaptic Active Zone'),
-            Line2D([0], [0], color='green', lw=1.5, label='Postsynaptic Active Zone')
+            Line2D([0], [0], color=inner_pre_rgb, lw=1.5, label='Presynaptic AZ (inner)'),
+            Line2D([0], [0], color=inner_post_rgb, lw=1.5, label='Postsynaptic AZ (inner)'),
+            Line2D([0], [0], color='red', lw=1.5, label='Presynaptic AZ (outer)'),
+            Line2D([0], [0], color='green', lw=1.5, label='Postsynaptic AZ (outer)'),
         ]
         ax1.legend(handles=legend_elements)
         ax1.set_title(f'Vesicles and Active Zones - {tomo_name}')
@@ -713,15 +757,23 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
                              label='<=20nm' if '<=20nm' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
                 ax3.add_patch(circ)
         
-        # Overlay presynaptic active zone with transparent red
+        # Inner active zones (faded; underneath outer)
+        for coords in azs_pre_inner_in_slice:
+            ax3.scatter(coords[:, 0], coords[:, 1], color=inner_pre_rgb, s=3, alpha=inner_az_alpha,
+                        label='Presynaptic AZ (inner)' if 'Presynaptic AZ (inner)' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
+        for coords in azs_post_inner_in_slice:
+            ax3.scatter(coords[:, 0], coords[:, 1], color=inner_post_rgb, s=3, alpha=inner_az_alpha,
+                        label='Postsynaptic AZ (inner)' if 'Postsynaptic AZ (inner)' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
+        
+        # Overlay presynaptic active zone (outer)
         for coords in azs_pre_in_slice:
             ax3.scatter(coords[:,0], coords[:,1], color='red', s=3, alpha=0.1, 
-                    label='Presynaptic Active Zone' if 'Presynaptic Active Zone' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
+                    label='Presynaptic AZ (outer)' if 'Presynaptic AZ (outer)' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
         
-        # Overlay postsynaptic active zone with transparent green
+        # Overlay postsynaptic active zone (outer)
         for coords in azs_post_in_slice:
             ax3.scatter(coords[:,0], coords[:,1], color='green', s=3, alpha=0.1, 
-                    label='Postsynaptic Active Zone' if 'Postsynaptic Active Zone' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
+                    label='Postsynaptic AZ (outer)' if 'Postsynaptic AZ (outer)' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
         
         # Add AuNPs with transparency
         if aunps_near is not None:
@@ -763,8 +815,10 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
         legend_elements = [
             Line2D([0], [0], color='pink', lw=1.5, label='Vesicles (intersecting slice)'),
             Line2D([0], [0], color='aqua', lw=2, label='Vesicles <20 nm from AZ'),
-            Line2D([0], [0], color='red', lw=1.5, label='Presynaptic Active Zone'),
-            Line2D([0], [0], color='green', lw=1.5, label='Postsynaptic Active Zone'),
+            Line2D([0], [0], color=inner_pre_rgb, lw=1.5, label='Presynaptic AZ (inner)'),
+            Line2D([0], [0], color=inner_post_rgb, lw=1.5, label='Postsynaptic AZ (inner)'),
+            Line2D([0], [0], color='red', lw=1.5, label='Presynaptic AZ (outer)'),
+            Line2D([0], [0], color='green', lw=1.5, label='Postsynaptic AZ (outer)'),
             plt.scatter([], [], color='gold', s=30, label='AuNPs'),
             plt.scatter([], [], color='orange', s=100, marker='*', label='Fusion Sites')
         ]
