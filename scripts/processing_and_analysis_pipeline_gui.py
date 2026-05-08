@@ -81,7 +81,6 @@ class AnalysisPipelineGUI(tk.Tk):
         self.min_cluster_size = tk.StringVar(value="4")
         self.fusion_point_threshold = tk.StringVar(value="20.0")
         self.fusing_perimeter_threshold = tk.StringVar(value="1.0")
-        self.active_center_distance_metric = tk.StringVar(value="mean")
         
         self._build_tabs()
 
@@ -229,14 +228,6 @@ class AnalysisPipelineGUI(tk.Tk):
         fusion_point_threshold_entry = ttk.Entry(aunp_frame, textvariable=self.fusion_point_threshold, width=8)
         fusion_point_threshold_entry.grid(row=4, column=1, padx=5)
         ttk.Label(aunp_frame, text="(default: 20.0)").grid(row=4, column=2, padx=5, sticky=tk.W)
-        ttk.Label(aunp_frame, text="Active center distance metric:").grid(row=5, column=0, sticky=tk.W, padx=5)
-        center_metric_combo = ttk.Combobox(
-            aunp_frame, textvariable=self.active_center_distance_metric,
-            values=["mean", "min"], width=8, state="readonly"
-        )
-        center_metric_combo.grid(row=5, column=1, padx=5)
-        center_metric_combo.set("mean")
-        ttk.Label(aunp_frame, text="(default: mean)").grid(row=5, column=2, padx=5, sticky=tk.W)
         
         # Visualization parameters
         viz_frame = ttk.LabelFrame(self.custom_params_frame, text="Visualization Parameters", padding=5)
@@ -298,7 +289,6 @@ class AnalysisPipelineGUI(tk.Tk):
         ToolTip(min_cluster_size_entry, "Post-DBSCAN minimum retained cluster size; smaller clusters are reassigned to noise (default 4).")
         ToolTip(fusion_point_threshold_entry, "Radius in nm for active-zone points contributing to per-vesicle fusion point estimation (default 20.0).")
         ToolTip(fusing_perimeter_threshold_entry, "Vesicle is fusing if minimum distance from original vesicle segmentation points to presynaptic active-zone points is <= this threshold (default 1.0 nm).")
-        ToolTip(center_metric_combo, "How active-center distance is computed from outer/inner distances: mean or min (default mean).")
         ToolTip(sphere_size_entry, "Marker size for visualization sphere overlays (default 36).")
         ToolTip(self.sphere_color_combo, "Marker color for visualization sphere overlays (default gold).")
         ToolTip(aunp_distance_min_entry, "Minimum distance (nm) for AuNP color scale; leave empty for auto.")
@@ -1059,8 +1049,6 @@ Do you want to continue?"""
                     cli += ["--fusing-perimeter-threshold", str(float(self.fusing_perimeter_threshold.get()))]
                 except ValueError:
                     pass
-            if self.active_center_distance_metric.get():
-                cli += ["--active-center-distance-metric", str(self.active_center_distance_metric.get())]
             
             # Visualization parameters
             if self.sphere_size.get():

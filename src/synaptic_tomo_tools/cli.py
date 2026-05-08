@@ -404,7 +404,7 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
                      cylinder_radius=None, receptor_crosssection=None, aunps_per_receptor=None,
                      vertex_sampling_step=None, synaptic_designation_cutoff=None,
                      min_cluster_size=None, fusion_point_threshold=None,
-                     fusing_perimeter_threshold=None, active_center_distance_metric=None):
+                     fusing_perimeter_threshold=None):
     """Run all analyses in the correct order: activezone, vesicles, aunps, visualizations."""
     print_synapse_ascii_art()
     print("="*80)
@@ -444,8 +444,7 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
               aunps_per_receptor=aunps_per_receptor, vertex_sampling_step=vertex_sampling_step,
               synaptic_designation_cutoff=synaptic_designation_cutoff,
               min_cluster_size=min_cluster_size, fusion_point_threshold=fusion_point_threshold,
-              fusing_perimeter_threshold=fusing_perimeter_threshold,
-              active_center_distance_metric=active_center_distance_metric)
+              fusing_perimeter_threshold=fusing_perimeter_threshold)
     
     # Step 4: Visualizations
     print("\n" + "="*80)
@@ -466,7 +465,7 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
               cylinder_radius=None, receptor_crosssection=None, aunps_per_receptor=None,
               vertex_sampling_step=None, synaptic_designation_cutoff=None,
               min_cluster_size=None, fusion_point_threshold=None,
-              fusing_perimeter_threshold=None, active_center_distance_metric=None):
+              fusing_perimeter_threshold=None):
     if print_ascii:
         print_synapse_ascii_art()
     for i, (tomo, set_name, aunp_active_zones, alignment_dir) in enumerate(tomo_paths):
@@ -521,7 +520,6 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
             min_clust = min_cluster_size if min_cluster_size is not None else 4
             fusion_thresh = fusion_point_threshold if fusion_point_threshold is not None else 20.0
             fusing_thresh = fusing_perimeter_threshold if fusing_perimeter_threshold is not None else 1.0
-            center_metric = active_center_distance_metric if active_center_distance_metric is not None else "mean"
             aunp_results = analyze_aunps(tomo, az_indices, set_name=set_name, alignment_dir=alignment_dir,
                                          vesicle_distance_threshold=vesicle_threshold,
                                          dbscan_eps=eps, dbscan_min_samples=min_samples,
@@ -532,8 +530,7 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
                                          synaptic_designation_cutoff=syn_cutoff,
                                          min_cluster_size=min_clust,
                                          fusion_point_threshold=fusion_thresh,
-                                         fusing_perimeter_threshold=fusing_thresh,
-                                         active_center_distance_metric=center_metric)
+                                         fusing_perimeter_threshold=fusing_thresh)
             
             # Store combined results
             combined_results = {
@@ -808,10 +805,6 @@ def main():
         "--fusing-perimeter-threshold", type=float, default=None,
         help="Minimum vesicle-segmentation-point to presynaptic active-zone distance (nm) for classifying fusing vesicles. Default: 1.0"
     )
-    parser.add_argument(
-        "--active-center-distance-metric", type=str, default=None, choices=["mean", "min"],
-        help="How to combine active outer/inner distances for active-center distance. Options: mean|min. Default: mean"
-    )
 
     args = parser.parse_args()
 
@@ -939,7 +932,6 @@ def main():
     min_cluster_size = args.min_cluster_size
     fusion_point_threshold = args.fusion_point_threshold
     fusing_perimeter_threshold = args.fusing_perimeter_threshold
-    active_center_distance_metric = args.active_center_distance_metric
     
     if args.analysis == "activezone":
         run_activezone(tomos, results_manager, rerun=args.rerun, 
@@ -960,8 +952,7 @@ def main():
                   aunps_per_receptor=aunps_per_receptor, vertex_sampling_step=vertex_sampling_step,
                   synaptic_designation_cutoff=synaptic_designation_cutoff,
                   min_cluster_size=min_cluster_size, fusion_point_threshold=fusion_point_threshold,
-                  fusing_perimeter_threshold=fusing_perimeter_threshold,
-                  active_center_distance_metric=active_center_distance_metric)
+                  fusing_perimeter_threshold=fusing_perimeter_threshold)
     elif args.analysis == "visualizations":
         generate_visualizations(tomos, results_manager, rerun=args.rerun, csv_path=args.csv,
                                 sphere_size=sphere_size, sphere_color=sphere_color,
@@ -983,8 +974,7 @@ def main():
                          vertex_sampling_step=vertex_sampling_step,
                          synaptic_designation_cutoff=synaptic_designation_cutoff,
                          min_cluster_size=min_cluster_size, fusion_point_threshold=fusion_point_threshold,
-                         fusing_perimeter_threshold=fusing_perimeter_threshold,
-                         active_center_distance_metric=active_center_distance_metric)
+                         fusing_perimeter_threshold=fusing_perimeter_threshold)
 
     # Always export summary CSVs at the end
     print("\nExporting all summary CSVs from stored results...")

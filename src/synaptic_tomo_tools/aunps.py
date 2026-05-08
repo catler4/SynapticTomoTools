@@ -263,7 +263,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
                   cylinder_radius=25.0, receptor_crosssection=122.0, aunps_per_receptor=2.0,
                   vertex_sampling_step=1, synaptic_designation_cutoff=30.0,
                   min_cluster_size=4, fusion_point_threshold=20.0,
-                  fusing_perimeter_threshold=1.0, active_center_distance_metric="mean"):
+                  fusing_perimeter_threshold=1.0):
     """
     Performs analysis of gold nanoparticles (AuNPs) in the tomogram.
 
@@ -283,8 +283,6 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
         min_cluster_size (int): Minimum cluster size to keep after DBSCAN (smaller clusters -> noise). Default: 4.
         fusion_point_threshold (float): Radius (nm) for AZ points contributing to fusion point. Default: 20.0.
         fusing_perimeter_threshold (float): Max perimeter-to-AZ distance (nm) for fusing vesicles. Default: 1.0.
-        active_center_distance_metric (str): How to combine outer/inner distances for active center.
-            Options: "mean", "min". Default: "mean".
     """
     print(f"Analyzing AuNPs in {Path(tomogram_path).name}")
     
@@ -525,13 +523,9 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
                 df_valid['distance_to_postsynaptic_active_outer'].to_numpy(),
                 df_valid['distance_to_postsynaptic_active_inner'].to_numpy()
             ])
-            if active_center_distance_metric == "min":
-                df_valid['distance_to_presynaptic_active_outer_inner_mean'] = np.nanmin(pre_center_stack, axis=0)
-                df_valid['distance_to_postsynaptic_active_outer_inner_mean'] = np.nanmin(post_center_stack, axis=0)
-            else:
-                # Default: mean
-                df_valid['distance_to_presynaptic_active_outer_inner_mean'] = np.nanmean(pre_center_stack, axis=0)
-                df_valid['distance_to_postsynaptic_active_outer_inner_mean'] = np.nanmean(post_center_stack, axis=0)
+            # Hard-coded behavior: use mean of outer/inner distances.
+            df_valid['distance_to_presynaptic_active_outer_inner_mean'] = np.nanmean(pre_center_stack, axis=0)
+            df_valid['distance_to_postsynaptic_active_outer_inner_mean'] = np.nanmean(post_center_stack, axis=0)
 
             # Synaptic if within cutoff of postsynaptic active outer membrane; else extrasynaptic
             synaptic_mask = df_valid['distance_to_postsynaptic_active_outer'] <= synaptic_designation_cutoff
