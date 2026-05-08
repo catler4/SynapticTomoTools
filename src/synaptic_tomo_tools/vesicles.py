@@ -496,86 +496,6 @@ def save_vesicle_results(vesicles: List[Dict[str, Any]], tomogram_path, alignmen
     return results
 
 
-def save_nearby_vesicles(vesicles: List[Dict[str, Any]], tomogram_path, 
-                        distance_threshold: float = 10.0, alignment_dir: str = "best_alignment"):
-    """
-    Save vesicles near active zone to a separate JSON file.
-    Uses pre-calculated distances from detect_vesicles.
-    
-    Args:
-        vesicles: List of vesicle dictionaries with pre-calculated distances
-        tomogram_path: Path to tomogram directory
-        distance_threshold: Distance threshold in nm
-    """
-    tomogram_path = Path(tomogram_path)
-    stt_results_dir = tomogram_path / alignment_dir / "STT_results"
-    
-    # Create vesicles directory
-    vesicles_dir = stt_results_dir / "vesicles"
-    vesicles_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Filter vesicles near active zone using pre-calculated distances
-    nearby_vesicles = []
-    for vesicle in vesicles:
-        distance_class = vesicle.get('vesicle_distance_class')
-        if distance_class in ('fusing', 'close'):
-            nearby_vesicles.append(vesicle)
-            continue
-        # Backward compatibility when class labels are absent in older files.
-        distance_to_az = vesicle.get('distance_to_az', np.nan)
-        if np.isfinite(distance_to_az) and distance_to_az <= distance_threshold:
-            nearby_vesicles.append(vesicle)
-    
-    print(f"Found {len(nearby_vesicles)} vesicles with points within {distance_threshold} nm of active zone")
-    
-    # Calculate summary statistics for nearby vesicles
-    if nearby_vesicles:
-        volumes = [v['volume'] for v in nearby_vesicles]
-        diameters = [v['diameter'] for v in nearby_vesicles]
-        distances_to_az = [v.get('distance_to_az', np.nan) for v in nearby_vesicles]
-        
-        summary = {
-            'total_nearby_vesicles': len(nearby_vesicles),
-            'distance_threshold_nm': distance_threshold,
-            'total_nearby_vesicle_volume_nm3': float(np.sum(volumes)),
-            'average_nearby_vesicle_diameter_nm': float(np.mean(diameters)),
-            'std_nearby_vesicle_diameter_nm': float(np.std(diameters)),
-            'min_nearby_vesicle_diameter_nm': float(np.min(diameters)),
-            'max_nearby_vesicle_diameter_nm': float(np.max(diameters)),
-            'average_nearby_distance_to_az_nm': float(np.mean(distances_to_az)),
-            'min_nearby_distance_to_az_nm': float(np.min(distances_to_az)),
-            'max_nearby_distance_to_az_nm': float(np.max(distances_to_az)),
-            'std_nearby_distance_to_az_nm': float(np.std(distances_to_az))
-        }
-    else:
-        summary = {
-            'total_nearby_vesicles': 0,
-            'distance_threshold_nm': distance_threshold,
-            'total_nearby_vesicle_volume_nm3': 0.0,
-            'average_nearby_vesicle_diameter_nm': 0.0,
-            'std_nearby_vesicle_diameter_nm': 0.0,
-            'min_nearby_vesicle_diameter_nm': 0.0,
-            'max_nearby_vesicle_diameter_nm': 0.0,
-            'average_nearby_distance_to_az_nm': 0.0,
-            'min_nearby_distance_to_az_nm': 0.0,
-            'max_nearby_distance_to_az_nm': 0.0,
-            'std_nearby_distance_to_az_nm': 0.0
-        }
-    
-    # Save nearby vesicles results
-    nearby_results = {
-        'summary': summary,
-        'vesicles': nearby_vesicles
-    }
-    
-    results_file = vesicles_dir / f"nearby_vesicles_{distance_threshold}nm.json"
-    with open(results_file, 'w') as f:
-        json.dump(nearby_results, f, indent=2, default=str)
-    
-    print(f"Saved nearby vesicles results to {results_file}")
-    return nearby_results
-
-
 # CSV export functions removed - now handled by ResultsManager
 
 
@@ -764,9 +684,6 @@ def detect_vesicles(
         
         # Save results
         save_vesicle_results(vesicles, tomogram_path, alignment_dir=alignment_dir)
-        
-        # Save nearby vesicles (after overlap removal and distance calculation)
-        save_nearby_vesicles(vesicles, tomogram_path, distance_threshold=vesicle_distance_threshold, alignment_dir=alignment_dir)
         
         # CSV export now handled by ResultsManager
         return results
