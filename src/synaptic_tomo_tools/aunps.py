@@ -12,6 +12,7 @@ from .activezone import import_active_zone_segmentations
 from datetime import datetime
 import json
 from .vesicles import import_presynaptic_membranes_and_active_zones
+from .alignment_utils import require_alignment_dir
 import re
 
 # CSV export functions removed - now handled by ResultsManager
@@ -88,12 +89,13 @@ def calculate_packing_density_using_sliding_cylinder(
 
     return (v_array, packing_coefficient)
 
-def compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0, fusion_point_threshold=20.0, alignment_dir: str = "best_alignment"):
+def compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0, fusion_point_threshold=20.0, *, alignment_dir: str):
     """
     For each vesicle within 20 nm of the presynaptic active zone, compute the putative fusion point as the average
     of all presynaptic active zone points within 20 nm of any vesicle point. Supports multiple active zones.
     Returns a list of fusion points (np.ndarray shape (N, 3)).
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     # Load vesicle results
     vesicles_file = Path(tomogram_path) / alignment_dir / "STT_results" / "vesicles" / "vesicle_results.json"
     if not vesicles_file.exists():
@@ -133,10 +135,10 @@ def compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0, fusion
         return np.zeros((0, 3))
 
 
-def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, vesicle_distance_threshold=20.0, 
+def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, vesicle_distance_threshold=20.0,
                                                   fusion_point_threshold=20.0, max_distance=500.0, bin_width=5.0,
                                                   fusing_only=False, fusing_perimeter_threshold=1.0,
-                                                  alignment_dir: str = "best_alignment"):
+                                                  *, alignment_dir: str):
     """
     For each vesicle within vesicle_distance_threshold of the presynaptic active zone:
     1. Compute the putative fusion point
@@ -156,6 +158,7 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
     Returns:
         DataFrame with vesicle info and AuNP distance histogram bins
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     # Get tomogram name
     tomogram_name = Path(tomogram_path).name
     
@@ -259,7 +262,9 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
     
     return pd.DataFrame(results)
 
-def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignment_dir: str = "best_alignment",
+def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
+                  *,
+                  alignment_dir: str,
                   vesicle_distance_threshold=20.0, dbscan_eps=16.0, dbscan_min_samples=1,
                   cylinder_radius=25.0, receptor_crosssection=122.0, aunps_per_receptor=2.0,
                   vertex_sampling_step=1, synaptic_designation_cutoff=30.0,
@@ -285,6 +290,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
         fusion_point_threshold (float): Radius (nm) for AZ points contributing to fusion point. Default: 20.0.
         fusing_perimeter_threshold (float): Max perimeter-to-AZ distance (nm) for fusing vesicles. Default: 1.0.
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     print(f"Analyzing AuNPs in {Path(tomogram_path).name}")
     
     try:

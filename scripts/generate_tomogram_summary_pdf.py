@@ -14,7 +14,13 @@ from reportlab.lib.utils import ImageReader
 from PIL import Image
 from PyPDF2 import PdfMerger
 import re
+import sys
 from reportlab.lib.colors import HexColor
+
+_SRC = Path(__file__).resolve().parent.parent / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+from synaptic_tomo_tools.alignment_utils import require_alignment_dir
 
 def get_tomo_name_from_image(image_path):
     # Assumes image name format: <tomo_name>_combined.png, etc.
@@ -48,10 +54,18 @@ def check_file_corruption(file_path):
     except Exception as e:
         return f"Error reading file: {e}"
 
-def get_stats(tomo_name, base_data_dir, selected_az_indices=None):
-    # Find vesicle_results.json and aunp data for this tomogram
-    vesicle_json = list(Path(base_data_dir).glob(f"**/{tomo_name}/best_alignment/STT_results/vesicles/vesicle_results.json"))
-    aunp_star = list(Path(base_data_dir).glob(f"**/{tomo_name}/best_alignment/STT_results/aunps/aunp_clusters.star"))
+def get_stats(tomo_name, base_data_dir, selected_az_indices=None, *, alignment_dir: str):
+    # Find vesicle_results.json and aunp data for this tomogram (per alignment folder)
+    vesicle_json = list(
+        Path(base_data_dir).glob(
+            f"**/{tomo_name}/{alignment_dir}/STT_results/vesicles/vesicle_results.json"
+        )
+    )
+    aunp_star = list(
+        Path(base_data_dir).glob(
+            f"**/{tomo_name}/{alignment_dir}/STT_results/aunps/aunp_clusters.star"
+        )
+    )
     
     stats = {
         'total_vesicles': 'N/A',
@@ -110,9 +124,11 @@ def get_stats(tomo_name, base_data_dir, selected_az_indices=None):
             print(f"File analysis: {check_file_corruption(aunp_star[0])}")
     return stats
 
-def get_active_zonogram_images(tomo_name, base_data_dir, selected_az_indices=None):
+def get_active_zonogram_images(tomo_name, base_data_dir, selected_az_indices=None, *, alignment_dir: str):
     # Find the active_zonogram folder for this tomogram
-    az_dir_candidates = list(Path(base_data_dir).glob(f"**/{tomo_name}/best_alignment/active_zonograms"))
+    az_dir_candidates = list(
+        Path(base_data_dir).glob(f"**/{tomo_name}/{alignment_dir}/active_zonograms")
+    )
     if not az_dir_candidates:
         return []
     az_dir = az_dir_candidates[0]
@@ -153,35 +169,47 @@ def get_active_zonogram_images(tomo_name, base_data_dir, selected_az_indices=Non
     return pairs
 
 def load_tomo_set_map(tomocsv_path):
+    """Load CSV rows; duplicate tomonames with different alignments are kept as separate rows."""
     import csv
-    tomo_set_map = {}
-    tomo_az_map = {}
-    tomo_az_indices_map = {}
+    rows_out = []
     with open(tomocsv_path, newline='') as csvfile:
         reader = csv.DictReader(csvfile)
+        if not reader.fieldnames or "alignment_dir" not in reader.fieldnames:
+            raise ValueError(
+                f"{tomocsv_path} must include an 'alignment_dir' column for each tomogram row."
+            )
         for row in reader:
-            tomo_set_map[row['tomoname']] = row['set']
-            # Handle aunp_active_zones column (may be missing)
-            az = (row.get('aunp_active_zones') or '').strip()
+            tomo = row["tomoname"].strip()
+            set_name = row["set"].strip()
+            alignment_dir = require_alignment_dir(
+                row.get("alignment_dir"), context=f"tomogram {tomo}"
+            )
+            az = (row.get("aunp_active_zones") or "").strip()
+            az_indices = None
+            az_display = "All"
             if az:
-                tomo_az_map[row['tomoname']] = az
-                # Parse active zone indices (handle floats like "2.0")
+                az_display = az
                 try:
                     az_indices = []
-                    for x in az.split(','):
+                    for x in az.split(","):
                         x = x.strip()
                         if x.isdigit():
                             az_indices.append(int(x))
-                        elif x.replace(".", "").isdigit():  # Handle floats like "2.0"
+                        elif x.replace(".", "").isdigit():
                             az_indices.append(int(float(x)))
-                    tomo_az_indices_map[row['tomoname']] = az_indices
                 except ValueError:
-                    print(f"Warning: Could not parse active zone indices for {row['tomoname']}: {az}")
-                    tomo_az_indices_map[row['tomoname']] = None
-            else:
-                tomo_az_map[row['tomoname']] = 'All'
-                tomo_az_indices_map[row['tomoname']] = None
-    return tomo_set_map, tomo_az_map, tomo_az_indices_map
+                    print(f"Warning: Could not parse active zone indices for {tomo}: {az}")
+                    az_indices = None
+            rows_out.append(
+                {
+                    "tomoname": tomo,
+                    "set": set_name,
+                    "alignment_dir": alignment_dir,
+                    "aunp_active_zones_str": az_display,
+                    "az_indices": az_indices,
+                }
+            )
+    return rows_out
 
 def add_image(c, img_path, x, y, max_width, max_height):
     if img_path is None:
@@ -206,18 +234,25 @@ def add_image(c, img_path, x, y, max_width, max_height):
         print(f"Error opening image {img_path}: {e}")
         return 0
 
-def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tomo_set_map=None, tomo_az_map=None, tomo_az_indices_map=None):
+def generate_pdf_for_tomogram(
+    tomo_name,
+    vis_dir,
+    base_data_dir,
+    output_dir,
+    *,
+    alignment_dir: str,
+    set_name=None,
+    az_info=None,
+    selected_az_indices=None,
+):
+    """Per-alignment summary PDF; viz images live under vis_dir/{tomo}/{alignment_dir}/."""
+    alignment_dir = require_alignment_dir(alignment_dir, context=f"tomogram {tomo_name}")
+    viz_root = Path(vis_dir) / tomo_name / alignment_dir
     c = canvas.Canvas(str(output_dir / f"{tomo_name}_summary.pdf"), pagesize=letter)
     width, height = letter
     margin = 40
     y = height - margin
     # --- Summary info first ---
-    set_name = None
-    az_info = None
-    if tomo_set_map is not None:
-        set_name = tomo_set_map.get(tomo_name, None)
-    if tomo_az_map is not None:
-        az_info = tomo_az_map.get(tomo_name, None)
     # Draw shaded box for tomogram title
     title_box_height = 40
     title_box_color = HexColor('#cccccc')  # medium grey
@@ -226,7 +261,7 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
     c.rect(margin-8, y-title_box_height, width-2*margin+16, title_box_height, fill=1, stroke=0)
     c.setFillColor('black')
     c.setFont("Helvetica-Bold", 18)
-    c.drawString(margin, y - 28, f"Tomogram Summary: {tomo_name}")
+    c.drawString(margin, y - 28, f"Tomogram Summary: {tomo_name} ({alignment_dir})")
     y -= title_box_height
     # Draw lighter shaded box for set, az, and summary info
     info_box_height = 18+16+18*4+12
@@ -245,12 +280,7 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
         c.setFont("Helvetica", 12)
         c.drawString(margin, info_y, f"Active zones included: {az_info}")
         info_y -= 16
-    # Get selected active zone indices for this tomogram
-    selected_az_indices = None
-    if tomo_az_indices_map is not None:
-        selected_az_indices = tomo_az_indices_map.get(tomo_name, None)
-    
-    stats = get_stats(tomo_name, base_data_dir, selected_az_indices)
+    stats = get_stats(tomo_name, base_data_dir, selected_az_indices, alignment_dir=alignment_dir)
     c.setFont("Helvetica", 12)
     c.drawString(margin, info_y, f"Total vesicles: {stats['total_vesicles']}")
     info_y -= 18
@@ -263,10 +293,6 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
     y -= info_box_height
     # Add a consistent gap before the first figure
     y -= 16
-    # Get selected active zone indices for this tomogram
-    selected_az_indices = None
-    if tomo_az_indices_map is not None:
-        selected_az_indices = tomo_az_indices_map.get(tomo_name, None)
     # Add images - create one set of all visualizations per active zone
     img_types = []
     if selected_az_indices is not None and len(selected_az_indices) > 0:
@@ -281,7 +307,7 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
             # Add cluster image for this active zone - need to find the actual zone name
             # Look for the actual active zonogram cluster file
             # Look in the new organized structure for cluster files
-            az_dir_organized = vis_dir / tomo_name / "active_zonograms" / "full"
+            az_dir_organized = viz_root / "active_zonograms" / "full"
             cluster_pattern = f"{tomo_name}_active_zonogram_*_selected_aunps_by_cluster_az{az_idx}.png"
             print(f"Looking for cluster files with pattern: {cluster_pattern}")
             print(f"In directory: {az_dir_organized}")
@@ -314,12 +340,12 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
             # Find the actual tomogram directory
             tomo_dirs = list(base_data_dir.glob(f"**/{tomo_name}"))
             if tomo_dirs:
-                az_dir = tomo_dirs[0] / "best_alignment" / "active_zonograms"
+                az_dir = tomo_dirs[0] / alignment_dir / "active_zonograms"
                 img_path = az_dir / fname
                 print(f"  Using tomogram directory: {img_path}")
                 print(f"  File exists: {img_path.exists()}")
             else:
-                az_dir = base_data_dir / f"{tomo_name}" / "best_alignment" / "active_zonograms"
+                az_dir = base_data_dir / f"{tomo_name}" / alignment_dir / "active_zonograms"
                 img_path = az_dir / fname
                 print(f"  Using path: {img_path}")
                 print(f"  File exists: {img_path.exists()}")
@@ -327,7 +353,7 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
         elif "active_zonogram" in fname:
             # Active zonogram cluster images are in the organized structure
             # Look in vis_dir/{tomo_name}/active_zonograms/full/
-            az_dir_organized = vis_dir / tomo_name / "active_zonograms" / "full"
+            az_dir_organized = viz_root / "active_zonograms" / "full"
             img_path = az_dir_organized / fname
             print(f"  Using organized structure: {img_path}")
             print(f"  File exists: {img_path.exists()}")
@@ -339,12 +365,12 @@ def generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, output_dir, tom
             # Look in vis_dir/{tomo_name}/aunps_and_vesicles/ for combined images
             # Look in vis_dir/{tomo_name}/active_zonograms/full/ for active zonogram images
             if 'combined' in fname or 'aunpclusters' in fname:
-                img_path = vis_dir / tomo_name / "aunps_and_vesicles" / fname
+                img_path = viz_root / "aunps_and_vesicles" / fname
             elif 'active_zonogram' in fname:
-                img_path = vis_dir / tomo_name / "active_zonograms" / "full" / fname
+                img_path = viz_root / "active_zonograms" / "full" / fname
             else:
                 # Unknown image type - try aunps_and_vesicles as default
-                img_path = vis_dir / tomo_name / "aunps_and_vesicles" / fname
+                img_path = viz_root / "aunps_and_vesicles" / fname
             print(f"  Looking for image: {img_path}")
             print(f"  File exists: {img_path.exists()}")
             if not img_path.exists():
@@ -466,86 +492,69 @@ def main():
     base_data_dir = Path(args.data_dir)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    # Load tomogram set and active zone mapping
-    tomo_set_map, tomo_az_map, tomo_az_indices_map = load_tomo_set_map(args.tomocsv)
-    
-    # Get tomograms in CSV order
-    csv_tomograms = list(tomo_set_map.keys())
-    
-    # Find all combined images as tomogram anchors
-    allowed_tomos = set(tomo_set_map.keys())
-    # vis_dir is now the base visualizations directory
-    # Look for images in the new organized structure: vis_dir/{tomo_name}/aunps_and_vesicles/
-    
-    # Create a mapping from tomogram name to image path
+
+    csv_rows = load_tomo_set_map(args.tomocsv)
+
+    def row_key(row):
+        return (row["tomoname"], row["alignment_dir"])
+
+    # Anchor PDF generation on existence of combined overlay for this tomogram + alignment
     tomo_to_img = {}
-    
-    # Looking for combined images in the new organized structure
-    
-    for tomo_name in allowed_tomos:
-        # Look in the new organized structure
-        aunps_vesicles_dir = vis_dir / tomo_name / "aunps_and_vesicles"
-        
-        if aunps_vesicles_dir.exists():
-            # Get the active zone indices for this tomogram
-            az_indices = tomo_az_indices_map.get(tomo_name, [0])  # Default to [0] if not specified
-            if az_indices is None:
-                az_indices = [0]
-            
-            # Processing tomogram
-            
-            # Use the first active zone index for the combined image
-            az_suffix = az_indices[0] if len(az_indices) > 0 else 0
-            combined_img_path = aunps_vesicles_dir / f"{tomo_name}_combined_az{az_suffix}.png"
-            
-            # Looking for combined image
-            if combined_img_path.exists():
-                tomo_to_img[tomo_name] = combined_img_path
-                # Found combined image
-            else:
-                # Combined image not found
-                pass
-    
-    # Final tomogram mapping completed
-    
+    for row in csv_rows:
+        az_indices = row["az_indices"]
+        if az_indices is None:
+            az_indices = [0]
+        az_suffix = az_indices[0] if len(az_indices) > 0 else 0
+        tn = row["tomoname"]
+        ad = row["alignment_dir"]
+        aunps_vesicles_dir = vis_dir / tn / ad / "aunps_and_vesicles"
+        combined_img_path = aunps_vesicles_dir / f"{tn}_combined_az{az_suffix}.png"
+        if combined_img_path.exists():
+            tomo_to_img[row_key(row)] = combined_img_path
+
     pdf_paths = []
-    # Process tomograms in CSV order, starting from specified tomogram if given
     start_index = 0
     if args.start_from:
-        try:
-            start_index = csv_tomograms.index(args.start_from)
-            print(f"Starting PDF generation from tomogram: {args.start_from} (index {start_index})")
-        except ValueError:
-            print(f"Warning: Starting tomogram '{args.start_from}' not found in CSV, starting from beginning")
-            start_index = 0
-    
-    # Process tomograms starting from the specified index
-    for i, tomo_name in enumerate(csv_tomograms[start_index:], start=start_index):
-        if tomo_name in tomo_to_img:
-            print(f"[{i+1}/{len(csv_tomograms)}] Generating PDF for {tomo_name}...", end=" ", flush=True)
-            # Save individual tomogram PDF to its own directory
-            tomogram_pdf_dir = vis_dir / tomo_name
-            tomogram_pdf_dir.mkdir(parents=True, exist_ok=True)
-            generate_pdf_for_tomogram(tomo_name, vis_dir, base_data_dir, tomogram_pdf_dir, tomo_set_map, tomo_az_map, tomo_az_indices_map)
-            pdf_path = tomogram_pdf_dir / f"{tomo_name}_summary.pdf"
-            if pdf_path.exists():
-                pdf_paths.append(str(pdf_path))
+        for idx, row in enumerate(csv_rows):
+            if row["tomoname"] == args.start_from:
+                start_index = idx
+                print(f"Starting PDF generation from CSV row index {start_index} ({args.start_from})")
+                break
         else:
-            print(f"Skipping {tomo_name} - no combined image found")
-    
-    # For the final combined PDF, we need to include all tomograms from the original CSV
-    # So we need to check for existing PDFs for all tomograms, not just the ones we just generated
+            print(f"Warning: Starting tomogram '{args.start_from}' not found in CSV, starting from beginning")
+
+    for i, row in enumerate(csv_rows[start_index:], start=start_index):
+        rk = row_key(row)
+        if rk not in tomo_to_img:
+            print(f"Skipping {row['tomoname']} ({row['alignment_dir']}) — no combined image found")
+            continue
+        print(
+            f"[{i+1}/{len(csv_rows)}] Generating PDF for {row['tomoname']} ({row['alignment_dir']})...",
+            end=" ",
+            flush=True,
+        )
+        tomogram_pdf_dir = vis_dir / row["tomoname"] / row["alignment_dir"]
+        tomogram_pdf_dir.mkdir(parents=True, exist_ok=True)
+        generate_pdf_for_tomogram(
+            row["tomoname"],
+            vis_dir,
+            base_data_dir,
+            tomogram_pdf_dir,
+            alignment_dir=row["alignment_dir"],
+            set_name=row["set"],
+            az_info=row["aunp_active_zones_str"],
+            selected_az_indices=row["az_indices"],
+        )
+        pdf_path = tomogram_pdf_dir / f"{row['tomoname']}_summary.pdf"
+        if pdf_path.exists():
+            pdf_paths.append(str(pdf_path))
+
     all_pdf_paths = []
     print(f"\nCollecting PDFs for combined document...")
-    for tomo_name in csv_tomograms:
-        # Look for PDF in the tomogram's directory
-        pdf_path = vis_dir / tomo_name / f"{tomo_name}_summary.pdf"
+    for row in csv_rows:
+        pdf_path = vis_dir / row["tomoname"] / row["alignment_dir"] / f"{row['tomoname']}_summary.pdf"
         if pdf_path.exists():
             all_pdf_paths.append(str(pdf_path))
-            # Found PDF
-        else:
-            # No PDF found - will be skipped
-            pass
     
     # Combine all PDFs into a single document
     if all_pdf_paths:

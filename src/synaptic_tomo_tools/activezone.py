@@ -3,13 +3,15 @@
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
 import numpy as np
+
+from .alignment_utils import require_alignment_dir
 from scipy.spatial.distance import cdist
 from scipy.spatial import KDTree
 
 
 
 
-def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]], tomogram_path, alignment_dir: str = "best_alignment"):
+def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]], tomogram_path, alignment_dir: str):
     """
     Calculate and save volumes for each membrane segmentation from GLB mesh data using convex hull.
     This method is more robust for non-watertight meshes that may extend beyond tomogram boundaries.
@@ -18,6 +20,7 @@ def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarra
         membranes: Dictionary containing membrane mesh data from GLB
         tomogram_path: Path to tomogram directory (str or Path)
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     import trimesh
     
     tomogram_path = Path(tomogram_path)
@@ -88,7 +91,7 @@ def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarra
     return volumes_data
 
 
-def load_membrane_volumes(tomogram_path, alignment_dir: str = "best_alignment") -> Dict[str, Any]:
+def load_membrane_volumes(tomogram_path, alignment_dir: str) -> Dict[str, Any]:
     """
     Load membrane volumes from JSON file and calculate averages.
     
@@ -98,6 +101,7 @@ def load_membrane_volumes(tomogram_path, alignment_dir: str = "best_alignment") 
     Returns:
         Dictionary containing volume statistics with averages for pre and post
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_path = Path(tomogram_path)
     volumes_file = tomogram_path / alignment_dir / "STT_results" / "activezone" / "membrane_volumes.json"
     
@@ -150,7 +154,7 @@ def load_membrane_volumes(tomogram_path, alignment_dir: str = "best_alignment") 
         }
 
 
-def import_membrane_segmentations(tomogram_path, alignment_dir: str = "best_alignment") -> Dict[str, List[np.ndarray]]:
+def import_membrane_segmentations(tomogram_path, alignment_dir: str) -> Dict[str, List[np.ndarray]]:
     """
     Import presynaptic and postsynaptic membrane segmentation files.
     
@@ -160,6 +164,7 @@ def import_membrane_segmentations(tomogram_path, alignment_dir: str = "best_alig
     Returns:
         Dictionary containing lists of coordinate arrays for each membrane type
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_path = Path(tomogram_path)
     aunps_dir = tomogram_path / alignment_dir / "aunps"
     
@@ -197,7 +202,7 @@ def import_membrane_segmentations(tomogram_path, alignment_dir: str = "best_alig
     
     return membranes
 
-def import_membrane_segmentations_from_glb(tomogram_path, alignment_dir: str = "best_alignment") -> Dict[str, List[Dict[str, np.ndarray]]]:
+def import_membrane_segmentations_from_glb(tomogram_path, alignment_dir: str) -> Dict[str, List[Dict[str, np.ndarray]]]:
     """
     Import presynaptic and postsynaptic membrane segmentations from a GLB file.
     
@@ -207,6 +212,7 @@ def import_membrane_segmentations_from_glb(tomogram_path, alignment_dir: str = "
     Returns:
         Dictionary containing lists of coordinate arrays, faces, and normals for each membrane type
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     import trimesh
 
     tomogram_path = Path(tomogram_path)
@@ -326,20 +332,30 @@ def find_active_zones(membranes: Dict[str, List[np.ndarray]], distance_threshold
 
 def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]], distance_range: Tuple[float, float] = (10.0, 40.0)) -> Dict[str, Any]:
     """
-    Find active zones by identifying presynaptic points within distance_range of postsynaptic points.
-    Uses KD-tree for efficient spatial queries. Only vertices with normals pointing towards the other side are considered.
-    
+    Find active zones from GLB membrane meshes using KD-trees.
+
+    Membership (distance gate): presynaptic vertices whose nearest postsynaptic neighbor lies in
+    ``distance_range``; postsynaptic vertices whose nearest such presynaptic vertex lies in the same
+    band. No normal filter on membership.
+
+    Outer vs inner (vertex normals): **outer** if ``presyn_normal · postsyn_normal_at_nearest < 0``
+    on the presynaptic side (and the symmetric dot on postsynaptic); **inner** is the complement on
+    that active vertex set.
+
+    Triangle patches use faces whose three vertices are all distance-active. Outer (resp. inner)
+    area sums triangles whose three vertices are all classified outer (resp. inner).
+
     Args:
         membranes: Dictionary containing membrane coordinate arrays from GLB
         distance_range: Distance range in nm as (min_distance, max_distance) (default: (10.0, 40.0))
-        
+
     Returns:
         Dictionary containing active zone information and segmentations
     """
-    import trimesh 
+    import trimesh
 
     min_distance, max_distance = distance_range
-    
+
     active_zones = {}
     active_zone_count = 0
     presyn_membranes = membranes['presynaptic']
@@ -347,188 +363,137 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
     for pre_idx, presyn_data in enumerate(presyn_membranes):
         presyn_coords = presyn_data['vertices']
         presyn_normals = presyn_data['normals']
-        
+
         for post_idx, postsyn_data in enumerate(postsyn_membranes):
             postsyn_coords = postsyn_data['vertices']
             postsyn_normals = postsyn_data['normals']
-            
-            # Filter presynaptic points with normals pointing towards postsynaptic points               
-            # Build KD-tree for postsynaptic points
-            post_tree = KDTree(postsyn_coords)
-            
-            # Find presynaptic points within max_distance of any postsynaptic point
-            distances_pre, indices_pre = post_tree.query(presyn_coords, distance_upper_bound=max_distance)
-            
-            # Get active presynaptic points (those within distance range)
-            active_pre_mask = (distances_pre >= min_distance) & (distances_pre <= max_distance)
-            # Filter presynaptic points based on normals pointing towards postsynaptic points
-            active_pre_mask[active_pre_mask] = (np.sum(presyn_normals[active_pre_mask] * postsyn_normals[indices_pre[active_pre_mask]], axis=1) < 0)
 
+            post_tree = KDTree(postsyn_coords)
+            distances_pre, indices_pre = post_tree.query(presyn_coords, distance_upper_bound=max_distance)
+
+            active_pre_mask = (distances_pre >= min_distance) & (distances_pre <= max_distance)
             active_pre_indices = np.where(active_pre_mask)[0]
             active_pre_coords = presyn_coords[active_pre_indices] if len(active_pre_indices) > 0 else np.array([])
-            
-            # Find postsynaptic points within distance range of active presynaptic points
-            active_post_indices = np.array([])
-            if len(active_pre_coords) > 0:
-                # Build KD-tree for active presynaptic points
-                pre_tree = KDTree(active_pre_coords)
-                
-                # Find postsynaptic points within max_distance of active presynaptic points
-                distances_post, indices_post = pre_tree.query(postsyn_coords, distance_upper_bound=max_distance)
-                
-                # Get active postsynaptic points (those within distance range)
-                active_post_mask = (distances_post >= min_distance) & (distances_post <= max_distance)
-                # Filter postsynaptic points based on normals pointing towards presynaptic points
-                active_post_mask[active_post_mask] = (np.sum(postsyn_normals[active_post_mask] * presyn_normals[active_pre_mask][indices_post[active_post_mask]], axis=1) < 0)
-                active_post_indices = np.where(active_post_mask)[0]
-            
-            # If we found an active zone
-            if len(active_pre_indices) > 0 or len(active_post_indices) > 0:
-                active_zone_count += 1
-                zone_name = f"active_zone_pre{pre_idx+1}_post{post_idx+1}"
-                
-                # Calculate distance statistics for active presynaptic points
-                if len(active_pre_coords) > 0:
-                    distances_active = distances_pre[active_pre_indices]
-                    min_dist = np.min(distances_active)
-                    max_dist = np.max(distances_active)
-                    avg_dist = np.mean(distances_active)
-                else:
-                    min_dist = float('inf')
-                    max_dist = 0
-                    avg_dist = 0
-                
-                pre_mesh = trimesh.Trimesh(vertices=presyn_data['vertices'], faces=presyn_data['faces'])
-                post_mesh = trimesh.Trimesh(vertices=postsyn_data['vertices'], faces=postsyn_data['faces'])
-                # Get only faces that contain only active presynaptic points
-                active_pre_faces_mask = np.isin(pre_mesh.faces, active_pre_indices).all(axis=1)
-                active_pre_faces_indices = np.where(active_pre_faces_mask)[0]
-                active_pre_mesh = pre_mesh.submesh([active_pre_faces_indices], append=True)
 
-                active_post_faces_mask = np.isin(postsyn_data['faces'], active_post_indices).all(axis=1)
-                active_post_faces_indices = np.where(active_post_faces_mask)[0]
-                active_post_mesh = post_mesh.submesh([active_post_faces_indices], append=True)
-                
-                # Filter out back-facing faces (those facing away from postsynaptic side)
-                total_faces = len(active_pre_mesh.faces)
-                
-                # Require both presynaptic and postsynaptic points for proper calculation
-                if len(active_pre_coords) == 0:
-                    raise ValueError(f"No active presynaptic points found for {zone_name}. Cannot calculate active zone area.")
-                if len(postsyn_coords[active_post_indices]) == 0:
-                    raise ValueError(f"No active postsynaptic points found for {zone_name}. Cannot calculate active zone area.")
-                
-                # Calculate face normals for active presynaptic mesh
-                face_normals = active_pre_mesh.face_normals
-                face_centers = active_pre_mesh.triangles_center
-                
-                # Calculate vector from face center to postsynaptic center
-                postsyn_center = np.mean(postsyn_coords[active_post_indices], axis=0)
-                face_to_postsyn_vectors = postsyn_center - face_centers
-                
-                # Normalize vectors
-                face_to_postsyn_vectors = face_to_postsyn_vectors / np.linalg.norm(face_to_postsyn_vectors, axis=1, keepdims=True)
-                
-                # Calculate dot product between face normals and vectors to postsynaptic center
-                # Positive dot product means face is pointing toward postsynaptic side
-                dot_products = np.sum(face_normals * face_to_postsyn_vectors, axis=1)
-                
-                # Keep only faces pointing toward postsynaptic side (positive dot product)
-                front_facing_mask = dot_products > 0
-                front_facing_face_indices = np.where(front_facing_mask)[0]
-                back_facing_face_indices = np.where(~front_facing_mask)[0]
-                front_facing_faces = len(front_facing_face_indices)
-                
-                if len(front_facing_face_indices) == 0:
-                    raise ValueError(f"No front-facing faces found for {zone_name}. Cannot calculate active zone area.")
-                
-                # Create mesh with only front-facing faces (outer-facing toward cleft)
-                front_facing_mesh = active_pre_mesh.submesh([front_facing_face_indices], append=True)
-                active_pre_area = front_facing_mesh.area / 1e6  # Convert to µm²
-                # Derive explicit outer/inner point sets from face orientation
-                pre_outer_vertex_indices = np.unique(active_pre_mesh.faces[front_facing_face_indices].reshape(-1))
-                pre_inner_vertex_indices = np.unique(active_pre_mesh.faces[back_facing_face_indices].reshape(-1)) if len(back_facing_face_indices) > 0 else np.array([], dtype=int)
-                active_pre_outer_points = active_pre_mesh.vertices[pre_outer_vertex_indices] if len(pre_outer_vertex_indices) > 0 else np.array([])
-                active_pre_inner_points = active_pre_mesh.vertices[pre_inner_vertex_indices] if len(pre_inner_vertex_indices) > 0 else np.array([])
-                
-                # Calculate postsynaptic active zone area (faces pointing toward presynaptic side)
-                total_post_faces = len(active_post_mesh.faces)
-                if total_post_faces > 0:
-                    # Calculate face normals for active postsynaptic mesh
-                    post_face_normals = active_post_mesh.face_normals
-                    post_face_centers = active_post_mesh.triangles_center
-                    
-                    # Calculate vector from face center to presynaptic center
-                    presyn_center = np.mean(active_pre_coords, axis=0)
-                    post_face_to_presyn_vectors = presyn_center - post_face_centers
-                    
-                    # Normalize vectors
-                    post_face_to_presyn_vectors = post_face_to_presyn_vectors / np.linalg.norm(post_face_to_presyn_vectors, axis=1, keepdims=True)
-                    
-                    # Calculate dot product between face normals and vectors to presynaptic center
-                    # Positive dot product means face is pointing toward presynaptic side
-                    post_dot_products = np.sum(post_face_normals * post_face_to_presyn_vectors, axis=1)
-                    
-                    # Keep only faces pointing toward presynaptic side (positive dot product)
-                    post_front_facing_mask = post_dot_products > 0
-                    post_front_facing_face_indices = np.where(post_front_facing_mask)[0]
-                    post_back_facing_face_indices = np.where(~post_front_facing_mask)[0]
-                    post_front_facing_faces = len(post_front_facing_face_indices)
-                    
-                    if len(post_front_facing_face_indices) == 0:
-                        raise ValueError(f"No front-facing faces found on postsynaptic side for {zone_name}. Cannot calculate postsynaptic active zone area.")
-                    
-                    # Create mesh with only front-facing faces (outer-facing toward cleft)
-                    post_front_facing_mesh = active_post_mesh.submesh([post_front_facing_face_indices], append=True)
-                    active_post_area = post_front_facing_mesh.area / 1e6  # Convert to µm²
-                    post_outer_vertex_indices = np.unique(active_post_mesh.faces[post_front_facing_face_indices].reshape(-1))
-                    post_inner_vertex_indices = np.unique(active_post_mesh.faces[post_back_facing_face_indices].reshape(-1)) if len(post_back_facing_face_indices) > 0 else np.array([], dtype=int)
-                    active_post_outer_points = active_post_mesh.vertices[post_outer_vertex_indices] if len(post_outer_vertex_indices) > 0 else np.array([])
-                    active_post_inner_points = active_post_mesh.vertices[post_inner_vertex_indices] if len(post_inner_vertex_indices) > 0 else np.array([])
-                else:
-                    raise ValueError(f"No faces found in postsynaptic mesh for {zone_name}. Cannot calculate postsynaptic active zone area.")
-                
-                active_zones[zone_name] = {
-                    'presynaptic_membrane_index': pre_idx + 1,
-                    'postsynaptic_membrane_index': post_idx + 1,
-                    'active_presynaptic_points': active_pre_coords,
-                    'active_presynaptic_outer_points': active_pre_outer_points,
-                    'active_presynaptic_inner_points': active_pre_inner_points,
-                    'active_presynaptic_faces': active_pre_mesh.faces,
-                    'active_presynaptic_mesh': active_pre_mesh,
-                    'active_presynaptic_area': active_pre_area,
-                    'total_faces': total_faces,
-                    'front_facing_faces': front_facing_faces,
-                    'back_facing_faces': total_faces - front_facing_faces,
-                    'active_postsynaptic_points': postsyn_coords[active_post_indices] if len(active_post_indices) > 0 else np.array([]),
-                    'active_postsynaptic_outer_points': active_post_outer_points,
-                    'active_postsynaptic_inner_points': active_post_inner_points,
-                    'active_postsynaptic_faces': active_post_mesh.faces,
-                    'active_postsynaptic_mesh': active_post_mesh,
-                    'active_postsynaptic_area': active_post_area,
-                    'postsynaptic_total_faces': total_post_faces,
-                    'postsynaptic_front_facing_faces': post_front_facing_faces,
-                    'postsynaptic_back_facing_faces': total_post_faces - post_front_facing_faces,
-                    'active_presynaptic_indices': active_pre_indices,
-                    'active_postsynaptic_indices': active_post_indices,
-                    'min_distance': min_dist,
-                    'max_distance': max_dist,
-                    'avg_distance': avg_dist,
-                    'active_pre_count': len(active_pre_indices),
-                    'active_post_count': len(active_post_indices)
-                }
-                #
-                # Found active zone with presynaptic and postsynaptic points
+            active_post_indices = np.array([], dtype=int)
+            if len(active_pre_coords) > 0:
+                pre_tree = KDTree(active_pre_coords)
+                distances_post, indices_post = pre_tree.query(postsyn_coords, distance_upper_bound=max_distance)
+                active_post_mask = (distances_post >= min_distance) & (distances_post <= max_distance)
+                active_post_indices = np.where(active_post_mask)[0]
+
+            if len(active_pre_indices) == 0 or len(active_post_indices) == 0:
+                print(f"No active zone found between presynaptic {pre_idx + 1} and postsynaptic {post_idx + 1}")
+                continue
+
+            active_zone_count += 1
+            zone_name = f"active_zone_pre{pre_idx + 1}_post{post_idx + 1}"
+
+            distances_active = distances_pre[active_pre_indices]
+            min_dist = float(np.min(distances_active))
+            max_dist = float(np.max(distances_active))
+            avg_dist = float(np.mean(distances_active))
+
+            dots_pre = np.sum(
+                presyn_normals[active_pre_indices] * postsyn_normals[indices_pre[active_pre_indices]],
+                axis=1,
+            )
+            pre_outer_local = dots_pre < 0
+            pre_outer_global = active_pre_indices[pre_outer_local]
+            pre_inner_global = active_pre_indices[~pre_outer_local]
+            active_pre_outer_points = presyn_coords[pre_outer_global]
+            active_pre_inner_points = presyn_coords[pre_inner_global]
+
+            nn_pre_for_post = active_pre_indices[indices_post[active_post_indices]]
+            dots_post = np.sum(
+                postsyn_normals[active_post_indices] * presyn_normals[nn_pre_for_post],
+                axis=1,
+            )
+            post_outer_local = dots_post < 0
+            post_outer_global = active_post_indices[post_outer_local]
+            post_inner_global = active_post_indices[~post_outer_local]
+            active_post_outer_points = postsyn_coords[post_outer_global]
+            active_post_inner_points = postsyn_coords[post_inner_global]
+
+            pre_mesh = trimesh.Trimesh(vertices=presyn_data['vertices'], faces=presyn_data['faces'])
+            post_mesh = trimesh.Trimesh(vertices=postsyn_data['vertices'], faces=postsyn_data['faces'])
+
+            active_pre_faces_mask = np.isin(pre_mesh.faces, active_pre_indices).all(axis=1)
+            active_pre_faces_indices = np.where(active_pre_faces_mask)[0]
+            active_pre_mesh = pre_mesh.submesh([active_pre_faces_indices], append=True)
+
+            active_post_faces_mask = np.isin(postsyn_data['faces'], active_post_indices).all(axis=1)
+            active_post_faces_indices = np.where(active_post_faces_mask)[0]
+            active_post_mesh = post_mesh.submesh([active_post_faces_indices], append=True)
+
+            total_faces = len(active_pre_mesh.faces)
+            total_post_faces = len(active_post_mesh.faces)
+
+            pre_outer_face_mask = np.isin(active_pre_mesh.faces, pre_outer_global).all(axis=1)
+            pre_inner_face_mask = np.isin(active_pre_mesh.faces, pre_inner_global).all(axis=1)
+            front_facing_faces = int(np.sum(pre_outer_face_mask))
+            back_facing_faces = int(np.sum(pre_inner_face_mask))
+
+            if np.any(pre_outer_face_mask):
+                pre_outer_mesh = active_pre_mesh.submesh([np.where(pre_outer_face_mask)[0]], append=True)
+                active_pre_area = pre_outer_mesh.area / 1e6
             else:
-                print(f"No active zone found between presynaptic {pre_idx+1} and postsynaptic {post_idx+1}")
+                active_pre_area = 0.0
+
+            if total_post_faces > 0:
+                post_outer_face_mask = np.isin(active_post_mesh.faces, post_outer_global).all(axis=1)
+                post_inner_face_mask = np.isin(active_post_mesh.faces, post_inner_global).all(axis=1)
+                post_front_facing_faces = int(np.sum(post_outer_face_mask))
+                post_back_facing_faces = int(np.sum(post_inner_face_mask))
+
+                if np.any(post_outer_face_mask):
+                    post_outer_mesh = active_post_mesh.submesh([np.where(post_outer_face_mask)[0]], append=True)
+                    active_post_area = post_outer_mesh.area / 1e6
+                else:
+                    active_post_area = 0.0
+            else:
+                post_front_facing_faces = 0
+                post_back_facing_faces = 0
+                active_post_area = 0.0
+
+            active_zones[zone_name] = {
+                'presynaptic_membrane_index': pre_idx + 1,
+                'postsynaptic_membrane_index': post_idx + 1,
+                'active_presynaptic_points': active_pre_coords,
+                'active_presynaptic_outer_points': active_pre_outer_points,
+                'active_presynaptic_inner_points': active_pre_inner_points,
+                'active_presynaptic_faces': active_pre_mesh.faces,
+                'active_presynaptic_mesh': active_pre_mesh,
+                'active_presynaptic_area': active_pre_area,
+                'total_faces': total_faces,
+                'front_facing_faces': front_facing_faces,
+                'back_facing_faces': back_facing_faces,
+                'active_postsynaptic_points': postsyn_coords[active_post_indices],
+                'active_postsynaptic_outer_points': active_post_outer_points,
+                'active_postsynaptic_inner_points': active_post_inner_points,
+                'active_postsynaptic_faces': active_post_mesh.faces,
+                'active_postsynaptic_mesh': active_post_mesh,
+                'active_postsynaptic_area': active_post_area,
+                'postsynaptic_total_faces': total_post_faces,
+                'postsynaptic_front_facing_faces': post_front_facing_faces,
+                'postsynaptic_back_facing_faces': post_back_facing_faces,
+                'active_presynaptic_indices': active_pre_indices,
+                'active_postsynaptic_indices': active_post_indices,
+                'min_distance': min_dist,
+                'max_distance': max_dist,
+                'avg_distance': avg_dist,
+                'active_pre_count': len(active_pre_indices),
+                'active_post_count': len(active_post_indices),
+            }
+
     return {
         'active_zones': active_zones,
         'total_active_zones': active_zone_count,
-        'distance_range': distance_range
+        'distance_range': distance_range,
     }
 
 
-def save_active_zone_segmentations(active_zones: Dict[str, Any], tomogram_path, alignment_dir: str = "best_alignment"):
+def save_active_zone_segmentations(active_zones: Dict[str, Any], tomogram_path, alignment_dir: str):
     """
     Save active zone segmentations to files.
     
@@ -536,6 +501,7 @@ def save_active_zone_segmentations(active_zones: Dict[str, Any], tomogram_path, 
         active_zones: Active zones dictionary from find_active_zones
         tomogram_path: Path to tomogram directory (str or Path)
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_path = Path(tomogram_path)
     stt_results_dir = tomogram_path / alignment_dir / "STT_results"
     
@@ -561,7 +527,7 @@ def save_active_zone_segmentations(active_zones: Dict[str, Any], tomogram_path, 
             np.savetxt(active_zone_dir / f"{zone_name}_post_inner.txt", post_inner, fmt='%.6e')
 
 
-def match_active_zones_by_aunps(tomogram_path, active_zone_indices, all_active_zones, alignment_dir: str = "best_alignment") -> Dict[int, str]:
+def match_active_zones_by_aunps(tomogram_path, active_zone_indices, all_active_zones, alignment_dir: str) -> Dict[int, str]:
     """
     Match active zone indices to zone names using smart matching based on AuNP locations.
     This is done once and the mapping can be reused.
@@ -574,6 +540,7 @@ def match_active_zones_by_aunps(tomogram_path, active_zone_indices, all_active_z
     Returns:
         Dictionary mapping active_zone_index -> zone_name
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     az_mapping = {}
     
     # Load AuNP data for smart matching
@@ -648,8 +615,9 @@ def match_active_zones_by_aunps(tomogram_path, active_zone_indices, all_active_z
     return az_mapping
 
 
-def save_active_zone_mapping(tomogram_path, az_mapping: Dict[int, str], alignment_dir: str = "best_alignment"):
+def save_active_zone_mapping(tomogram_path, az_mapping: Dict[int, str], alignment_dir: str):
     """Save the active zone index to zone name mapping to a JSON file."""
+    alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_path = Path(tomogram_path)
     active_zone_dir = tomogram_path / alignment_dir / "STT_results" / "activezone"
     active_zone_dir.mkdir(parents=True, exist_ok=True)
@@ -661,8 +629,9 @@ def save_active_zone_mapping(tomogram_path, az_mapping: Dict[int, str], alignmen
     print(f"Saved active zone mapping to {mapping_file}")
 
 
-def load_active_zone_mapping(tomogram_path, alignment_dir: str = "best_alignment") -> Dict[int, str]:
+def load_active_zone_mapping(tomogram_path, alignment_dir: str) -> Dict[int, str]:
     """Load the active zone index to zone name mapping from JSON file."""
+    alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_path = Path(tomogram_path)
     active_zone_dir = tomogram_path / alignment_dir / "STT_results" / "activezone"
     mapping_file = active_zone_dir / "active_zone_mapping.json"
@@ -678,7 +647,13 @@ def load_active_zone_mapping(tomogram_path, alignment_dir: str = "best_alignment
     return {}
 
 
-def define_active_zone(tomogram_path, active_zone_indices=None, distance_range=None, alignment_dir: str = "best_alignment") -> Dict[str, Any]:
+def define_active_zone(
+    tomogram_path,
+    active_zone_indices=None,
+    distance_range=None,
+    *,
+    alignment_dir: str,
+) -> Dict[str, Any]:
     """
     Define active zone in tomogram.
     If active_zone_indices is specified, only includes active zones that correspond to those indices.
@@ -691,6 +666,7 @@ def define_active_zone(tomogram_path, active_zone_indices=None, distance_range=N
     Returns:
         Dictionary containing active zone analysis results.
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     print(f"Defining active zone in {Path(tomogram_path).name}")
     
     # Use custom distance range if provided, otherwise use default
@@ -817,7 +793,7 @@ def define_active_zone(tomogram_path, active_zone_indices=None, distance_range=N
     return results
 
 
-def import_active_zone_segmentations(tomogram_path, alignment_dir: str = "best_alignment") -> Dict[str, Any]:
+def import_active_zone_segmentations(tomogram_path, alignment_dir: str) -> Dict[str, Any]:
     """
     Import active zone segmentation files.
     
@@ -827,6 +803,7 @@ def import_active_zone_segmentations(tomogram_path, alignment_dir: str = "best_a
     Returns:
         Dictionary containing active zone segmentations
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_path = Path(tomogram_path)
     active_zone_dir = tomogram_path / alignment_dir / "STT_results" / "activezone"
     
@@ -936,7 +913,13 @@ def calculate_cleft_width_for_active_zone(pre_coords: np.ndarray, post_coords: n
     }
 
 
-def calculate_cleft_width(tomogram_path, active_zone_indices=None, set_name=None, alignment_dir: str = "best_alignment") -> Dict[str, Any]:
+def calculate_cleft_width(
+    tomogram_path,
+    active_zone_indices=None,
+    set_name=None,
+    *,
+    alignment_dir: str,
+) -> Dict[str, Any]:
     """
     Calculate synaptic cleft width for active zones.
     If active_zone_indices is specified, only includes active zones that correspond to those indices.
@@ -949,6 +932,7 @@ def calculate_cleft_width(tomogram_path, active_zone_indices=None, set_name=None
     Returns:
         Dictionary containing cleft width analysis results.
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     print(f"Calculating cleft width in {Path(tomogram_path).name}")
     
     try:
@@ -1183,7 +1167,14 @@ def define_active_zonogram(active_zones):
     }
 
 
-def extract_active_zonogram(active_zonograms, active_zones, tomo_path, tomo_type='ddw'):
+def extract_active_zonogram(
+    active_zonograms,
+    active_zones,
+    tomo_path,
+    tomo_type="ddw",
+    *,
+    alignment_dir: str,
+):
     """
     Extract active zonogram data.
     
@@ -1191,6 +1182,7 @@ def extract_active_zonogram(active_zonograms, active_zones, tomo_path, tomo_type
         active_zonograms: Dictionary containing active zonogram data.
         active_zones: Dictionary containing active zone data.
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     import mrcfile
     import torch
     from torch_transform_image import affine_transform_image_3d
@@ -1210,9 +1202,9 @@ def extract_active_zonogram(active_zonograms, active_zones, tomo_path, tomo_type
     rendered_zonograms = {}
     # Open tomogram
 
-    mrcs = list((Path(tomo_path) / 'best_alignment').glob(f'*{tomo_type}.mrc'))
+    mrcs = list((Path(tomo_path) / alignment_dir).glob(f'*{tomo_type}.mrc'))
     if not mrcs:
-        print(f"No {tomo_type} MRC files found in {Path(tomo_path) / 'best_alignment'}")
+        print(f"No {tomo_type} MRC files found in {Path(tomo_path) / alignment_dir}")
         return {
             'status': 'no_mrc_files',
             'active_zone_count': 0,

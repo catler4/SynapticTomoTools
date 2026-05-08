@@ -4,6 +4,7 @@ Script to generate mini active zonograms for small clusters (< 11 AuNPs).
 Based on run_zonogram.py but creates smaller, cluster-specific zonograms.
 """
 
+import argparse
 import sys
 from pathlib import Path
 import numpy as np
@@ -23,6 +24,7 @@ from synaptic_tomo_tools.activezone import (
     define_active_zone, define_active_zonogram, extract_active_zonogram,
     import_membrane_segmentations_from_glb, find_active_zones_from_glb
 )
+from synaptic_tomo_tools.alignment_utils import require_alignment_dir
 from scipy.spatial import KDTree
 
 def render_mini_zonogram_xy_only(active_zone_data):
@@ -49,11 +51,22 @@ def render_mini_zonogram_xy_only(active_zone_data):
     plt.tight_layout()
     return fig, axxy
 
-def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_data, tomogram_path, zonogram_dir, membrane_data, active_zones_data):
+def create_mini_zonogram_for_cluster(
+    cluster_data,
+    cluster_id,
+    tomogram_data,
+    tomogram_path,
+    zonogram_dir,
+    membrane_data,
+    active_zones_data,
+    *,
+    alignment_dir: str,
+):
     """
     Create a mini zonogram centered on a specific small cluster.
     Uses the same transformation matrix calculation as regular active zonograms.
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     print(f"  Creating mini zonogram for cluster {cluster_id} with {len(cluster_data)} AuNPs")
     
     # Get cluster center
@@ -145,7 +158,9 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_data, to
             'active_zone_count': 1,
             'zonogram_data': {zone_name_to_use: mini_zonogram_data}
         }
-        extracted_data = extract_active_zonogram(mini_zonogram_dict, active_zones_data, tomogram_path)
+        extracted_data = extract_active_zonogram(
+            mini_zonogram_dict, active_zones_data, tomogram_path, alignment_dir=alignment_dir
+        )
         
         if extracted_data is None or 'rendered_zonograms' not in extracted_data or zone_name_to_use not in extracted_data['rendered_zonograms']:
             print(f"    Failed to extract mini zonogram for cluster {cluster_id}")
@@ -282,10 +297,28 @@ def create_mini_zonogram_for_cluster(cluster_data, cluster_id, tomogram_data, to
         print(f"    Error creating mini zonogram for cluster {cluster_id}: {e}")
         return False
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Generate mini active zonograms for small AuNP clusters."
+    )
+    parser.add_argument(
+        "--tomogram-path",
+        default="data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15",
+        help="Path to tomogram directory",
+    )
+    parser.add_argument(
+        "--alignment-dir",
+        required=True,
+        help="Subdirectory under the tomogram (same as CSV alignment_dir column; required).",
+    )
+    return parser.parse_args()
+
+
 def main():
-    # Tomogram path
-    tomogram_path = "data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15"
-    
+    args = parse_args()
+    tomogram_path = args.tomogram_path
+    alignment_dir = require_alignment_dir(args.alignment_dir, context="--alignment-dir")
+
     print(f"Running mini zonogram analysis on: {tomogram_path}")
     
     print()  # Spacer line
@@ -294,7 +327,9 @@ def main():
     print("Step 1: Loading membrane data and active zones...")
     try:
         # Load membrane data using GLB method
-        membrane_data = import_membrane_segmentations_from_glb(tomogram_path)
+        membrane_data = import_membrane_segmentations_from_glb(
+            tomogram_path, alignment_dir=alignment_dir
+        )
         print(f"Loaded membrane data")
         
         # Find active zones
@@ -309,7 +344,7 @@ def main():
     
     # Step 2: Load cluster data
     print("Step 2: Loading cluster data...")
-    cluster_data_path = Path(tomogram_path) / "best_alignment" / "STT_results" / "aunps" / "aunp_clusters.star"
+    cluster_data_path = Path(tomogram_path) / alignment_dir / "STT_results" / "aunps" / "aunp_clusters.star"
     
     if not cluster_data_path.exists():
         print(f"Error: Cluster data not found at {cluster_data_path}")
@@ -343,7 +378,12 @@ def main():
     
     # Step 4: Create mini zonograms directory
     print("Step 4: Creating mini zonograms...")
-    mini_zonogram_dir = Path(tomogram_path) / "best_alignment" / "active_zonograms" / "aunp_cluster_mini_active_zonograms"
+    mini_zonogram_dir = (
+        Path(tomogram_path)
+        / alignment_dir
+        / "active_zonograms"
+        / "aunp_cluster_mini_active_zonograms"
+    )
     mini_zonogram_dir.mkdir(parents=True, exist_ok=True)
     
     # Step 5: Generate mini zonograms for each small cluster
@@ -355,7 +395,14 @@ def main():
         
         # Create mini zonogram
         success = create_mini_zonogram_for_cluster(
-            cluster_data, cluster_id, None, tomogram_path, mini_zonogram_dir, membrane_data, active_zones_data
+            cluster_data,
+            cluster_id,
+            None,
+            tomogram_path,
+            mini_zonogram_dir,
+            membrane_data,
+            active_zones_data,
+            alignment_dir=alignment_dir,
         )
         
         if success:

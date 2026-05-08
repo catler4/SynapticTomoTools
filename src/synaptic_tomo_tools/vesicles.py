@@ -2,6 +2,8 @@
 
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
+
+from .alignment_utils import require_alignment_dir
 import numpy as np
 from scipy.spatial.distance import cdist
 from scipy.spatial import ConvexHull, KDTree
@@ -16,7 +18,7 @@ from functools import partial
 import mrcfile
 
 
-def load_tomogram_data(tomogram_path, alignment_dir: str = "best_alignment") -> Optional[np.ndarray]:
+def load_tomogram_data(tomogram_path, alignment_dir: str) -> Optional[np.ndarray]:
     """
     Load tomogram data from the *ddw.mrc file.
     
@@ -26,6 +28,7 @@ def load_tomogram_data(tomogram_path, alignment_dir: str = "best_alignment") -> 
     Returns:
         Tomogram data as numpy array, or None if file not found
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_path = Path(tomogram_path)
     
     # Look for the *ddw.mrc file in the selected alignment subdirectory
@@ -122,7 +125,7 @@ def check_sphere_overlap(center1: np.ndarray, radius1: float,
     return bool(distance < (radius1 + radius2))
 
 
-def import_vesicle_segmentations(tomogram_path, alignment_dir: str = "best_alignment") -> List[Dict[str, Any]]:
+def import_vesicle_segmentations(tomogram_path, alignment_dir: str) -> List[Dict[str, Any]]:
     """
     Import vesicle segmentation files and fit spheres to each.
     
@@ -132,6 +135,7 @@ def import_vesicle_segmentations(tomogram_path, alignment_dir: str = "best_align
     Returns:
         List of dictionaries containing vesicle data
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_path = Path(tomogram_path)
     aunps_dir = tomogram_path / alignment_dir / "aunps"
     
@@ -230,7 +234,7 @@ def remove_overlapping_vesicles(vesicles: List[Dict[str, Any]]) -> List[Dict[str
     return non_overlapping
 
 
-def import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir: str = "best_alignment") -> Dict[str, Dict[str, np.ndarray]]:
+def import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir: str) -> Dict[str, Dict[str, np.ndarray]]:
     """
     Import presynaptic membranes and their associated active zones.
     Note: Active zones are already filtered by the active zone analysis step, so only
@@ -242,6 +246,7 @@ def import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir: 
     Returns:
         Dictionary mapping presynaptic membrane names to their active zone points
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_path = Path(tomogram_path)
     aunps_dir = tomogram_path / alignment_dir / "aunps"
     stt_results_dir = tomogram_path / alignment_dir / "STT_results" / "activezone"
@@ -434,7 +439,7 @@ def calculate_vesicle_distances_to_closest_active_zones(vesicles: List[Dict[str,
     return distances, membrane_names
 
 
-def save_vesicle_results(vesicles: List[Dict[str, Any]], tomogram_path, alignment_dir: str = "best_alignment"):
+def save_vesicle_results(vesicles: List[Dict[str, Any]], tomogram_path, alignment_dir: str):
     """
     Save vesicle analysis results to JSON file.
     
@@ -442,6 +447,7 @@ def save_vesicle_results(vesicles: List[Dict[str, Any]], tomogram_path, alignmen
         vesicles: List of vesicle dictionaries
         tomogram_path: Path to tomogram directory (str or Path)
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_path = Path(tomogram_path)
     stt_results_dir = tomogram_path / alignment_dir / "STT_results"
     
@@ -505,7 +511,8 @@ def detect_vesicles(
     tomogram_path,
     set_name=None,
     vesicle_distance_threshold=10.0,
-    alignment_dir: str = "best_alignment",
+    *,
+    alignment_dir: str,
     fusing_perimeter_threshold: float = 1.0,
 ) -> Dict[str, Any]:
     """
@@ -519,6 +526,7 @@ def detect_vesicles(
     Returns:
         Dictionary containing vesicle detection results.
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     print(f"Detecting vesicles in {Path(tomogram_path).name}")
     
     try:
@@ -710,7 +718,7 @@ def detect_vesicles(
         }
 
 
-def measure_distances_to_az(tomogram_path, alignment_dir: str = "best_alignment") -> Dict[str, Any]:
+def measure_distances_to_az(tomogram_path, alignment_dir: str) -> Dict[str, Any]:
     """
     Measure distances from vesicles to active zone.
     This function now uses pre-calculated distances from detect_vesicles.
@@ -721,6 +729,7 @@ def measure_distances_to_az(tomogram_path, alignment_dir: str = "best_alignment"
     Returns:
         Dictionary containing distance measurement results.
     """
+    alignment_dir = require_alignment_dir(alignment_dir)
     print(f"Loading vesicle distance measurements for {Path(tomogram_path).name}")
     
     try:

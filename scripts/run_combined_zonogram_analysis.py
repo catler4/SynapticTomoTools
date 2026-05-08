@@ -37,7 +37,7 @@ def main():
         print(f"Regular zonograms: {result.get('regular_zonograms', 0)}")
         print(f"Mini zonograms: {result.get('mini_zonograms', 0)}")
         print(f"Total files created: {len(result.get('files_created', []))}")
-        else:
+    else:
         print(f"Zonogram analysis failed: {result.get('reason', 'Unknown error')}")
         sys.exit(1)
 

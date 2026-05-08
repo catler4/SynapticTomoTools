@@ -3,6 +3,7 @@
 Script to run define_active_zonogram function on a tomogram using the exact same approach as findingampa.
 """
 
+import argparse
 import sys
 from pathlib import Path
 import numpy as np
@@ -172,11 +173,23 @@ def select_aunps_findingampa_style(aunp_data, az_data, res_ddw, threshold=3.8, s
     
     return fig, significant_picks_mask, selected_aunp_pos, selected_aunp_pos_mask, selected_aunp_pos_postsyn_mask
 
-def select_aunps_by_cluster_findingampa_style(aunp_data, cluster_data, az_data, res_ddw, threshold=3.8, skip_segment_activezone=False, tomogram_path=None):
+def select_aunps_by_cluster_findingampa_style(
+    aunp_data,
+    cluster_data,
+    az_data,
+    res_ddw,
+    threshold=3.8,
+    skip_segment_activezone=False,
+    tomogram_path=None,
+    *,
+    alignment_dir: str,
+):
     """
     Select AuNPs and color them by cluster assignment using the exact same approach as findingampa.
     Based on findingampa/src/findingampa/utils/analysis.py:select_aunps() but with cluster coloring.
     """
+    from synaptic_tomo_tools.alignment_utils import require_alignment_dir
+    alignment_dir = require_alignment_dir(alignment_dir, context="run_zonogram cluster overlay")
     # Load AuNP data if it's a file path
     if isinstance(aunp_data, str) or isinstance(aunp_data, Path):
         try:
@@ -351,7 +364,9 @@ def select_aunps_by_cluster_findingampa_style(aunp_data, cluster_data, az_data, 
             from synaptic_tomo_tools.aunps import compute_fusion_points
             
             # Try to load cached fusion points first
-            fusion_points_cache_path = Path(tomogram_path) / "best_alignment" / "STT_results" / "vesicles" / "fusion_points.npy"
+            fusion_points_cache_path = (
+                Path(tomogram_path) / alignment_dir / "STT_results" / "vesicles" / "fusion_points.npy"
+            )
             fusion_points = None
             
             if fusion_points_cache_path.exists():
@@ -364,7 +379,9 @@ def select_aunps_by_cluster_findingampa_style(aunp_data, cluster_data, az_data, 
             # Compute fusion points if not cached
             if fusion_points is None:
                 print(f"Computing fusion points for {Path(tomogram_path).name}...")
-                fusion_points = compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0)
+                fusion_points = compute_fusion_points(
+                    tomogram_path, vesicle_distance_threshold=20.0, alignment_dir=alignment_dir
+                )
                 print(f"Computed {len(fusion_points)} fusion points")
                 
                 # Cache the fusion points for future use
@@ -408,10 +425,29 @@ def select_aunps_by_cluster_findingampa_style(aunp_data, cluster_data, az_data, 
     
     return fig, significant_picks_mask, selected_aunp_pos, selected_aunp_pos_mask, selected_aunp_pos_postsyn_mask
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Run active zonogram analysis on a tomogram (findingampa style)."
+    )
+    parser.add_argument(
+        "--tomogram-path",
+        default="data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15",
+        help="Path to tomogram directory",
+    )
+    parser.add_argument(
+        "--alignment-dir",
+        required=True,
+        help="Subdirectory under the tomogram with aligned data (from CSV alignment_dir column; no default).",
+    )
+    return parser.parse_args()
+
+
 def main():
-    # Tomogram path
-    tomogram_path = "data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15"
-    
+    args = parse_args()
+    tomogram_path = args.tomogram_path
+    from synaptic_tomo_tools.alignment_utils import require_alignment_dir
+    alignment_dir = require_alignment_dir(args.alignment_dir, context="--alignment-dir")
+
     print(f"Running active zone analysis on: {tomogram_path}")
     
     print()  # Spacer line
@@ -420,7 +456,7 @@ def main():
     print("Step 1: Importing membranes and finding active zones...")
     from synaptic_tomo_tools.activezone import import_membrane_segmentations_from_glb, find_active_zones_from_glb
     
-    membranes = import_membrane_segmentations_from_glb(tomogram_path)
+    membranes = import_membrane_segmentations_from_glb(tomogram_path, alignment_dir=alignment_dir)
     active_zones_data = find_active_zones_from_glb(membranes, distance_range=(10.0, 40.0))
     
     print(f"Found {active_zones_data['total_active_zones']} active zones")
@@ -432,7 +468,7 @@ def main():
     
     # Save active zone segmentations (this is what define_active_zone does that we need)
     from synaptic_tomo_tools.activezone import save_active_zone_segmentations, load_membrane_volumes
-    save_active_zone_segmentations(active_zones_data, tomogram_path)
+    save_active_zone_segmentations(active_zones_data, tomogram_path, alignment_dir=alignment_dir)
     
     # Calculate summary statistics (extracted from define_active_zone)
     total_active_pre_points = sum(len(zone['active_presynaptic_points']) for zone in active_zones_data['active_zones'].values())
@@ -448,7 +484,7 @@ def main():
     avg_active_zone_area = np.mean(active_zone_areas) if active_zone_areas else 0.0
     
     # Load membrane volumes
-    volumes_data = load_membrane_volumes(tomogram_path)
+    volumes_data = load_membrane_volumes(tomogram_path, alignment_dir=alignment_dir)
     
     # Create results summary (similar to what define_active_zone returns)
     active_zone_results = {
@@ -480,11 +516,17 @@ def main():
     print("Step 4: Extracting and saving active zonograms (findingampa style)...")
     
     # Create active_zonograms directory if it doesn't exist
-    zonogram_dir = Path(tomogram_path) / "best_alignment" / "active_zonograms"
+    zonogram_dir = Path(tomogram_path) / alignment_dir / "active_zonograms"
     zonogram_dir.mkdir(parents=True, exist_ok=True)
     
     # Extract zonograms
-    extracted_results = extract_active_zonogram(zonogram_results, active_zones_data, tomogram_path, tomo_type='ddw')
+    extracted_results = extract_active_zonogram(
+        zonogram_results,
+        active_zones_data,
+        tomogram_path,
+        tomo_type='ddw',
+        alignment_dir=alignment_dir,
+    )
     
     if extracted_results['status'] == 'completed':
         print(f"Successfully extracted {len(extracted_results['rendered_zonograms'])} zonograms")
@@ -534,7 +576,7 @@ def main():
             selected_filepath = zonogram_dir / selected_filename
             
             # Try to load AuNP data
-            aunp_data_path = Path(tomogram_path) / "best_alignment" / "aunps" / "aunp_nearest_neighbor_distances.csv"
+            aunp_data_path = Path(tomogram_path) / alignment_dir / "aunps" / "aunp_nearest_neighbor_distances.csv"
             
             if aunp_data_path.exists():
                 try:
@@ -606,19 +648,22 @@ def main():
             cluster_fusion_filepath = zonogram_dir / cluster_fusion_filename
             
             # Try to load cluster data
-            cluster_data_path = Path(tomogram_path) / "best_alignment" / "STT_results" / "aunps" / "aunp_clusters.star"
+            cluster_data_path = (
+                Path(tomogram_path) / alignment_dir / "STT_results" / "aunps" / "aunp_clusters.star"
+            )
             
             if cluster_data_path.exists() and aunp_data_path.exists():
                 try:
                     # First, generate the original version without fusion points
                     fig_original, significant_picks_mask, selected_aunp_pos, selected_aunp_pos_mask, selected_aunp_pos_postsyn_mask = select_aunps_by_cluster_findingampa_style(
-                        aunp_data_path, 
+                        aunp_data_path,
                         cluster_data_path,
-                        zonogram_metadata, 
-                        res_ddw, 
-                        threshold=3.8, 
+                        zonogram_metadata,
+                        res_ddw,
+                        threshold=3.8,
                         skip_segment_activezone=False,
-                        tomogram_path=None  # No fusion points for original version
+                        tomogram_path=None,  # No fusion points for original version
+                        alignment_dir=alignment_dir,
                     )
                     
                     if fig_original is not None:
@@ -628,13 +673,14 @@ def main():
                     
                     # Then, generate the version with fusion points
                     fig_with_fusion, _, _, _, _ = select_aunps_by_cluster_findingampa_style(
-                        aunp_data_path, 
+                        aunp_data_path,
                         cluster_data_path,
-                        zonogram_metadata, 
-                        res_ddw, 
-                        threshold=3.8, 
+                        zonogram_metadata,
+                        res_ddw,
+                        threshold=3.8,
                         skip_segment_activezone=False,
-                        tomogram_path=tomogram_path  # Include fusion points
+                        tomogram_path=tomogram_path,  # Include fusion points
+                        alignment_dir=alignment_dir,
                     )
                     
                     if fig_with_fusion is not None:

@@ -7,8 +7,8 @@ then extracts the XYZ coordinates for those specific clusters and saves them
 as text files.
 
 Expected CSV format:
-tomogram_name,cluster_number,set
-20241030_AMmilled12-1_15,1,15F1
+tomogram_name,cluster_number,set,alignment_dir
+20241030_AMmilled12-1_15,1,15F1,best_alignment
 20241030_AMmilled12-1_15,2,15F1
 20231017_EGmilled24-2_68,1,15F1
 ...
@@ -30,6 +30,11 @@ from reportlab.platypus import SimpleDocTemplate, Image, PageBreak, Spacer, Para
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib import colors
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO_ROOT / "src"))
+from synaptic_tomo_tools.alignment_utils import require_alignment_dir
+
 
 def generate_selected_clusters_pdf(successful_clusters, output_path):
     """
@@ -71,7 +76,11 @@ def generate_selected_clusters_pdf(successful_clusters, output_path):
             
             # Find mini zonogram comparison files for this tomogram
             tomogram_path = clusters[0]['tomogram_path']
-            active_zonograms_dir = tomogram_path / "best_alignment" / "STT_results" / "active_zonograms"
+            adir = require_alignment_dir(
+                clusters[0]["alignment_dir"],
+                context="cluster CSV alignment_dir (PDF summary)",
+            )
+            active_zonograms_dir = tomogram_path / adir / "STT_results" / "active_zonograms"
             
             if not active_zonograms_dir.exists():
                 story.append(Paragraph(f"Warning: No active zonogram directory found for {tomogram_name}", styles['Normal']))
@@ -160,9 +169,9 @@ def generate_selected_clusters_pdf(successful_clusters, output_path):
 def extract_cluster_coordinates(cluster_csv_path, data_dir, output_dir):
     """
     Extract XYZ coordinates for specific clusters based on CSV input.
-    
+
     Args:
-        cluster_csv_path (str): Path to CSV file with tomogram_name,cluster_number columns
+        cluster_csv_path (str): Path to CSV with tomogram_name, cluster_number, set, alignment_dir
         data_dir (str): Root directory containing tomogram data
         output_dir (str): Output directory for coordinate files
     """
@@ -177,7 +186,7 @@ def extract_cluster_coordinates(cluster_csv_path, data_dir, output_dir):
         return False
     
     # Check required columns
-    required_columns = ['tomogram_name', 'cluster_number', 'set']
+    required_columns = ['tomogram_name', 'cluster_number', 'set', 'alignment_dir']
     missing_columns = [col for col in required_columns if col not in cluster_df.columns]
     if missing_columns:
         print(f"Error: Missing required columns in CSV: {missing_columns}")
@@ -198,8 +207,16 @@ def extract_cluster_coordinates(cluster_csv_path, data_dir, output_dir):
         tomogram_name = row['tomogram_name']
         cluster_number = row['cluster_number']
         set_name = row['set']
+        try:
+            alignment_dir = require_alignment_dir(
+                row['alignment_dir'],
+                context=f"row for {tomogram_name} in cluster CSV",
+            )
+        except ValueError as e:
+            print(f"Error: {e}")
+            return False
         
-        print(f"\nProcessing {idx+1}/{total_clusters}: {tomogram_name}, Cluster {cluster_number}, Set {set_name}")
+        print(f"\nProcessing {idx+1}/{total_clusters}: {tomogram_name}, Cluster {cluster_number}, Set {set_name}, alignment {alignment_dir}")
         
         # Construct tomogram path using the specified set
         tomogram_path = Path(data_dir) / set_name / 'TOP_TOMOS' / tomogram_name
@@ -209,7 +226,9 @@ def extract_cluster_coordinates(cluster_csv_path, data_dir, output_dir):
             continue
         
         # Path to AuNP cluster data
-        aunp_data_path = tomogram_path / "best_alignment" / "STT_results" / "aunps" / "aunp_clusters.star"
+        aunp_data_path = (
+            tomogram_path / alignment_dir / "STT_results" / "aunps" / "aunp_clusters.star"
+        )
         
         if not aunp_data_path.exists():
             print(f"  Warning: AuNP cluster data not found at {aunp_data_path}")
@@ -247,6 +266,7 @@ def extract_cluster_coordinates(cluster_csv_path, data_dir, output_dir):
                 'cluster_number': cluster_number,
                 'set_name': set_name,
                 'tomogram_path': tomogram_path,
+                'alignment_dir': alignment_dir,
                 'aunp_count': len(coordinates)
             })
             
@@ -276,7 +296,7 @@ def main():
                        help='Root directory containing tomogram data')
     parser.add_argument('--output-dir', required=True,
                        help='Output directory for coordinate files')
-    
+
     args = parser.parse_args()
     
     # Validate input files
@@ -288,8 +308,9 @@ def main():
         print(f"Error: Data directory not found: {args.data_dir}")
         sys.exit(1)
     
-    # Run the extraction
-    success = extract_cluster_coordinates(args.cluster_csv, args.data_dir, args.output_dir)
+    success = extract_cluster_coordinates(
+        args.cluster_csv, args.data_dir, args.output_dir
+    )
     
     if success:
         print("\nCluster coordinate extraction completed successfully!")

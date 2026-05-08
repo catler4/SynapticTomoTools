@@ -51,6 +51,7 @@ class AnalysisPipelineGUI(tk.Tk):
         self.geometry("900x900")
         self.csv_path = tk.StringVar()
         self.root_dir = tk.StringVar()
+        self.alignment_dir = tk.StringVar(value="")
         self.start_tomogram = tk.StringVar()
         self.log_text = None
         self._img_refs = []  # Keep references to PhotoImage objects
@@ -144,12 +145,17 @@ class AnalysisPipelineGUI(tk.Tk):
         root_entry.grid(row=2, column=1, sticky=tk.W)
         ttk.Button(frame, text="Browse...", command=self._browse_root).grid(row=2, column=2, padx=5)
         
+        ttk.Label(frame, text="Alignment subdirectory:").grid(row=3, column=0, sticky=tk.W)
+        alignment_entry = ttk.Entry(frame, textvariable=self.alignment_dir, width=40)
+        alignment_entry.grid(row=3, column=1, sticky=tk.W)
+        ToolTip(alignment_entry, "Folder name under each tomogram for aligned data (e.g. best_alignment)")
+        
         # Starting tomogram selection
-        ttk.Label(frame, text="Processing mode:").grid(row=3, column=0, sticky=tk.W)
+        ttk.Label(frame, text="Processing mode:").grid(row=4, column=0, sticky=tk.W)
         self.processing_mode = tk.StringVar(value="All tomograms")
         self.processing_mode_combo = ttk.Combobox(frame, textvariable=self.processing_mode, width=37, state="readonly")
-        self.processing_mode_combo.grid(row=3, column=1, sticky=tk.W)
-        ttk.Button(frame, text="Load CSV", command=self._load_tomograms_from_csv).grid(row=3, column=2, padx=5)
+        self.processing_mode_combo.grid(row=4, column=1, sticky=tk.W)
+        ttk.Button(frame, text="Load CSV", command=self._load_tomograms_from_csv).grid(row=4, column=2, padx=5)
         
         # Starting tomogram selection (initially hidden)
         self.start_tomogram_label = ttk.Label(frame, text="Start from tomogram:")
@@ -157,21 +163,21 @@ class AnalysisPipelineGUI(tk.Tk):
         
         # Add tooltip for the dropdown
         ToolTip(self.processing_mode_combo, "Select processing mode: 'All tomograms' for entire CSV, 'Single tomogram' for one specific tomogram, or 'Start from' to process from a specific tomogram onwards")
-        ToolTip(frame.grid_slaves(row=3, column=2)[0], "Load tomogram names from the selected CSV file into the dropdown")
+        ToolTip(frame.grid_slaves(row=4, column=2)[0], "Load tomogram names from the selected CSV file into the dropdown")
         
         # Bind the mode combo to show/hide the starting tomogram selection
         self.processing_mode_combo.bind('<<ComboboxSelected>>', self._on_processing_mode_change)
         
         # Add a separator at a fixed position
         separator = ttk.Separator(frame, orient='horizontal')
-        separator.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        separator.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
         
         # Analysis Parameters section
-        ttk.Label(frame, text="Analysis Parameters:", font=('TkDefaultFont', 10, 'bold')).grid(row=6, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
+        ttk.Label(frame, text="Analysis Parameters:", font=('TkDefaultFont', 10, 'bold')).grid(row=7, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
         
         # Parameter mode switch
         params_mode_frame = ttk.Frame(frame)
-        params_mode_frame.grid(row=7, column=0, columnspan=3, sticky=tk.W, pady=5)
+        params_mode_frame.grid(row=8, column=0, columnspan=3, sticky=tk.W, pady=5)
         ttk.Label(params_mode_frame, text="Parameter mode:").pack(side=tk.LEFT, padx=(0, 10))
         ttk.Radiobutton(params_mode_frame, text="Default", variable=self.use_custom_params, value=False, 
                        command=self._toggle_custom_params).pack(side=tk.LEFT, padx=5)
@@ -180,7 +186,7 @@ class AnalysisPipelineGUI(tk.Tk):
         
         # Custom parameters frame (initially hidden)
         self.custom_params_frame = ttk.LabelFrame(frame, text="Custom Parameters", padding=10)
-        self.custom_params_frame.grid(row=8, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5, padx=0)
+        self.custom_params_frame.grid(row=9, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5, padx=0)
         
         # Active zone parameters
         az_frame = ttk.LabelFrame(self.custom_params_frame, text="Active Zone Parameters", padding=5)
@@ -305,14 +311,14 @@ class AnalysisPipelineGUI(tk.Tk):
         
         # Add separator before Results Management
         separator2 = ttk.Separator(frame, orient='horizontal')
-        separator2.grid(row=9, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        separator2.grid(row=10, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
         
         # Results management section
-        ttk.Label(frame, text="Results Management:", font=('TkDefaultFont', 10, 'bold')).grid(row=10, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
+        ttk.Label(frame, text="Results Management:", font=('TkDefaultFont', 10, 'bold')).grid(row=11, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
         
         # Archive current results
         archive_frame = ttk.Frame(frame)
-        archive_frame.grid(row=11, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+        archive_frame.grid(row=12, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
         ttk.Label(archive_frame, text="Archive note:").pack(side=tk.LEFT, padx=(0, 5))
         self.archive_note_var = tk.StringVar()
         archive_entry = ttk.Entry(archive_frame, textvariable=self.archive_note_var, width=30)
@@ -323,7 +329,7 @@ class AnalysisPipelineGUI(tk.Tk):
         
         # Delete previous results
         delete_btn = ttk.Button(frame, text="Delete previous results", command=self._delete_previous_results)
-        delete_btn.grid(row=12, column=0, columnspan=3, sticky=tk.W, pady=5)
+        delete_btn.grid(row=13, column=0, columnspan=3, sticky=tk.W, pady=5)
         ToolTip(delete_btn, "Delete results from individual tomogram STT_results directories (for tomograms in CSV) and the results directory. Does NOT delete archived results.")
 
     def _load_and_display_image(self, path, parent, max_width=400, max_height=180):
@@ -575,7 +581,7 @@ Do you want to continue?"""
                     env = os.environ.copy()
                     self._run_subprocess(cli, env, self.findingampa_single_dir.get())
                 elif self.findingampa_all_mode.get() or not self.findingampa_single_mode.get():
-                    # Run for all tomograms in CSV, using best_alignment dir for each
+                    # Run for all tomograms in CSV, using the configured alignment subdirectory for each
                     csv_path = self.csv_path.get()
                     root_dir = self.root_dir.get()
                     if not csv_path or not root_dir:
@@ -587,17 +593,21 @@ Do you want to continue?"""
                         for row in reader:
                             set_name = row.get('set')
                             tomo_name = row.get('tomogram')
+                            row_align = (row.get('alignment_dir') or '').strip()
                             if not set_name or not tomo_name:
                                 continue
-                            best_align_dir = _os.path.join(root_dir, set_name, "TOP_TOMOS", tomo_name, "best_alignment")
-                            if not _os.path.isdir(best_align_dir):
-                                self._log(f"Skipping missing directory: {best_align_dir}\n")
+                            if not row_align or row_align.lower() == 'nan':
+                                self._log(f"Skipping {tomo_name}: missing alignment_dir in CSV row.\n")
+                                continue
+                            align_work_dir = _os.path.join(root_dir, set_name, "TOP_TOMOS", tomo_name, row_align)
+                            if not _os.path.isdir(align_work_dir):
+                                self._log(f"Skipping missing directory: {align_work_dir}\n")
                                 continue
                             cli = ["finding_ampa", base_command] + command_args + extra_args
-                            self._log(f"Running: {' '.join(cli)} in {best_align_dir}\n")
+                            self._log(f"Running: {' '.join(cli)} in {align_work_dir}\n")
                             env = os.environ.copy()
                             # Run subprocess and wait for completion before moving to next tomogram
-                            self._run_subprocess(cli, env, best_align_dir)
+                            self._run_subprocess(cli, env, align_work_dir)
                             self._log(f"Completed processing for tomogram: {tomo_name}\n")
             finally:
                 completion_event.set()
@@ -763,8 +773,8 @@ Do you want to continue?"""
         
         if mode in ["Single tomogram", "Start from"]:
             # Show the starting tomogram selection
-            self.start_tomogram_label.grid(row=4, column=0, sticky=tk.W)
-            self.start_tomogram_combo.grid(row=4, column=1, sticky=tk.W)
+            self.start_tomogram_label.grid(row=5, column=0, sticky=tk.W)
+            self.start_tomogram_combo.grid(row=5, column=1, sticky=tk.W)
         else:
             # Hide the starting tomogram selection
             self.start_tomogram_label.grid_remove()
@@ -1556,6 +1566,23 @@ Do you want to continue?"""
                 # Default to '15F1' if no set column found
                 tomogram_sets = ['15F1'] * len(tomogram_names)
                 self._log("No 'set' column found, defaulting to '15F1' for all tomograms\n")
+
+            if 'alignment_dir' not in df.columns:
+                messagebox.showerror(
+                    "Error",
+                    "CSV must include 'alignment_dir' for each tomogram row.",
+                )
+                return
+            tomogram_alignments = []
+            for x in df['alignment_dir'].tolist():
+                s = str(x).strip()
+                if not s or s.lower() == 'nan':
+                    messagebox.showerror(
+                        "Error",
+                        "alignment_dir must be non-empty for every CSV row.",
+                    )
+                    return
+                tomogram_alignments.append(s)
                     
         except Exception as e:
             messagebox.showerror("Error", f"Could not read CSV file: {e}")
@@ -1577,8 +1604,10 @@ Do you want to continue?"""
         # Process all tomograms
         all_commands = []
         
-        for i, (tomogram_name, tomogram_set) in enumerate(zip(tomogram_names, tomogram_sets), 1):
-            self._log(f"\nPreparing tomogram {i}/{len(tomogram_names)}: {tomogram_name} (set: {tomogram_set})\n")
+        for i, (tomogram_name, tomogram_set, align_sub) in enumerate(
+            zip(tomogram_names, tomogram_sets, tomogram_alignments), 1
+        ):
+            self._log(f"\nPreparing tomogram {i}/{len(tomogram_names)}: {tomogram_name} (set: {tomogram_set}, alignment: {align_sub})\n")
             
             # Build tomogram path using the correct structure
             tomogram_path = os.path.join(self.root_dir.get(), tomogram_set, 'TOP_TOMOS', tomogram_name)
@@ -1624,7 +1653,7 @@ Do you want to continue?"""
             
             # Build command for this tomogram
             # Construct full output directory path relative to tomogram
-            full_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative)
+            full_output_dir = os.path.join(tomogram_path, align_sub, output_dir_relative)
             os.makedirs(full_output_dir, exist_ok=True)
             
             cli = ["python", "-u", "scripts/run_ampa_poses_analysis.py"]
@@ -1648,7 +1677,7 @@ Do you want to continue?"""
             if aunp_active_zones is not None:
                 cli += ["--aunp-active-zones"] + [str(az) for az in aunp_active_zones]
             
-            all_commands.append((tomogram_name, cli))
+            all_commands.append((tomogram_name, cli, align_sub))
         
         if not all_commands:
             self._log("No valid tomograms found to process.\n")
@@ -1664,7 +1693,7 @@ Do you want to continue?"""
             all_aunps_all_data = []
             successful_tomograms = []
             
-            for i, (tomogram_name, cli) in enumerate(all_commands, 1):
+            for i, (tomogram_name, cli, align_sub) in enumerate(all_commands, 1):
                 self._log(f"\n{'='*60}\n")
                 self._log(f"Processing tomogram {i}/{len(all_commands)}: {tomogram_name}\n")
                 self._log(f"Command: {' '.join(cli)}\n")
@@ -1680,7 +1709,7 @@ Do you want to continue?"""
                     
                     # Load the individual results
                     tomogram_path = os.path.join(self.root_dir.get(), tomogram_sets[i-1], 'TOP_TOMOS', tomogram_name)
-                    individual_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative)
+                    individual_output_dir = os.path.join(tomogram_path, align_sub, output_dir_relative)
                     
                     # Find the star file (it will have the distance parameters in the name)
                     star_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and 'ampa_poses' in f and '_aunps' not in f]
@@ -1882,6 +1911,23 @@ Do you want to continue?"""
                 # Default to '15F1' if no set column found
                 tomogram_sets = ['15F1'] * len(tomogram_names)
                 self._log("No 'set' column found, defaulting to '15F1' for all tomograms\n")
+
+            if 'alignment_dir' not in df.columns:
+                messagebox.showerror(
+                    "Error",
+                    "CSV must include 'alignment_dir' for each tomogram row.",
+                )
+                return
+            tomogram_alignments = []
+            for x in df['alignment_dir'].tolist():
+                s = str(x).strip()
+                if not s or s.lower() == 'nan':
+                    messagebox.showerror(
+                        "Error",
+                        "alignment_dir must be non-empty for every CSV row.",
+                    )
+                    return
+                tomogram_alignments.append(s)
                     
         except Exception as e:
             messagebox.showerror("Error", f"Could not read CSV file: {e}")
@@ -1912,8 +1958,13 @@ Do you want to continue?"""
         # Process all tomograms
         all_commands = []
         
-        for i, (tomogram_name, tomogram_set) in enumerate(zip(tomogram_names, tomogram_sets), 1):
-            self._log(f"\nPreparing tomogram {i}/{len(tomogram_names)}: {tomogram_name} (set: {tomogram_set})\n")
+        for i, (tomogram_name, tomogram_set, align_sub) in enumerate(
+            zip(tomogram_names, tomogram_sets, tomogram_alignments), 1
+        ):
+            self._log(
+                f"\nPreparing tomogram {i}/{len(tomogram_names)}: {tomogram_name} "
+                f"(set: {tomogram_set}, alignment: {align_sub})\n"
+            )
             
             # Build tomogram path using the correct structure
             tomogram_path = os.path.join(self.root_dir.get(), tomogram_set, 'TOP_TOMOS', tomogram_name)
@@ -1962,7 +2013,7 @@ Do you want to continue?"""
             
             if method in ["original", "both"]:
                 # Original method - save to all_poses directory
-                original_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative, "all_poses")
+                original_output_dir = os.path.join(tomogram_path, align_sub, output_dir_relative, "all_poses")
                 os.makedirs(original_output_dir, exist_ok=True)
                 
                 cli_original = ["python", "-u", "scripts/run_ampa_poses_analysis.py"]
@@ -2002,7 +2053,7 @@ Do you want to continue?"""
                 else:
                     method_output_dir_name = "greedy"
                 
-                optimized_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative, method_output_dir_name)
+                optimized_output_dir = os.path.join(tomogram_path, align_sub, output_dir_relative, method_output_dir_name)
                 os.makedirs(optimized_output_dir, exist_ok=True)
                 
                 cli_optimized = ["python", "-u", "scripts/run_ampa_poses_analysis.py"]
@@ -2038,7 +2089,7 @@ Do you want to continue?"""
                 
                 tomogram_commands.append((method_output_dir_name, cli_optimized))
             
-            all_commands.append((tomogram_name, tomogram_commands))
+            all_commands.append((tomogram_name, tomogram_set, align_sub, tomogram_commands))
         
         if not all_commands:
             self._log("No valid tomograms found to process.\n")
@@ -2057,7 +2108,10 @@ Do you want to continue?"""
             all_unpaired_data_optimized = []
             successful_tomograms = []
             
-            for i, (tomogram_name, tomogram_commands) in enumerate(all_commands, 1):
+            for i, (tomogram_name, tomogram_set, align_sub, tomogram_commands) in enumerate(all_commands, 1):
+                tomogram_path = os.path.join(
+                    self.root_dir.get(), tomogram_set, "TOP_TOMOS", tomogram_name
+                )
                 self._log(f"\n{'='*60}\n")
                 self._log(f"Processing tomogram {i}/{len(all_commands)}: {tomogram_name}\n")
                 self._log(f"{'='*60}\n")
@@ -2084,10 +2138,10 @@ Do you want to continue?"""
                         # Determine output directory based on method
                         if method_type == "all_poses":
                             # Try the direct all_poses directory first
-                            individual_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative, "all_poses")
+                            individual_output_dir = os.path.join(tomogram_path, align_sub, output_dir_relative, "all_poses")
                             # If that doesn't exist, check for greedy subdirectory (legacy/fallback)
                             if not os.path.exists(individual_output_dir):
-                                greedy_fallback = os.path.join(tomogram_path, "best_alignment", output_dir_relative, "all_poses", "greedy")
+                                greedy_fallback = os.path.join(tomogram_path, align_sub, output_dir_relative, "all_poses", "greedy")
                                 if os.path.exists(greedy_fallback):
                                     individual_output_dir = greedy_fallback
                                     self._log(f"Using fallback directory: {greedy_fallback}\n")
@@ -2097,7 +2151,7 @@ Do you want to continue?"""
                                 method_dir = "ilp"
                             else:
                                 method_dir = "greedy"
-                            individual_output_dir = os.path.join(tomogram_path, "best_alignment", output_dir_relative, method_dir)
+                            individual_output_dir = os.path.join(tomogram_path, align_sub, output_dir_relative, method_dir)
                         
                         # Load the particles file
                         if not os.path.exists(individual_output_dir):
@@ -2413,6 +2467,17 @@ Do you want to continue?"""
                 else:
                     tomogram_sets = ['15F1'] * len(tomogram_names)
                     self._log("No 'set' column found, defaulting to '15F1' for all tomograms\n")
+
+                if 'alignment_dir' not in df.columns:
+                    messagebox.showerror("Error", "CSV must include 'alignment_dir' for each tomogram row.")
+                    return
+                tomogram_alignments = []
+                for x in df['alignment_dir'].tolist():
+                    s = str(x).strip()
+                    if not s or s.lower() == 'nan':
+                        messagebox.showerror("Error", "alignment_dir must be non-empty for every CSV row.")
+                        return
+                    tomogram_alignments.append(s)
                 
                 # Create output directory
                 output_dir = Path("results/visualizations/pdf_summaries")
@@ -2443,12 +2508,14 @@ Do you want to continue?"""
                 )
                 
                 # Process each tomogram
-                for i, (tomogram_name, tomogram_set) in enumerate(zip(tomogram_names, tomogram_sets), 1):
-                    self._log(f"Processing tomogram {i}/{len(tomogram_names)}: {tomogram_name}\n")
+                for i, (tomogram_name, tomogram_set, align_sub) in enumerate(
+                    zip(tomogram_names, tomogram_sets, tomogram_alignments), 1
+                ):
+                    self._log(f"Processing tomogram {i}/{len(tomogram_names)}: {tomogram_name} ({align_sub})\n")
                     
                     # Build tomogram path
                     tomogram_path = Path(self.root_dir.get()) / tomogram_set / "TOP_TOMOS" / tomogram_name
-                    active_zonograms_dir = tomogram_path / "best_alignment" / "STT_results" / "active_zonograms"
+                    active_zonograms_dir = tomogram_path / align_sub / "STT_results" / "active_zonograms"
                     
                     if not active_zonograms_dir.exists():
                         self._log(f"Warning: Active zonograms directory not found: {active_zonograms_dir}\n")
@@ -2669,6 +2736,17 @@ Do you want to continue?"""
                 else:
                     tomogram_sets = ['15F1'] * len(tomogram_names)
                     self._log("No 'set' column found, defaulting to '15F1' for all tomograms\n")
+
+                if 'alignment_dir' not in df.columns:
+                    messagebox.showerror("Error", "CSV must include 'alignment_dir' for each tomogram row.")
+                    return
+                tomogram_alignments = []
+                for x in df['alignment_dir'].tolist():
+                    s = str(x).strip()
+                    if not s or s.lower() == 'nan':
+                        messagebox.showerror("Error", "alignment_dir must be non-empty for every CSV row.")
+                        return
+                    tomogram_alignments.append(s)
                 
                 # Create output directory
                 output_dir = Path("results/visualizations/pdf_summaries")
@@ -2702,12 +2780,14 @@ Do you want to continue?"""
                 )
                 
                 # Process each tomogram
-                for i, (tomogram_name, tomogram_set) in enumerate(zip(tomogram_names, tomogram_sets), 1):
-                    self._log(f"Processing tomogram {i}/{len(tomogram_names)}: {tomogram_name}\n")
+                for i, (tomogram_name, tomogram_set, align_sub) in enumerate(
+                    zip(tomogram_names, tomogram_sets, tomogram_alignments), 1
+                ):
+                    self._log(f"Processing tomogram {i}/{len(tomogram_names)}: {tomogram_name} ({align_sub})\n")
                     
                     # Build tomogram path
                     tomogram_path = Path(self.root_dir.get()) / tomogram_set / "TOP_TOMOS" / tomogram_name
-                    active_zonograms_dir = tomogram_path / "best_alignment" / "STT_results" / "active_zonograms"
+                    active_zonograms_dir = tomogram_path / align_sub / "STT_results" / "active_zonograms"
                     
                     if not active_zonograms_dir.exists():
                         self._log(f"Warning: Active zonograms directory not found: {active_zonograms_dir}\n")
@@ -2717,7 +2797,7 @@ Do you want to continue?"""
                     mini_zonogram_files = list(active_zonograms_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
                     
                     # Get cluster data to identify clusters with 4 AuNPs
-                    cluster_data_path = tomogram_path / "best_alignment" / "STT_results" / "aunps" / "aunp_clusters.star"
+                    cluster_data_path = tomogram_path / align_sub / "STT_results" / "aunps" / "aunp_clusters.star"
                     clusters_with_4_aunps = set()
                     
                     if cluster_data_path.exists():

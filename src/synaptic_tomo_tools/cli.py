@@ -328,8 +328,8 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
                         az_indices.append(int(x))
                     elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
                         az_indices.append(int(float(x)))
-            # Create tomogram-specific directory structure: visualizations/{tomogram_name}/aunps_and_vesicles/
-            tomogram_viz_dir = base_viz_dir / tomogram_name / 'aunps_and_vesicles'
+            # Per-alignment under results/visualizations (same tomogram + different alignment_dir → separate dirs)
+            tomogram_viz_dir = base_viz_dir / tomogram_name / alignment_dir / 'aunps_and_vesicles'
             tomogram_viz_dir.mkdir(parents=True, exist_ok=True)
             
             # Generate the three visualization types
@@ -372,15 +372,15 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
         if str(src_path) not in sys.path:
             sys.path.insert(0, str(src_path))
         
-        from synaptic_tomo_tools.visualization import run_zonogram_analysis_for_all_tomograms
+        from synaptic_tomo_tools.visualization import run_zonogram_analysis_for_all_tomograms, unpack_tomo_csv_row
         
         # Create output directory for active zonogram analysis
         output_dir = Path("results")
         # Extract root directory from tomogram paths for PDF generation
         root_dir = None
         if tomo_paths:
-            # Get the root directory from the first tomogram path
-            first_tomo_path = Path(tomo_paths[0][0])
+            first_path, _, _, _ = unpack_tomo_csv_row(tomo_paths[0])
+            first_tomo_path = Path(first_path)
             # Go up to find the root (assuming structure: root/set/TOP_TOMOS/tomogram)
             if first_tomo_path.parent.name == "TOP_TOMOS":
                 root_dir = str(first_tomo_path.parent.parent.parent)

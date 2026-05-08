@@ -41,6 +41,7 @@ except ImportError:
 # Add the src directory to the Python path
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
+from synaptic_tomo_tools.alignment_utils import require_alignment_dir
 from synaptic_tomo_tools.vesicles import import_presynaptic_membranes_and_active_zones
 warnings.filterwarnings('ignore')
 
@@ -59,12 +60,13 @@ def cleanup_memory():
     gc.collect()
     time.sleep(0.1)  # Small delay to allow memory to be freed
 
-def load_tomogram_data(tomogram_path):
-    """Load tomogram data from the best alignment directory."""
+def load_tomogram_data(tomogram_path, alignment_dir: str):
+    """Load tomogram data from the alignment subdirectory (CSV ``alignment_dir``)."""
     tomogram_path = Path(tomogram_path)
-    
-    # Look for ddw.mrc files in the best_alignment directory
-    ddw_files = list(tomogram_path.glob("best_alignment/*_ddw.mrc"))
+    alignment_dir = require_alignment_dir(alignment_dir)
+
+    # Look for ddw.mrc files under ``alignment_dir``
+    ddw_files = list(tomogram_path.glob(f"{alignment_dir}/*_ddw.mrc"))
     if not ddw_files:
         print(f"No ddw.mrc files found in {tomogram_path}")
         return None
@@ -106,9 +108,16 @@ def load_tomogram_data(tomogram_path):
         print(f"Error loading tomogram {ddw_file}: {e}")
         return None
 
-def load_vesicle_data(tomogram_path):
+def load_vesicle_data(tomogram_path, alignment_dir: str):
     """Load vesicle data from the STT results."""
-    vesicle_file = Path(tomogram_path) / "best_alignment" / "STT_results" / "vesicles" / "vesicle_results.json"
+    alignment_dir = require_alignment_dir(alignment_dir)
+    vesicle_file = (
+        Path(tomogram_path)
+        / alignment_dir
+        / "STT_results"
+        / "vesicles"
+        / "vesicle_results.json"
+    )
     
     if not vesicle_file.exists():
         print(f"No vesicle results found: {vesicle_file}")
@@ -122,9 +131,10 @@ def load_vesicle_data(tomogram_path):
         print(f"Error loading vesicle data: {e}")
         return []
 
-def load_active_zone_data(tomogram_path):
+def load_active_zone_data(tomogram_path, alignment_dir: str):
     """Load active zone data from the STT results."""
-    az_dir = Path(tomogram_path) / "best_alignment" / "STT_results" / "active_zones"
+    alignment_dir = require_alignment_dir(alignment_dir)
+    az_dir = Path(tomogram_path) / alignment_dir / "STT_results" / "active_zones"
     
     if not az_dir.exists():
         print(f"No active zones directory found: {az_dir}")
@@ -592,8 +602,9 @@ def save_slice_as_png(slice_data, output_path, vesicle_info, contrast_percentile
     plt.savefig(output_path, dpi=150, bbox_inches=None, pad_inches=0.1)
     plt.close()
 
-def process_tomogram(tomogram_path, output_dir):
+def process_tomogram(tomogram_path, output_dir, alignment_dir: str):
     """Process a single tomogram to extract vesicle slices."""
+    alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_name = Path(tomogram_path).name
     print(f"\nProcessing tomogram: {tomogram_name}")
     
@@ -601,11 +612,11 @@ def process_tomogram(tomogram_path, output_dir):
     memory_start = monitor_memory()
     
     # Load data
-    tomogram_data = load_tomogram_data(tomogram_path)
+    tomogram_data = load_tomogram_data(tomogram_path, alignment_dir)
     if tomogram_data is None:
         return 0
     
-    vesicles = load_vesicle_data(tomogram_path)
+    vesicles = load_vesicle_data(tomogram_path, alignment_dir)
     if not vesicles:
         print("No vesicles found")
         # Clean up tomogram data
@@ -614,7 +625,9 @@ def process_tomogram(tomogram_path, output_dir):
         return 0
     
     # Load membrane_active_zone_pairs for fusion point calculation
-    membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path)
+    membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(
+        tomogram_path, alignment_dir
+    )
     if not membrane_active_zone_pairs:
         print("No membrane-active zone pairs found")
         # Clean up data
@@ -873,6 +886,8 @@ def create_close_vesicle_summary_pdf(output_dir, csv_path, data_dir):
     
     # Load tomogram information
     df = pd.read_csv(csv_path)
+    if "alignment_dir" not in df.columns:
+        raise ValueError(f"{csv_path} must include an 'alignment_dir' column for each tomogram row.")
     
     # Create PDF file with portrait orientation (table is now compact enough)
     from reportlab.lib.pagesizes import A4
@@ -901,6 +916,9 @@ def create_close_vesicle_summary_pdf(output_dir, csv_path, data_dir):
     for _, row in df.iterrows():
         tomogram_name = row['tomoname']
         set_name = row['set']
+        align_sub = require_alignment_dir(
+            row["alignment_dir"], context=f"tomogram {tomogram_name}"
+        )
         
         # Construct tomogram path
         if data_dir:
@@ -912,7 +930,7 @@ def create_close_vesicle_summary_pdf(output_dir, csv_path, data_dir):
             continue
         
         # Load vesicle data for this tomogram
-        vesicles = load_vesicle_data(tomogram_path)
+        vesicles = load_vesicle_data(tomogram_path, align_sub)
         if not vesicles:
             continue
         
@@ -1129,6 +1147,9 @@ def process_tomograms_in_chunks(df, output_dir, args):
         for i, (_, row) in enumerate(chunk_df.iterrows()):
             tomogram_name = row['tomoname']
             set_name = row['set']
+            align_sub = require_alignment_dir(
+                row["alignment_dir"], context=f"tomogram {tomogram_name}"
+            )
             
             print(f"\nProcessing tomogram {chunk_start + i + 1}/{len(df)}: {tomogram_name}")
             
@@ -1151,7 +1172,7 @@ def process_tomograms_in_chunks(df, output_dir, args):
                     time.sleep(1)
                 
                 # Process the tomogram
-                extracted = process_tomogram(tomogram_path, output_dir)
+                extracted = process_tomogram(tomogram_path, output_dir, align_sub)
                 chunk_extracted += extracted
                 
                 # Memory cleanup after each tomogram
@@ -1194,6 +1215,10 @@ def main():
     
     # Load tomogram information
     df = pd.read_csv(args.csv)
+    if "alignment_dir" not in df.columns:
+        raise SystemExit(
+            f"CSV {args.csv} must include an 'alignment_dir' column for each tomogram row."
+        )
     
     # Filter by set if specified
     if args.set:
@@ -1228,6 +1253,9 @@ def main():
         for i, (_, row) in enumerate(df.iterrows()):
             tomogram_name = row['tomoname']
             set_name = row['set']
+            align_sub = require_alignment_dir(
+                row["alignment_dir"], context=f"tomogram {tomogram_name}"
+            )
             
             print(f"\n{'='*60}")
             print(f"Processing tomogram {i+1}/{len(df)}: {tomogram_name}")
@@ -1252,7 +1280,7 @@ def main():
                     time.sleep(1)  # Give system time to free memory
                 
                 # Process the tomogram
-                extracted = process_tomogram(tomogram_path, output_dir)
+                extracted = process_tomogram(tomogram_path, output_dir, align_sub)
                 total_extracted += extracted
                 
                 # Memory cleanup after each tomogram
