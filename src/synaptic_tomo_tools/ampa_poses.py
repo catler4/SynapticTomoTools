@@ -1548,7 +1548,7 @@ def estimate_ampa_poses_optimized(
 import trimesh
 
 
-def load_postsynaptic_coordinates(tomo_path):
+def load_postsynaptic_coordinates(tomo_path, alignment_dir: str):
     """
     Load postsynaptic membrane coordinates from GLB file.
     
@@ -1558,7 +1558,7 @@ def load_postsynaptic_coordinates(tomo_path):
     Returns:
         Array of postsynaptic membrane coordinates
     """
-    postsynaptic_glb_path = Path(tomo_path) / "best_alignment" / "aunps" / "postsynapticmembranes.glb"
+    postsynaptic_glb_path = Path(tomo_path) / alignment_dir / "aunps" / "postsynapticmembranes.glb"
     
     if not postsynaptic_glb_path.exists():
         raise FileNotFoundError(f"Postsynaptic membrane GLB file not found: {postsynaptic_glb_path}")
@@ -1604,10 +1604,15 @@ def load_postsynaptic_coordinates(tomo_path):
     return vertices_transformed
 
 
-def run_ampa_poses_analysis_original(tomo_path, output_dir, aunp_active_zones=None,
-                                    inter_aunp_distance=(6, 12),
-                                    aunp_membrane_distance=(17, 23),
-                                    pdb_file=None):
+def run_ampa_poses_analysis_original(
+    tomo_path,
+    output_dir,
+    aunp_active_zones=None,
+    inter_aunp_distance=(6, 12),
+    aunp_membrane_distance=(17, 23),
+    pdb_file=None,
+    alignment_dir: Optional[str] = None,
+):
     """
     Run the original AMPA poses analysis method (all_poses).
     
@@ -1626,6 +1631,9 @@ def run_ampa_poses_analysis_original(tomo_path, output_dir, aunp_active_zones=No
         Dictionary with analysis results
     """
     
+    if alignment_dir is None or str(alignment_dir).strip() == "":
+        raise ValueError("alignment_dir is required for AMPA poses analysis (no fallback).")
+
     tomo_path = Path(tomo_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1635,7 +1643,7 @@ def run_ampa_poses_analysis_original(tomo_path, output_dir, aunp_active_zones=No
     
     # Load AuNP data
     print("📁 Loading AuNP data...")
-    aunps_dir = tomo_path / "best_alignment" / "aunps"
+    aunps_dir = tomo_path / alignment_dir / "aunps"
     
     if not aunps_dir.exists():
         print(f"❌ AuNPs directory not found: {aunps_dir}")
@@ -1645,12 +1653,12 @@ def run_ampa_poses_analysis_original(tomo_path, output_dir, aunp_active_zones=No
     aunp_files = []
     if aunp_active_zones is not None:
         for az_idx in aunp_active_zones:
-            star_file = aunps_dir / f"aunp_tm_BP_active_zone_{az_idx}.star"
+            star_file = aunps_dir / f"aunp_tm_BP_active_zone_{az_idx}_manual_refined.star"
             if star_file.exists():
                 aunp_files.append(star_file)
     else:
-        # Load all numerically named active zone files (aunp_tm_BP_active_zone_0.star, _1.star, etc.)
-        aunp_files = sorted(aunps_dir.glob("aunp_tm_BP_active_zone_[0-9]*.star"))
+        # Load all numerically named active zone files in manual refined format.
+        aunp_files = sorted(aunps_dir.glob("aunp_tm_BP_active_zone_[0-9]*_manual_refined.star"))
     
     if not aunp_files:
         print(f"❌ No AuNP files found in {aunps_dir}")
@@ -1683,7 +1691,7 @@ def run_ampa_poses_analysis_original(tomo_path, output_dir, aunp_active_zones=No
     print(f"  📊 Extracted {len(aunp_coordinates)} AuNP coordinates")
     
     # Load postsynaptic membrane data
-    postsynaptic_data = load_postsynaptic_coordinates(tomo_path)
+    postsynaptic_data = load_postsynaptic_coordinates(tomo_path, alignment_dir=alignment_dir)
     if postsynaptic_data is None or len(postsynaptic_data) == 0:
         print("❌ No postsynaptic membrane data found")
         return {"status": "error", "message": "No postsynaptic membrane data found"}
@@ -1943,12 +1951,17 @@ def run_ampa_poses_analysis_original(tomo_path, output_dir, aunp_active_zones=No
     }
 
 
-def run_ampa_poses_analysis_optimized(tomo_path, output_dir, aunp_active_zones=None,
-                                     inter_aunp_distance=(6, 12), 
-                                     aunp_membrane_distance=(17, 23),
-                                     ampa_steric_radius=5.0,
-                                     method="greedy",
-                                     pdb_file=None):
+def run_ampa_poses_analysis_optimized(
+    tomo_path,
+    output_dir,
+    aunp_active_zones=None,
+    inter_aunp_distance=(6, 12),
+    aunp_membrane_distance=(17, 23),
+    ampa_steric_radius=5.0,
+    method="greedy",
+    pdb_file=None,
+    alignment_dir: Optional[str] = None,
+):
     """
     Run optimized AMPA poses analysis for a tomogram.
     
@@ -1965,6 +1978,9 @@ def run_ampa_poses_analysis_optimized(tomo_path, output_dir, aunp_active_zones=N
     Returns:
         Dictionary with analysis results
     """
+    if alignment_dir is None or str(alignment_dir).strip() == "":
+        raise ValueError("alignment_dir is required for AMPA poses analysis (no fallback).")
+
     tomo_path = Path(tomo_path)
     tomo_name = tomo_path.name
     
@@ -1972,7 +1988,7 @@ def run_ampa_poses_analysis_optimized(tomo_path, output_dir, aunp_active_zones=N
     
     # Load AuNP data (reuse original function logic)
     print("📁 Loading AuNP data...")
-    aunps_dir = tomo_path / "best_alignment" / "aunps"
+    aunps_dir = tomo_path / alignment_dir / "aunps"
     
     if not aunps_dir.exists():
         raise FileNotFoundError(f"AuNPs directory not found: {aunps_dir}")
@@ -1983,16 +1999,16 @@ def run_ampa_poses_analysis_optimized(tomo_path, output_dir, aunp_active_zones=N
         # Load specific active zones
         print(f"  Loading active zones: {aunp_active_zones}")
         for az_id in aunp_active_zones:
-            az_file = aunps_dir / f"aunp_tm_BP_active_zone_{az_id}.star"
+            az_file = aunps_dir / f"aunp_tm_BP_active_zone_{az_id}_manual_refined.star"
             if az_file.exists():
                 aunp_files.append(az_file)
                 print(f"    Found: {az_file.name}")
             else:
                 print(f"    ⚠️  Missing: {az_file.name}")
     else:
-        # Load all numerically named active zone files (aunp_tm_BP_active_zone_0.star, _1.star, etc.)
+        # Load all numerically named active zone files in manual refined format.
         print("  Loading all numerically named active zone files...")
-        aunp_files = sorted(aunps_dir.glob("aunp_tm_BP_active_zone_[0-9]*.star"))
+        aunp_files = sorted(aunps_dir.glob("aunp_tm_BP_active_zone_[0-9]*_manual_refined.star"))
         if aunp_files:
             print(f"    Found {len(aunp_files)} active zone files:")
             for aunp_file in aunp_files:
@@ -2033,7 +2049,7 @@ def run_ampa_poses_analysis_optimized(tomo_path, output_dir, aunp_active_zones=N
     
     # Load postsynaptic membrane data
     print("🧠 Loading postsynaptic membrane data...")
-    postsynaptic_data = load_postsynaptic_coordinates(tomo_path)
+    postsynaptic_data = load_postsynaptic_coordinates(tomo_path, alignment_dir=alignment_dir)
     print(f"  ✅ Loaded {len(postsynaptic_data)} membrane vertices")
     
     # Generate output filename with parameters

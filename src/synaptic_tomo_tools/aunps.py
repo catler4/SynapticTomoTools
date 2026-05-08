@@ -133,44 +133,9 @@ def compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0, fusion
         return np.zeros((0, 3))
 
 
-def check_if_fusing_vesicle(vesicle, active_zone_points, perimeter_threshold=5.0):
-    """
-    Check if a vesicle is a "fusing vesicle" by determining if its spherical perimeter
-    is within perimeter_threshold of the presynaptic active zone.
-    
-    Uses analytical distance formula: distance_to_surface = |distance(center, point) - radius|
-    This is exact and doesn't require sampling points on the sphere.
-    
-    Args:
-        vesicle: Vesicle dictionary with 'center' and 'radius'
-        active_zone_points: Array of active zone coordinates
-        perimeter_threshold: Distance threshold in nm (default 5.0)
-        
-    Returns:
-        Boolean indicating if vesicle is fusing
-    """
-    if active_zone_points is None or len(active_zone_points) == 0:
-        return False
-    
-    center = np.array(vesicle['center'])
-    radius = vesicle['radius']
-    
-    # Calculate distances from vesicle center to all active zone points
-    distances_from_center = np.linalg.norm(active_zone_points - center, axis=1)
-    
-    # Distance from sphere surface to each active zone point
-    # Positive if point is outside sphere, negative if inside
-    distances_to_surface = np.abs(distances_from_center - radius)
-    
-    # Find minimum distance from sphere surface to active zone
-    min_distance_to_az = np.min(distances_to_surface)
-    
-    return min_distance_to_az <= perimeter_threshold
-
-
 def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, vesicle_distance_threshold=20.0, 
                                                   fusion_point_threshold=20.0, max_distance=500.0, bin_width=5.0,
-                                                  fusing_only=False, fusing_perimeter_threshold=5.0,
+                                                  fusing_only=False, fusing_perimeter_threshold=1.0,
                                                   alignment_dir: str = "best_alignment"):
     """
     For each vesicle within vesicle_distance_threshold of the presynaptic active zone:
@@ -186,7 +151,7 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
         max_distance: Maximum distance for histogram bins (default 500 nm)
         bin_width: Width of histogram bins (default 5 nm)
         fusing_only: If True, only include fusing vesicles (perimeter within fusing_perimeter_threshold)
-        fusing_perimeter_threshold: Distance threshold for fusing vesicles (default 5.0 nm)
+        fusing_perimeter_threshold: Distance threshold for fusing vesicles (default 1.0 nm)
         
     Returns:
         DataFrame with vesicle info and AuNP distance histogram bins
@@ -231,11 +196,19 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
         if active_zone_points is None or len(active_zone_points) == 0:
             continue
         
-        # Check if this is a fusing vesicle (if fusing_only is True)
+        # Check if this is a fusing vesicle (if fusing_only is True).
+        # Strict mode: require precomputed vesicle label from vesicles.py.
         if fusing_only:
-            is_fusing = check_if_fusing_vesicle(vesicle, active_zone_points, 
-                                               perimeter_threshold=fusing_perimeter_threshold)
+            if 'is_fusing' in vesicle:
+                is_fusing = bool(vesicle.get('is_fusing'))
+            else:
+                print(
+                    f"Skipping vesicle {vesicle_idx} in {tomogram_name}: "
+                    "missing 'is_fusing' label from vesicles.py."
+                )
+                continue
             if not is_fusing:
+                print(f"Skipping vesicle {vesicle_idx} in {tomogram_name}: not fusing.")
                 continue
         
         # Compute fusion point for this vesicle
@@ -290,7 +263,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
                   cylinder_radius=25.0, receptor_crosssection=122.0, aunps_per_receptor=2.0,
                   vertex_sampling_step=1, synaptic_designation_cutoff=30.0,
                   min_cluster_size=4, fusion_point_threshold=20.0,
-                  fusing_perimeter_threshold=5.0, active_center_distance_metric="mean"):
+                  fusing_perimeter_threshold=1.0, active_center_distance_metric="mean"):
     """
     Performs analysis of gold nanoparticles (AuNPs) in the tomogram.
 
@@ -309,7 +282,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
             synaptic vs extrasynaptic label. Default: 30.0.
         min_cluster_size (int): Minimum cluster size to keep after DBSCAN (smaller clusters -> noise). Default: 4.
         fusion_point_threshold (float): Radius (nm) for AZ points contributing to fusion point. Default: 20.0.
-        fusing_perimeter_threshold (float): Max perimeter-to-AZ distance (nm) for fusing vesicles. Default: 5.0.
+        fusing_perimeter_threshold (float): Max perimeter-to-AZ distance (nm) for fusing vesicles. Default: 1.0.
         active_center_distance_metric (str): How to combine outer/inner distances for active center.
             Options: "mean", "min". Default: "mean".
     """
@@ -809,7 +782,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
         # --- End close vesicle AuNP histograms ---
         
         # --- Compute AuNP distance histograms per FUSING vesicle (bin5) ---
-        print("Computing AuNP distance histograms for fusing vesicles (perimeter within 5 nm of AZ, bin5)...")
+        print(f"Computing AuNP distance histograms for fusing vesicles (distance <= {fusing_perimeter_threshold} nm to AZ, bin5)...")
         df_fusing_vesicle_aunp_hist_bin5 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
             vesicle_distance_threshold=vesicle_distance_threshold,
@@ -823,7 +796,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
         save_histogram_csv(df_fusing_vesicle_aunp_hist_bin5, Path("results/aunps/fusing_vesicles_aunp_histograms_bin5.csv"), "fusing", 5.0)
         
         # --- Compute AuNP distance histograms per FUSING vesicle (bin10) ---
-        print("Computing AuNP distance histograms for fusing vesicles (perimeter within 5 nm of AZ, bin10)...")
+        print(f"Computing AuNP distance histograms for fusing vesicles (distance <= {fusing_perimeter_threshold} nm to AZ, bin10)...")
         df_fusing_vesicle_aunp_hist_bin10 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
             vesicle_distance_threshold=vesicle_distance_threshold,
@@ -837,7 +810,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
         save_histogram_csv(df_fusing_vesicle_aunp_hist_bin10, Path("results/aunps/fusing_vesicles_aunp_histograms_bin10.csv"), "fusing", 10.0)
         
         # --- Compute AuNP distance histograms per FUSING vesicle (bin50) ---
-        print("Computing AuNP distance histograms for fusing vesicles (perimeter within 5 nm of AZ, bin50)...")
+        print(f"Computing AuNP distance histograms for fusing vesicles (distance <= {fusing_perimeter_threshold} nm to AZ, bin50)...")
         df_fusing_vesicle_aunp_hist_bin50 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
             vesicle_distance_threshold=vesicle_distance_threshold,

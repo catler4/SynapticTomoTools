@@ -80,7 +80,7 @@ class AnalysisPipelineGUI(tk.Tk):
         self.synaptic_designation_cutoff = tk.StringVar(value="30.0")
         self.min_cluster_size = tk.StringVar(value="4")
         self.fusion_point_threshold = tk.StringVar(value="20.0")
-        self.fusing_perimeter_threshold = tk.StringVar(value="5.0")
+        self.fusing_perimeter_threshold = tk.StringVar(value="1.0")
         self.active_center_distance_metric = tk.StringVar(value="mean")
         
         self._build_tabs()
@@ -197,10 +197,14 @@ class AnalysisPipelineGUI(tk.Tk):
         # Vesicle analysis parameters
         vesicle_frame = ttk.LabelFrame(self.custom_params_frame, text="Vesicle Analysis Parameters", padding=5)
         vesicle_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-        ttk.Label(vesicle_frame, text="Distance from active zone for 'close' vesicles (nm):").grid(row=0, column=0, sticky=tk.W, padx=5)
+        ttk.Label(vesicle_frame, text="Close vesicle membrane distance cutoff (nm):").grid(row=0, column=0, sticky=tk.W, padx=5)
         vesicle_threshold_entry = ttk.Entry(vesicle_frame, textvariable=self.vesicle_distance_threshold, width=8)
         vesicle_threshold_entry.grid(row=0, column=1, padx=5)
         ttk.Label(vesicle_frame, text="(default: 10.0)").grid(row=0, column=2, padx=5, sticky=tk.W)
+        ttk.Label(vesicle_frame, text="Fusing vesicle membrane distance cutoff (nm):").grid(row=1, column=0, sticky=tk.W, padx=5)
+        fusing_perimeter_threshold_entry = ttk.Entry(vesicle_frame, textvariable=self.fusing_perimeter_threshold, width=8)
+        fusing_perimeter_threshold_entry.grid(row=1, column=1, padx=5)
+        ttk.Label(vesicle_frame, text="(default: 1.0)").grid(row=1, column=2, padx=5, sticky=tk.W)
         
         # AuNP analysis parameters
         aunp_frame = ttk.LabelFrame(self.custom_params_frame, text="AuNP Analysis Parameters", padding=5)
@@ -225,18 +229,14 @@ class AnalysisPipelineGUI(tk.Tk):
         fusion_point_threshold_entry = ttk.Entry(aunp_frame, textvariable=self.fusion_point_threshold, width=8)
         fusion_point_threshold_entry.grid(row=4, column=1, padx=5)
         ttk.Label(aunp_frame, text="(default: 20.0)").grid(row=4, column=2, padx=5, sticky=tk.W)
-        ttk.Label(aunp_frame, text="Fusing perimeter threshold (nm):").grid(row=5, column=0, sticky=tk.W, padx=5)
-        fusing_perimeter_threshold_entry = ttk.Entry(aunp_frame, textvariable=self.fusing_perimeter_threshold, width=8)
-        fusing_perimeter_threshold_entry.grid(row=5, column=1, padx=5)
-        ttk.Label(aunp_frame, text="(default: 5.0)").grid(row=5, column=2, padx=5, sticky=tk.W)
-        ttk.Label(aunp_frame, text="Active center distance metric:").grid(row=6, column=0, sticky=tk.W, padx=5)
+        ttk.Label(aunp_frame, text="Active center distance metric:").grid(row=5, column=0, sticky=tk.W, padx=5)
         center_metric_combo = ttk.Combobox(
             aunp_frame, textvariable=self.active_center_distance_metric,
             values=["mean", "min"], width=8, state="readonly"
         )
-        center_metric_combo.grid(row=6, column=1, padx=5)
+        center_metric_combo.grid(row=5, column=1, padx=5)
         center_metric_combo.set("mean")
-        ttk.Label(aunp_frame, text="(default: mean)").grid(row=6, column=2, padx=5, sticky=tk.W)
+        ttk.Label(aunp_frame, text="(default: mean)").grid(row=5, column=2, padx=5, sticky=tk.W)
         
         # Visualization parameters
         viz_frame = ttk.LabelFrame(self.custom_params_frame, text="Visualization Parameters", padding=5)
@@ -291,13 +291,13 @@ class AnalysisPipelineGUI(tk.Tk):
         # Tooltips for custom parameters
         ToolTip(az_min_entry, "Active-zone minimum pre/post membrane distance in nm (default 10.0).")
         ToolTip(az_max_entry, "Active-zone maximum pre/post membrane distance in nm (default 40.0).")
-        ToolTip(vesicle_threshold_entry, "Maximum vesicle distance_to_az (nm) considered 'close' for vesicle-linked analyses (default 10.0).")
+        ToolTip(vesicle_threshold_entry, "Close vesicle membrane distance cutoff in nm (default 10.0).")
         ToolTip(dbscan_eps_entry, "DBSCAN epsilon in nm for AuNP clustering neighborhood radius (default 16.0).")
         ToolTip(dbscan_min_samples_entry, "DBSCAN min_samples core-point threshold (default 1).")
         ToolTip(synaptic_cutoff_entry, "AuNP is labeled synaptic if distance to postsynaptic active outer membrane is <= this cutoff in nm (default 30.0).")
         ToolTip(min_cluster_size_entry, "Post-DBSCAN minimum retained cluster size; smaller clusters are reassigned to noise (default 4).")
         ToolTip(fusion_point_threshold_entry, "Radius in nm for active-zone points contributing to per-vesicle fusion point estimation (default 20.0).")
-        ToolTip(fusing_perimeter_threshold_entry, "Vesicle is fusing if minimum sphere perimeter distance to active zone is <= this nm threshold (default 5.0).")
+        ToolTip(fusing_perimeter_threshold_entry, "Vesicle is fusing if minimum distance from original vesicle segmentation points to presynaptic active-zone points is <= this threshold (default 1.0 nm).")
         ToolTip(center_metric_combo, "How active-center distance is computed from outer/inner distances: mean or min (default mean).")
         ToolTip(sphere_size_entry, "Marker size for visualization sphere overlays (default 36).")
         ToolTip(self.sphere_color_combo, "Marker color for visualization sphere overlays (default gold).")

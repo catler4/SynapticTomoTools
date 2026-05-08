@@ -368,7 +368,7 @@ def calculate_vesicle_distance_to_closest_active_zone(vesicle_data: Tuple[int, D
     index, vesicle = vesicle_data
     
     if not membrane_active_zone_pairs:
-        return index, 0.0, "unknown"
+        return index, float('nan'), "unknown"
     
     vesicle_center = np.array(vesicle['center'])
     
@@ -376,7 +376,7 @@ def calculate_vesicle_distance_to_closest_active_zone(vesicle_data: Tuple[int, D
     membrane_name, active_zone_points = find_closest_active_zone(vesicle_center, membrane_active_zone_pairs)
     
     if len(active_zone_points) == 0:
-        return index, 0.0, membrane_name
+        return index, float('nan'), membrane_name
     
     # Get all vesicle segmentation points
     vesicle_points = np.array(vesicle['coordinates'])
@@ -406,7 +406,7 @@ def calculate_vesicle_distances_to_closest_active_zones(vesicles: List[Dict[str,
         Tuple of (distances, membrane_names) corresponding to each vesicle
     """
     if not membrane_active_zone_pairs:
-        return [0.0] * len(vesicles), ["unknown"] * len(vesicles)
+        return [float('nan')] * len(vesicles), ["unknown"] * len(vesicles)
     
     if n_processes is None:
         n_processes = mp.cpu_count()
@@ -453,7 +453,8 @@ def save_vesicle_results(vesicles: List[Dict[str, Any]], tomogram_path, alignmen
     if vesicles:
         volumes = [v['volume'] for v in vesicles]
         diameters = [v['diameter'] for v in vesicles]
-        distances_to_az = [v.get('distance_to_az', 0.0) for v in vesicles]
+        distances_to_az = [v.get('distance_to_az', np.nan) for v in vesicles]
+        valid_distances = [d for d in distances_to_az if np.isfinite(d)]
         
         summary = {
             'total_vesicles': len(vesicles),
@@ -462,10 +463,10 @@ def save_vesicle_results(vesicles: List[Dict[str, Any]], tomogram_path, alignmen
             'std_vesicle_diameter_nm': float(np.std(diameters)),
             'min_vesicle_diameter_nm': float(np.min(diameters)),
             'max_vesicle_diameter_nm': float(np.max(diameters)),
-            'average_distance_to_az_nm': float(np.mean(distances_to_az)),
-            'min_distance_to_az_nm': float(np.min(distances_to_az)),
-            'max_distance_to_az_nm': float(np.max(distances_to_az)),
-            'std_distance_to_az_nm': float(np.std(distances_to_az))
+            'average_distance_to_az_nm': float(np.mean(valid_distances)) if valid_distances else np.nan,
+            'min_distance_to_az_nm': float(np.min(valid_distances)) if valid_distances else np.nan,
+            'max_distance_to_az_nm': float(np.max(valid_distances)) if valid_distances else np.nan,
+            'std_distance_to_az_nm': float(np.std(valid_distances)) if valid_distances else np.nan
         }
     else:
         summary = {
@@ -516,8 +517,13 @@ def save_nearby_vesicles(vesicles: List[Dict[str, Any]], tomogram_path,
     # Filter vesicles near active zone using pre-calculated distances
     nearby_vesicles = []
     for vesicle in vesicles:
-        distance_to_az = vesicle.get('distance_to_az', 0.0)
-        if distance_to_az <= distance_threshold:
+        distance_class = vesicle.get('vesicle_distance_class')
+        if distance_class in ('fusing', 'close'):
+            nearby_vesicles.append(vesicle)
+            continue
+        # Backward compatibility when class labels are absent in older files.
+        distance_to_az = vesicle.get('distance_to_az', np.nan)
+        if np.isfinite(distance_to_az) and distance_to_az <= distance_threshold:
             nearby_vesicles.append(vesicle)
     
     print(f"Found {len(nearby_vesicles)} vesicles with points within {distance_threshold} nm of active zone")
@@ -526,7 +532,7 @@ def save_nearby_vesicles(vesicles: List[Dict[str, Any]], tomogram_path,
     if nearby_vesicles:
         volumes = [v['volume'] for v in nearby_vesicles]
         diameters = [v['diameter'] for v in nearby_vesicles]
-        distances_to_az = [v.get('distance_to_az', 0.0) for v in nearby_vesicles]
+        distances_to_az = [v.get('distance_to_az', np.nan) for v in nearby_vesicles]
         
         summary = {
             'total_nearby_vesicles': len(nearby_vesicles),
@@ -575,7 +581,13 @@ def save_nearby_vesicles(vesicles: List[Dict[str, Any]], tomogram_path,
 
 
 
-def detect_vesicles(tomogram_path, set_name=None, vesicle_distance_threshold=10.0, alignment_dir: str = "best_alignment") -> Dict[str, Any]:
+def detect_vesicles(
+    tomogram_path,
+    set_name=None,
+    vesicle_distance_threshold=10.0,
+    alignment_dir: str = "best_alignment",
+    fusing_perimeter_threshold: float = 1.0,
+) -> Dict[str, Any]:
     """
     Detect synaptic vesicles in tomogram.
     
@@ -613,9 +625,29 @@ def detect_vesicles(tomogram_path, set_name=None, vesicle_distance_threshold=10.
         else:
             # No presynaptic membranes available
             for vesicle in vesicles:
-                vesicle['distance_to_az'] = 0.0
+                vesicle['distance_to_az'] = np.nan
                 vesicle['closest_membrane'] = "unknown"
         
+        # Assign all vesicle distance classes in one step based on distance_to_az.
+        for vesicle in vesicles:
+            distance_to_az = vesicle.get('distance_to_az', np.nan)
+            if not np.isfinite(distance_to_az):
+                vesicle['vesicle_distance_class'] = 'unknown'
+                vesicle['is_fusing'] = False
+                vesicle['is_close'] = False
+            elif distance_to_az <= fusing_perimeter_threshold:
+                vesicle['vesicle_distance_class'] = 'fusing'
+                vesicle['is_fusing'] = True
+                vesicle['is_close'] = False
+            elif distance_to_az <= vesicle_distance_threshold:
+                vesicle['vesicle_distance_class'] = 'close'
+                vesicle['is_fusing'] = False
+                vesicle['is_close'] = True
+            else:
+                vesicle['vesicle_distance_class'] = 'far'
+                vesicle['is_fusing'] = False
+                vesicle['is_close'] = False
+
         # Calculate sphericity for all vesicles
         print("Calculating vesicle sphericity...")
         sphericities = calculate_all_vesicle_sphericities(vesicles)
@@ -628,16 +660,13 @@ def detect_vesicles(tomogram_path, set_name=None, vesicle_distance_threshold=10.
         if vesicles:
             volumes = [v['volume'] for v in vesicles]
             diameters = [v['diameter'] for v in vesicles]
-            distances_to_az = [v.get('distance_to_az', 0.0) for v in vesicles]
+            distances_to_az = [v.get('distance_to_az', np.nan) for v in vesicles]
+            valid_distances = [d for d in distances_to_az if np.isfinite(d)]
             # Extract sphericity values (volume-based only)
             sphericity_volume = [s['sphericity_volume'] for s in sphericities]
             
             # Count vesicles within threshold of active zone using the same logic as save_nearby_vesicles
-            nearby_vesicles = []
-            for vesicle in vesicles:
-                distance_to_az = vesicle.get('distance_to_az', 0.0)
-                if distance_to_az <= vesicle_distance_threshold:
-                    nearby_vesicles.append(vesicle)
+            nearby_vesicles = [v for v in vesicles if v.get('vesicle_distance_class') in ('fusing', 'close')]
             nearby_vesicle_count = len(nearby_vesicles)
             
             # --- Append to global results/all_vesicle_data.csv ---
@@ -664,8 +693,11 @@ def detect_vesicles(tomogram_path, set_name=None, vesicle_distance_threshold=10.
                     'radius': vesicle['radius'],
                     'diameter': vesicle['diameter'],
                     'volume': vesicle['volume'],
-                    'distance_to_az': vesicle.get('distance_to_az', 0.0),
+                    'distance_to_az': vesicle.get('distance_to_az', np.nan),
                     'closest_membrane': vesicle.get('closest_membrane', 'unknown'),
+                    'vesicle_distance_class': vesicle.get('vesicle_distance_class', 'unknown'),
+                    'is_fusing': bool(vesicle.get('is_fusing', False)),
+                    'is_close': bool(vesicle.get('is_close', False)),
                     'sphericity_volume': sphericities[i]['sphericity_volume']
                 }
                 vesicle_rows.append(row)
@@ -699,11 +731,15 @@ def detect_vesicles(tomogram_path, set_name=None, vesicle_distance_threshold=10.
                 'vesicle_positions': [v['center'] for v in vesicles],
                 'total_vesicle_volume': float(np.sum(volumes)),
                 'average_vesicle_diameter': float(np.mean(diameters)),
-                'average_distance_to_az': float(np.mean(distances_to_az)),
-                'min_distance_to_az': float(np.min(distances_to_az)),
-                'max_distance_to_az': float(np.max(distances_to_az)),
-                'distance_std': float(np.std(distances_to_az)),
+                'average_distance_to_az': float(np.mean(valid_distances)) if valid_distances else np.nan,
+                'min_distance_to_az': float(np.min(valid_distances)) if valid_distances else np.nan,
+                'max_distance_to_az': float(np.max(valid_distances)) if valid_distances else np.nan,
+                'distance_std': float(np.std(valid_distances)) if valid_distances else np.nan,
                 'nearby_vesicle_count': nearby_vesicle_count,
+                'fusing_vesicle_count': int(sum(1 for v in vesicles if v.get('vesicle_distance_class') == 'fusing')),
+                'close_vesicle_count': int(sum(1 for v in vesicles if v.get('vesicle_distance_class') == 'close')),
+                'far_vesicle_count': int(sum(1 for v in vesicles if v.get('vesicle_distance_class') == 'far')),
+                'unknown_distance_vesicle_count': int(sum(1 for v in vesicles if v.get('vesicle_distance_class') == 'unknown')),
                 'average_sphericity_volume': float(np.mean(sphericity_volume)),
                 'min_sphericity_volume': float(np.min(sphericity_volume)),
                 'max_sphericity_volume': float(np.max(sphericity_volume)),
@@ -795,15 +831,16 @@ def measure_distances_to_az(tomogram_path, alignment_dir: str = "best_alignment"
             }
         
         # Extract pre-calculated distances
-        distances_to_az = [v.get('distance_to_az', 0.0) for v in vesicles]
+        distances_to_az = [v.get('distance_to_az', np.nan) for v in vesicles]
+        valid_distances = [d for d in distances_to_az if np.isfinite(d)]
         
         # Calculate distance statistics from pre-calculated distances
-        if distances_to_az:
+        if valid_distances:
             results = {
-                'average_distance_to_az': float(np.mean(distances_to_az)),
-                'min_distance_to_az': float(np.min(distances_to_az)),
-                'max_distance_to_az': float(np.max(distances_to_az)),
-                'distance_std': float(np.std(distances_to_az)),
+                'average_distance_to_az': float(np.mean(valid_distances)),
+                'min_distance_to_az': float(np.min(valid_distances)),
+                'max_distance_to_az': float(np.max(valid_distances)),
+                'distance_std': float(np.std(valid_distances)),
                 'vesicle_az_distances': distances_to_az,
                 'status': 'completed'
             }
@@ -820,8 +857,12 @@ def measure_distances_to_az(tomogram_path, alignment_dir: str = "best_alignment"
         # Calculate nearby vesicle count using the same logic as detect_vesicles
         nearby_vesicles = []
         for vesicle in vesicles:
-            distance_to_az = vesicle.get('distance_to_az', 0.0)
-            if distance_to_az <= 10.0:
+            distance_class = vesicle.get('vesicle_distance_class')
+            if distance_class in ('fusing', 'close'):
+                nearby_vesicles.append(vesicle)
+                continue
+            distance_to_az = vesicle.get('distance_to_az', np.nan)
+            if np.isfinite(distance_to_az) and distance_to_az <= 10.0:
                 nearby_vesicles.append(vesicle)
         nearby_vesicle_count = len(nearby_vesicles)
         

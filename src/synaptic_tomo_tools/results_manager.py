@@ -33,8 +33,15 @@ class ResultsManager:
         with open(self.results_file, 'w') as f:
             json.dump(self.results, f, indent=2, default=str)
     
-    def store_tomogram_results(self, tomogram_name: str, analysis_type: str, 
-                              results: Dict[str, Any], overwrite: bool = False, set_name: Optional[str] = None):
+    def store_tomogram_results(
+        self,
+        tomogram_name: str,
+        analysis_type: str,
+        results: Dict[str, Any],
+        overwrite: bool = False,
+        set_name: Optional[str] = None,
+        alignment_dir: Optional[str] = None,
+    ):
         """
         Store results for a specific tomogram and analysis type.
         
@@ -44,6 +51,7 @@ class ResultsManager:
             results: Dictionary of results to store
             overwrite: Whether to overwrite existing results
             set_name: Name of the experimental set (optional)
+            alignment_dir: Alignment directory name (optional)
         """
         if tomogram_name not in self.results:
             self.results[tomogram_name] = {}
@@ -58,7 +66,8 @@ class ResultsManager:
             'analysis_type': analysis_type,
             'timestamp': datetime.now().isoformat(),
             'version': '1.0',
-            'set_name': set_name
+            'set_name': set_name,
+            'alignment_dir': alignment_dir,
         }
         
         self.results[tomogram_name][analysis_type] = results_with_metadata
@@ -219,8 +228,12 @@ class ResultsManager:
                     row = {
                         'tomogram_name': tomogram_name,
                         'set_name': data.get('set_name', ''),
+                        'alignment_dir': data.get('alignment_dir', ''),
                         'timestamp': data.get('timestamp', ''),
                     }
+                    if not row['alignment_dir'] and "__" in tomogram_name:
+                        # Backward compatibility: parse legacy composite key.
+                        row['alignment_dir'] = tomogram_name.split("__", 1)[1]
                     
                     # Flatten the results data
                     flattened_results = self._flatten_results(data['results'])

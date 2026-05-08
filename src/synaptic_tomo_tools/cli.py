@@ -175,7 +175,9 @@ def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True, a
                 'active_zone': az_results,
                 'cleft_width': cleft_results
             }
-            results_manager.store_tomogram_results(analysis_name, 'activezone', combined_results, overwrite=rerun, set_name=set_name)
+            results_manager.store_tomogram_results(
+                analysis_name, 'activezone', combined_results, overwrite=rerun, set_name=set_name, alignment_dir=alignment_dir
+            )
         except Exception as e:
             print(f"Error in active zone analysis for {analysis_name}: {e}")
             # Store error results so we know this analysis failed
@@ -189,9 +191,18 @@ def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True, a
                     'error': str(e)
                 }
             }
-            results_manager.store_tomogram_results(analysis_name, 'activezone', error_results, overwrite=True, set_name=set_name)
+            results_manager.store_tomogram_results(
+                analysis_name, 'activezone', error_results, overwrite=True, set_name=set_name, alignment_dir=alignment_dir
+            )
 
-def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True, vesicle_distance_threshold=None):
+def run_vesicles(
+    tomo_paths,
+    results_manager,
+    rerun=False,
+    print_ascii=True,
+    vesicle_distance_threshold=None,
+    fusing_perimeter_threshold=None,
+):
     if print_ascii:
         print_synapse_ascii_art()
     for i, (tomo, set_name, aunp_active_zones, alignment_dir) in enumerate(tomo_paths):
@@ -221,13 +232,22 @@ def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True, ves
             # use only the relevant active zones
             # Use custom vesicle distance threshold if provided, otherwise use default (10.0)
             threshold = vesicle_distance_threshold if vesicle_distance_threshold is not None else 10.0
-            vesicle_results = detect_vesicles(tomo, set_name=set_name, vesicle_distance_threshold=threshold, alignment_dir=alignment_dir)
+            fusing_threshold = fusing_perimeter_threshold if fusing_perimeter_threshold is not None else 1.0
+            vesicle_results = detect_vesicles(
+                tomo,
+                set_name=set_name,
+                vesicle_distance_threshold=threshold,
+                alignment_dir=alignment_dir,
+                fusing_perimeter_threshold=fusing_threshold,
+            )
             distance_results = measure_distances_to_az(tomo, alignment_dir=alignment_dir)
             combined_results = {
                 'vesicle_detection': vesicle_results,
                 'distance_measurements': distance_results
             }
-            results_manager.store_tomogram_results(analysis_name, 'vesicles', combined_results, overwrite=rerun, set_name=set_name)
+            results_manager.store_tomogram_results(
+                analysis_name, 'vesicles', combined_results, overwrite=rerun, set_name=set_name, alignment_dir=alignment_dir
+            )
         except Exception as e:
             print(f"Error in vesicle analysis for {analysis_name}: {e}")
             # Store error results so we know this analysis failed
@@ -242,7 +262,9 @@ def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True, ves
                     'error': str(e)
                 }
             }
-            results_manager.store_tomogram_results(analysis_name, 'vesicles', error_results, overwrite=True, set_name=set_name)
+            results_manager.store_tomogram_results(
+                analysis_name, 'vesicles', error_results, overwrite=True, set_name=set_name, alignment_dir=alignment_dir
+            )
 
 def generate_visualizations(tomo_paths, results_manager, rerun=False, print_ascii=True, csv_path=None, 
                             sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None,
@@ -402,8 +424,14 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
     print("\n" + "="*80)
     print("STEP 2: VESICLE ANALYSIS")
     print("="*80)
-    run_vesicles(tomo_paths, results_manager, rerun, print_ascii=False, 
-                 vesicle_distance_threshold=vesicle_distance_threshold)
+    run_vesicles(
+        tomo_paths,
+        results_manager,
+        rerun,
+        print_ascii=False,
+        vesicle_distance_threshold=vesicle_distance_threshold,
+        fusing_perimeter_threshold=fusing_perimeter_threshold,
+    )
     
     # Step 3: AuNP Analysis
     print("\n" + "="*80)
@@ -492,7 +520,7 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
             syn_cutoff = synaptic_designation_cutoff if synaptic_designation_cutoff is not None else 30.0
             min_clust = min_cluster_size if min_cluster_size is not None else 4
             fusion_thresh = fusion_point_threshold if fusion_point_threshold is not None else 20.0
-            fusing_thresh = fusing_perimeter_threshold if fusing_perimeter_threshold is not None else 5.0
+            fusing_thresh = fusing_perimeter_threshold if fusing_perimeter_threshold is not None else 1.0
             center_metric = active_center_distance_metric if active_center_distance_metric is not None else "mean"
             aunp_results = analyze_aunps(tomo, az_indices, set_name=set_name, alignment_dir=alignment_dir,
                                          vesicle_distance_threshold=vesicle_threshold,
@@ -513,7 +541,9 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
             }
             
             # Auto-overwrite if not using skip_completed (more intuitive behavior)
-            results_manager.store_tomogram_results(analysis_name, 'aunps', combined_results, overwrite=rerun, set_name=set_name)
+            results_manager.store_tomogram_results(
+                analysis_name, 'aunps', combined_results, overwrite=rerun, set_name=set_name, alignment_dir=alignment_dir
+            )
         except Exception as e:
             print(f"Error in AuNP analysis for {analysis_name}: {e}")
             # Store error results so we know this analysis failed
@@ -523,7 +553,9 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
                     'error': str(e)
                 }
             }
-            results_manager.store_tomogram_results(analysis_name, 'aunps', error_results, overwrite=True, set_name=set_name)
+            results_manager.store_tomogram_results(
+                analysis_name, 'aunps', error_results, overwrite=True, set_name=set_name, alignment_dir=alignment_dir
+            )
 
 def delete_csv_tomogram_results(csv_path, results_dir="results", data_dir="data"):
     """Delete results only for tomograms specified in the CSV file."""
@@ -774,7 +806,7 @@ def main():
     )
     parser.add_argument(
         "--fusing-perimeter-threshold", type=float, default=None,
-        help="Perimeter distance threshold (nm) for classifying fusing vesicles. Default: 5.0"
+        help="Minimum vesicle-segmentation-point to presynaptic active-zone distance (nm) for classifying fusing vesicles. Default: 1.0"
     )
     parser.add_argument(
         "--active-center-distance-metric", type=str, default=None, choices=["mean", "min"],
@@ -913,8 +945,13 @@ def main():
         run_activezone(tomos, results_manager, rerun=args.rerun, 
                        az_distance_min=az_distance_min, az_distance_max=az_distance_max)
     elif args.analysis == "vesicles":
-        run_vesicles(tomos, results_manager, rerun=args.rerun, 
-                     vesicle_distance_threshold=vesicle_distance_threshold)
+        run_vesicles(
+            tomos,
+            results_manager,
+            rerun=args.rerun,
+            vesicle_distance_threshold=vesicle_distance_threshold,
+            fusing_perimeter_threshold=fusing_perimeter_threshold,
+        )
     elif args.analysis == "aunps":
         run_aunps(tomos, results_manager, rerun=args.rerun, 
                   vesicle_distance_threshold=vesicle_distance_threshold,
