@@ -526,12 +526,12 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
                 df_valid['distance_to_postsynaptic_active_inner'].to_numpy()
             ])
             if active_center_distance_metric == "min":
-                df_valid['distance_to_presynaptic_active_center'] = np.nanmin(pre_center_stack, axis=0)
-                df_valid['distance_to_postsynaptic_active_center'] = np.nanmin(post_center_stack, axis=0)
+                df_valid['distance_to_presynaptic_active_outer_inner_mean'] = np.nanmin(pre_center_stack, axis=0)
+                df_valid['distance_to_postsynaptic_active_outer_inner_mean'] = np.nanmin(post_center_stack, axis=0)
             else:
                 # Default: mean
-                df_valid['distance_to_presynaptic_active_center'] = np.nanmean(pre_center_stack, axis=0)
-                df_valid['distance_to_postsynaptic_active_center'] = np.nanmean(post_center_stack, axis=0)
+                df_valid['distance_to_presynaptic_active_outer_inner_mean'] = np.nanmean(pre_center_stack, axis=0)
+                df_valid['distance_to_postsynaptic_active_outer_inner_mean'] = np.nanmean(post_center_stack, axis=0)
 
             # Synaptic if within cutoff of postsynaptic active outer membrane; else extrasynaptic
             synaptic_mask = df_valid['distance_to_postsynaptic_active_outer'] <= synaptic_designation_cutoff
@@ -554,8 +554,8 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
             df_valid['distance_to_postsynaptic_active_outer'] = np.full(coords.shape[0], np.nan)
             df_valid['distance_to_presynaptic_active_inner'] = np.full(coords.shape[0], np.nan)
             df_valid['distance_to_postsynaptic_active_inner'] = np.full(coords.shape[0], np.nan)
-            df_valid['distance_to_presynaptic_active_center'] = np.full(coords.shape[0], np.nan)
-            df_valid['distance_to_postsynaptic_active_center'] = np.full(coords.shape[0], np.nan)
+            df_valid['distance_to_presynaptic_active_outer_inner_mean'] = np.full(coords.shape[0], np.nan)
+            df_valid['distance_to_postsynaptic_active_outer_inner_mean'] = np.full(coords.shape[0], np.nan)
             df_valid['synaptic_designation'] = "extrasynaptic"
         df_valid['distance_to_active_zone_center'] = distances_to_center
         # --- End active zone center calculation ---
@@ -615,7 +615,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
                 'distance_to_fusion_point', 'distance_to_active_zone_center',
                 'distance_to_presynaptic_active_outer', 'distance_to_postsynaptic_active_outer',
                 'distance_to_presynaptic_active_inner', 'distance_to_postsynaptic_active_inner',
-                'distance_to_presynaptic_active_center', 'distance_to_postsynaptic_active_center',
+                'distance_to_presynaptic_active_outer_inner_mean', 'distance_to_postsynaptic_active_outer_inner_mean',
             ]
             additional_cols = [col for col in distance_cols if col in df_valid.columns]
             star_cols = base_cols + additional_cols + ['synaptic_designation', 'aunp_cluster']
@@ -651,7 +651,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
             'distance_to_fusion_point_nm', 'distance_to_active_zone_center_nm',
             'distance_to_presynaptic_active_outer_nm', 'distance_to_postsynaptic_active_outer_nm',
             'distance_to_presynaptic_active_inner_nm', 'distance_to_postsynaptic_active_inner_nm',
-            'distance_to_presynaptic_active_center_nm', 'distance_to_postsynaptic_active_center_nm',
+            'distance_to_presynaptic_active_outer_inner_mean_nm', 'distance_to_postsynaptic_active_outer_inner_mean_nm',
             'synaptic_designation', 'aunp_cluster'
         ]
         # Create a copy with renamed columns for CSV output
@@ -660,7 +660,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
                               'distance_to_fusion_point', 'distance_to_active_zone_center',
                               'distance_to_presynaptic_active_outer', 'distance_to_postsynaptic_active_outer',
                               'distance_to_presynaptic_active_inner', 'distance_to_postsynaptic_active_inner',
-                              'distance_to_presynaptic_active_center', 'distance_to_postsynaptic_active_center',
+                              'distance_to_presynaptic_active_outer_inner_mean', 'distance_to_postsynaptic_active_outer_inner_mean',
                               'synaptic_designation', 'aunp_cluster']].copy()
         df_output.columns = cols_out
         df_output.to_csv(output_file, index=False)
@@ -696,8 +696,8 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignm
             'distance_to_postsynaptic_active_outer': 'distance_to_postsynaptic_active_outer_nm',
             'distance_to_presynaptic_active_inner': 'distance_to_presynaptic_active_inner_nm',
             'distance_to_postsynaptic_active_inner': 'distance_to_postsynaptic_active_inner_nm',
-            'distance_to_presynaptic_active_center': 'distance_to_presynaptic_active_center_nm',
-            'distance_to_postsynaptic_active_center': 'distance_to_postsynaptic_active_center_nm',
+            'distance_to_presynaptic_active_outer_inner_mean': 'distance_to_presynaptic_active_outer_inner_mean_nm',
+            'distance_to_postsynaptic_active_outer_inner_mean': 'distance_to_postsynaptic_active_outer_inner_mean_nm',
         }
         # Only rename columns that exist
         rename_dict = {k: v for k, v in rename_dict.items() if k in df_global.columns}
