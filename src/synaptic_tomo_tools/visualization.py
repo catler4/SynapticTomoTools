@@ -43,13 +43,13 @@ def find_analyzed_tomograms(base_dir="../data/"):
                 tomos.append(str(tomo_path))
     return sorted(tomos)
 
-def load_tomogram_slice(tomo_path, z_center=None):
+def load_tomogram_slice(tomo_path, z_center=None, alignment_dir='best_alignment'):
     """Load a 2D slice from the tomogram."""
     if mrcfile is None:
         print("mrcfile not available, skipping tomogram slice loading")
         return None, None
     
-    mrcs = list((Path(tomo_path) / 'best_alignment').glob('*ddw.mrc'))
+    mrcs = list((Path(tomo_path) / alignment_dir).glob('*ddw.mrc'))
     if not mrcs:
         return None, None
     with mrcfile.open(mrcs[0], 'r') as mrc:
@@ -58,30 +58,30 @@ def load_tomogram_slice(tomo_path, z_center=None):
         z_center = data.shape[0] // 2
     return data[z_center], z_center
 
-def load_membrane_coords(tomo_path, kind='presynaptic'):
+def load_membrane_coords(tomo_path, kind='presynaptic', alignment_dir='best_alignment'):
     """Load membrane coordinates from text files."""
-    aunps_dir = Path(tomo_path) / 'best_alignment' / 'aunps'
+    aunps_dir = Path(tomo_path) / alignment_dir / 'aunps'
     files = sorted(aunps_dir.glob(f'{kind}membranes_*.txt'))
     coords = [np.loadtxt(f) for f in files if f.exists()]
     return coords
 
-def load_active_zone_coords(tomo_path):
+def load_active_zone_coords(tomo_path, alignment_dir='best_alignment'):
     """Load active zone coordinates."""
-    az_dir = Path(tomo_path) / 'best_alignment' / 'STT_results' / 'activezone'
-    files = sorted(az_dir.glob('active_zone_pre*_post*_pre.txt'))
+    az_dir = Path(tomo_path) / alignment_dir / 'STT_results' / 'activezone'
+    files = sorted(az_dir.glob('active_zone_pre*_post*_pre_outer.txt'))
     coords = [np.loadtxt(f) for f in files if f.exists()]
     return coords
 
-def load_vesicles(tomo_path):
+def load_vesicles(tomo_path, alignment_dir='best_alignment'):
     """Load vesicle data from JSON file."""
-    ves_file = Path(tomo_path) / 'best_alignment' / 'STT_results' / 'vesicles' / 'vesicle_results.json'
+    ves_file = Path(tomo_path) / alignment_dir / 'STT_results' / 'vesicles' / 'vesicle_results.json'
     with open(ves_file) as f:
         data = json.load(f)
     return data['vesicles']
 
-def load_aunps(tomo_path, active_zone_indices=None):
+def load_aunps(tomo_path, active_zone_indices=None, alignment_dir='best_alignment'):
     """Load AuNP coordinates from filtered aunp_clusters.star file, optionally filtered by active_zone_indices."""
-    aunps_results_dir = Path(tomo_path) / 'best_alignment' / 'STT_results' / 'aunps'
+    aunps_results_dir = Path(tomo_path) / alignment_dir / 'STT_results' / 'aunps'
     import starfile
     import pandas as pd
     
@@ -92,7 +92,7 @@ def load_aunps(tomo_path, active_zone_indices=None):
         print(f"[viz] Warning: Filtered AuNP file not found at {cluster_star}")
         print("[viz] Falling back to original input files (this should not happen if analysis was run)")
         # Fallback to original files if filtered file doesn't exist (for backward compatibility)
-        aunps_dir = Path(tomo_path) / 'best_alignment' / 'aunps'
+        aunps_dir = Path(tomo_path) / alignment_dir / 'aunps'
         import glob
         import re
         star_dfs = []
@@ -275,7 +275,7 @@ def filter_coords_in_slice(coords_list, z_center, z_thresh, max_segment_size=Non
 def load_postsynaptic_active_zone_coords(tomo_path):
     """Load postsynaptic active zone coordinates."""
     az_dir = Path(tomo_path) / 'best_alignment' / 'STT_results' / 'activezone'
-    files = sorted(az_dir.glob('active_zone_pre*_post*_post.txt'))
+    files = sorted(az_dir.glob('active_zone_pre*_post*_post_outer.txt'))
     coords = [np.loadtxt(f) for f in files if f.exists()]
     return coords
 
@@ -297,19 +297,19 @@ def load_specific_active_zone_coords(tomo_path, active_zone_indices, aunps):
             print(f"No saved active zone mapping found for {Path(tomo_path).name}. Active zone analysis must be run first with smart matching to create the mapping.")
             print(f"FALLBACK: Loading all available active zone files (no filtering applied).")
             # Load all available zone files
-            pre_files = sorted(list(az_dir.glob('active_zone_pre*_post*_pre.txt')))
-            post_files = sorted(list(az_dir.glob('active_zone_pre*_post*_post.txt')))
+            pre_files = sorted(list(az_dir.glob('active_zone_pre*_post*_pre_outer.txt')))
+            post_files = sorted(list(az_dir.glob('active_zone_pre*_post*_post_outer.txt')))
             
             # Group files by active zone name to ensure paired matching
             active_zone_groups = {}
             for pre_file in pre_files:
-                zone_name = pre_file.name.replace('_pre.txt', '')
+                zone_name = pre_file.name.replace('_pre_outer.txt', '')
                 if zone_name not in active_zone_groups:
                     active_zone_groups[zone_name] = {'pre': None, 'post': None}
                 active_zone_groups[zone_name]['pre'] = pre_file
             
             for post_file in post_files:
-                zone_name = post_file.name.replace('_post.txt', '')
+                zone_name = post_file.name.replace('_post_outer.txt', '')
                 if zone_name not in active_zone_groups:
                     active_zone_groups[zone_name] = {'pre': None, 'post': None}
                 active_zone_groups[zone_name]['post'] = post_file
@@ -333,8 +333,8 @@ def load_specific_active_zone_coords(tomo_path, active_zone_indices, aunps):
             for az_id in active_zone_indices:
                 if az_id in az_mapping:
                     zone_name = az_mapping[az_id]
-                    pre_file = az_dir / f"{zone_name}_pre.txt"
-                    post_file = az_dir / f"{zone_name}_post.txt"
+                    pre_file = az_dir / f"{zone_name}_pre_outer.txt"
+                    post_file = az_dir / f"{zone_name}_post_outer.txt"
                     
                     if pre_file.exists() and post_file.exists():
                         try:
@@ -351,14 +351,14 @@ def load_specific_active_zone_coords(tomo_path, active_zone_indices, aunps):
     
     return azs_pre, azs_post
 
-def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None, rerun=False, 
+def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None, rerun=False, alignment_dir='best_alignment',
                            sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None,
                            aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None):
     """Generate 2D overlay plot and save to file. Only processes CSV-specified active zones."""
-    vesicles = load_vesicles(tomo_path)
-    pre_mem = load_membrane_coords(tomo_path, 'presynatptic')
-    post_mem = load_membrane_coords(tomo_path, 'postsynaptic')
-    aunps = load_aunps(tomo_path, aunp_active_zone_indices)
+    vesicles = load_vesicles(tomo_path, alignment_dir=alignment_dir)
+    pre_mem = load_membrane_coords(tomo_path, 'presynatptic', alignment_dir=alignment_dir)
+    post_mem = load_membrane_coords(tomo_path, 'postsynaptic', alignment_dir=alignment_dir)
+    aunps = load_aunps(tomo_path, aunp_active_zone_indices, alignment_dir=alignment_dir)
     fusion_points = load_fusion_points(tomo_path)
     
     # Process active zones - auto-detect if none specified in CSV
@@ -429,7 +429,7 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
     if len(aunp_active_zone_indices) == 0:
         print("No active zones found, using middle of tomogram")
         # Fallback to middle of tomogram if no active zones found
-        slice2d, z_center = load_tomogram_slice(tomo_path, None)
+        slice2d, z_center = load_tomogram_slice(tomo_path, None, alignment_dir=alignment_dir)
         if slice2d is None:
             print(f"Could not load tomogram slice for {tomo_path}")
             return
@@ -449,7 +449,7 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
             
             # Generating visualizations for active zone
             
-            slice2d, zc = load_tomogram_slice(tomo_path, z_center)
+            slice2d, zc = load_tomogram_slice(tomo_path, z_center, alignment_dir=alignment_dir)
             if slice2d is None:
                 print(f"Could not load tomogram slice for {tomo_path} at z={z_center}")
                 continue
@@ -953,7 +953,10 @@ def run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=Non
         for i, tomo_info in enumerate(tomo_paths, 1):
             # Handle both old format (just path) and new format (path, set_name, active_zones)
             if isinstance(tomo_info, tuple) and len(tomo_info) == 3:
-                tomo_path, set_name, aunp_active_zones = tomo_info
+                if len(tomo_info) >= 4:
+                    tomo_path, set_name, aunp_active_zones, _alignment_dir = tomo_info
+                else:
+                    tomo_path, set_name, aunp_active_zones = tomo_info
             else:
                 tomo_path = tomo_info
                 set_name = None
@@ -2559,7 +2562,10 @@ def generate_all_zonograms_pdf(tomo_paths, data_dir=None):
         for tomo_info in tomo_paths:
             # Handle both old format (just path) and new format (path, set_name, active_zones)
             if isinstance(tomo_info, tuple) and len(tomo_info) == 3:
-                tomo_path, set_name, aunp_active_zones = tomo_info
+                if len(tomo_info) >= 4:
+                    tomo_path, set_name, aunp_active_zones, _alignment_dir = tomo_info
+                else:
+                    tomo_path, set_name, aunp_active_zones = tomo_info
             else:
                 tomo_path = tomo_info
                 set_name = None
@@ -2602,7 +2608,10 @@ def generate_all_zonograms_pdf(tomo_paths, data_dir=None):
             selected_az_indices = None
             for tomo_info in tomo_paths:
                 if isinstance(tomo_info, tuple) and len(tomo_info) == 3:
-                    tomo_path, set_name, aunp_active_zones = tomo_info
+                    if len(tomo_info) >= 4:
+                        tomo_path, set_name, aunp_active_zones, _alignment_dir = tomo_info
+                    else:
+                        tomo_path, set_name, aunp_active_zones = tomo_info
                     if Path(tomo_path).name == tomogram_name:
                         if aunp_active_zones is not None:
                             az_str = str(aunp_active_zones)
@@ -2802,7 +2811,10 @@ def generate_mini_zonograms_pdf(tomo_paths, data_dir=None):
         for tomo_info in tomo_paths:
             # Handle both old format (just path) and new format (path, set_name, active_zones)
             if isinstance(tomo_info, tuple) and len(tomo_info) == 3:
-                tomo_path, set_name, aunp_active_zones = tomo_info
+                if len(tomo_info) >= 4:
+                    tomo_path, set_name, aunp_active_zones, _alignment_dir = tomo_info
+                else:
+                    tomo_path, set_name, aunp_active_zones = tomo_info
             else:
                 tomo_path = tomo_info
                 set_name = None
@@ -2847,7 +2859,10 @@ def generate_mini_zonograms_pdf(tomo_paths, data_dir=None):
             selected_az_indices = None
             for tomo_info in tomo_paths:
                 if isinstance(tomo_info, tuple) and len(tomo_info) == 3:
-                    tomo_path, set_name, aunp_active_zones = tomo_info
+                    if len(tomo_info) >= 4:
+                        tomo_path, set_name, aunp_active_zones, _alignment_dir = tomo_info
+                    else:
+                        tomo_path, set_name, aunp_active_zones = tomo_info
                     if Path(tomo_path).name == tomogram_name:
                         if aunp_active_zones is not None:
                             az_str = str(aunp_active_zones)

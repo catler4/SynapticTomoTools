@@ -16,7 +16,7 @@ from functools import partial
 import mrcfile
 
 
-def load_tomogram_data(tomogram_path) -> Optional[np.ndarray]:
+def load_tomogram_data(tomogram_path, alignment_dir: str = "best_alignment") -> Optional[np.ndarray]:
     """
     Load tomogram data from the *ddw.mrc file.
     
@@ -28,17 +28,17 @@ def load_tomogram_data(tomogram_path) -> Optional[np.ndarray]:
     """
     tomogram_path = Path(tomogram_path)
     
-    # Look for the *ddw.mrc file in the best_alignment subdirectory
-    best_alignment_dir = tomogram_path / "best_alignment"
-    if not best_alignment_dir.exists():
-        print(f"Best alignment directory not found: {best_alignment_dir}")
+    # Look for the *ddw.mrc file in the selected alignment subdirectory
+    align_dir = tomogram_path / alignment_dir
+    if not align_dir.exists():
+        print(f"Alignment directory not found: {align_dir}")
         return None
     
-    # Find the *ddw.mrc file in best_alignment directory
-    ddw_files = list(best_alignment_dir.glob("*ddw.mrc"))
+    # Find the *ddw.mrc file in selected alignment directory
+    ddw_files = list(align_dir.glob("*ddw.mrc"))
     
     if not ddw_files:
-        print(f"No *ddw.mrc file found in {best_alignment_dir}")
+        print(f"No *ddw.mrc file found in {align_dir}")
         return None
     
     # Use the first ddw file found
@@ -122,7 +122,7 @@ def check_sphere_overlap(center1: np.ndarray, radius1: float,
     return bool(distance < (radius1 + radius2))
 
 
-def import_vesicle_segmentations(tomogram_path) -> List[Dict[str, Any]]:
+def import_vesicle_segmentations(tomogram_path, alignment_dir: str = "best_alignment") -> List[Dict[str, Any]]:
     """
     Import vesicle segmentation files and fit spheres to each.
     
@@ -133,7 +133,7 @@ def import_vesicle_segmentations(tomogram_path) -> List[Dict[str, Any]]:
         List of dictionaries containing vesicle data
     """
     tomogram_path = Path(tomogram_path)
-    aunps_dir = tomogram_path / "best_alignment" / "aunps"
+    aunps_dir = tomogram_path / alignment_dir / "aunps"
     
     if not aunps_dir.exists():
         raise FileNotFoundError(f"AuNPs directory not found: {aunps_dir}")
@@ -230,7 +230,7 @@ def remove_overlapping_vesicles(vesicles: List[Dict[str, Any]]) -> List[Dict[str
     return non_overlapping
 
 
-def import_presynaptic_membranes_and_active_zones(tomogram_path) -> Dict[str, Dict[str, np.ndarray]]:
+def import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir: str = "best_alignment") -> Dict[str, Dict[str, np.ndarray]]:
     """
     Import presynaptic membranes and their associated active zones.
     Note: Active zones are already filtered by the active zone analysis step, so only
@@ -243,8 +243,8 @@ def import_presynaptic_membranes_and_active_zones(tomogram_path) -> Dict[str, Di
         Dictionary mapping presynaptic membrane names to their active zone points
     """
     tomogram_path = Path(tomogram_path)
-    aunps_dir = tomogram_path / "best_alignment" / "aunps"
-    stt_results_dir = tomogram_path / "best_alignment" / "STT_results" / "activezone"
+    aunps_dir = tomogram_path / alignment_dir / "aunps"
+    stt_results_dir = tomogram_path / alignment_dir / "STT_results" / "activezone"
     
     if not aunps_dir.exists():
         raise FileNotFoundError(f"AuNPs directory not found: {aunps_dir}")
@@ -273,7 +273,7 @@ def import_presynaptic_membranes_and_active_zones(tomogram_path) -> Dict[str, Di
             # Look for active zone files with matching number in STT_results/activezone
             # Note: These files are already filtered by the active zone analysis step
             # to only include zones with AuNPs, so no additional filtering is needed
-            active_zone_files = list(stt_results_dir.glob(f"active_zone_pre{membrane_number}_post*_pre.txt"))
+            active_zone_files = list(stt_results_dir.glob(f"active_zone_pre{membrane_number}_post*_pre_inner.txt"))
             
             if active_zone_files:
                 # Load all active zones for this membrane
@@ -434,7 +434,7 @@ def calculate_vesicle_distances_to_closest_active_zones(vesicles: List[Dict[str,
     return distances, membrane_names
 
 
-def save_vesicle_results(vesicles: List[Dict[str, Any]], tomogram_path):
+def save_vesicle_results(vesicles: List[Dict[str, Any]], tomogram_path, alignment_dir: str = "best_alignment"):
     """
     Save vesicle analysis results to JSON file.
     
@@ -443,7 +443,7 @@ def save_vesicle_results(vesicles: List[Dict[str, Any]], tomogram_path):
         tomogram_path: Path to tomogram directory (str or Path)
     """
     tomogram_path = Path(tomogram_path)
-    stt_results_dir = tomogram_path / "best_alignment" / "STT_results"
+    stt_results_dir = tomogram_path / alignment_dir / "STT_results"
     
     # Create vesicles directory
     vesicles_dir = stt_results_dir / "vesicles"
@@ -496,7 +496,7 @@ def save_vesicle_results(vesicles: List[Dict[str, Any]], tomogram_path):
 
 
 def save_nearby_vesicles(vesicles: List[Dict[str, Any]], tomogram_path, 
-                        distance_threshold: float = 20.0):
+                        distance_threshold: float = 10.0, alignment_dir: str = "best_alignment"):
     """
     Save vesicles near active zone to a separate JSON file.
     Uses pre-calculated distances from detect_vesicles.
@@ -507,7 +507,7 @@ def save_nearby_vesicles(vesicles: List[Dict[str, Any]], tomogram_path,
         distance_threshold: Distance threshold in nm
     """
     tomogram_path = Path(tomogram_path)
-    stt_results_dir = tomogram_path / "best_alignment" / "STT_results"
+    stt_results_dir = tomogram_path / alignment_dir / "STT_results"
     
     # Create vesicles directory
     vesicles_dir = stt_results_dir / "vesicles"
@@ -575,14 +575,14 @@ def save_nearby_vesicles(vesicles: List[Dict[str, Any]], tomogram_path,
 
 
 
-def detect_vesicles(tomogram_path, set_name=None, vesicle_distance_threshold=20.0) -> Dict[str, Any]:
+def detect_vesicles(tomogram_path, set_name=None, vesicle_distance_threshold=10.0, alignment_dir: str = "best_alignment") -> Dict[str, Any]:
     """
     Detect synaptic vesicles in tomogram.
     
     Args:
         tomogram_path (str or Path): Path to the tomogram file.
         set_name (str, optional): Name of the experimental set.
-        vesicle_distance_threshold (float): Distance threshold for "close" vesicles (nm). Default: 20.0.
+        vesicle_distance_threshold (float): Distance threshold for "close" vesicles (nm). Default: 10.0.
     
     Returns:
         Dictionary containing vesicle detection results.
@@ -591,7 +591,7 @@ def detect_vesicles(tomogram_path, set_name=None, vesicle_distance_threshold=20.
     
     try:
         # Import vesicle segmentations
-        vesicles = import_vesicle_segmentations(tomogram_path)
+        vesicles = import_vesicle_segmentations(tomogram_path, alignment_dir=alignment_dir)
         
         # Remove overlapping vesicles
         vesicles = remove_overlapping_vesicles(vesicles)
@@ -599,7 +599,7 @@ def detect_vesicles(tomogram_path, set_name=None, vesicle_distance_threshold=20.
         # Import presynaptic membranes and their associated active zones
         # Note: Active zones are already filtered by the active zone analysis step
         # to only include zones with AuNPs, so only relevant zones will be loaded
-        membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path)
+        membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir=alignment_dir)
         
         # Calculate distances from vesicle segmentation points to closest active zones using parallel processing
         if membrane_active_zone_pairs:
@@ -632,7 +632,7 @@ def detect_vesicles(tomogram_path, set_name=None, vesicle_distance_threshold=20.
             # Extract sphericity values (volume-based only)
             sphericity_volume = [s['sphericity_volume'] for s in sphericities]
             
-            # Count vesicles within 20 nm of active zone using the same logic as save_nearby_vesicles
+            # Count vesicles within threshold of active zone using the same logic as save_nearby_vesicles
             nearby_vesicles = []
             for vesicle in vesicles:
                 distance_to_az = vesicle.get('distance_to_az', 0.0)
@@ -727,10 +727,10 @@ def detect_vesicles(tomogram_path, set_name=None, vesicle_distance_threshold=20.
             }
         
         # Save results
-        save_vesicle_results(vesicles, tomogram_path)
+        save_vesicle_results(vesicles, tomogram_path, alignment_dir=alignment_dir)
         
         # Save nearby vesicles (after overlap removal and distance calculation)
-        save_nearby_vesicles(vesicles, tomogram_path, distance_threshold=20.0)
+        save_nearby_vesicles(vesicles, tomogram_path, distance_threshold=vesicle_distance_threshold, alignment_dir=alignment_dir)
         
         # CSV export now handled by ResultsManager
         return results
@@ -749,7 +749,7 @@ def detect_vesicles(tomogram_path, set_name=None, vesicle_distance_threshold=20.
         }
 
 
-def measure_distances_to_az(tomogram_path) -> Dict[str, Any]:
+def measure_distances_to_az(tomogram_path, alignment_dir: str = "best_alignment") -> Dict[str, Any]:
     """
     Measure distances from vesicles to active zone.
     This function now uses pre-calculated distances from detect_vesicles.
@@ -765,7 +765,7 @@ def measure_distances_to_az(tomogram_path) -> Dict[str, Any]:
     try:
         # Load existing vesicle results
         tomogram_path = Path(tomogram_path)
-        vesicles_file = tomogram_path / "best_alignment" / "STT_results" / "vesicles" / "vesicle_results.json"
+        vesicles_file = tomogram_path / alignment_dir / "STT_results" / "vesicles" / "vesicle_results.json"
         
         if not vesicles_file.exists():
             print("No vesicle results found. Run detect_vesicles first.")
@@ -821,7 +821,7 @@ def measure_distances_to_az(tomogram_path) -> Dict[str, Any]:
         nearby_vesicles = []
         for vesicle in vesicles:
             distance_to_az = vesicle.get('distance_to_az', 0.0)
-            if distance_to_az <= 20.0:
+            if distance_to_az <= 10.0:
                 nearby_vesicles.append(vesicle)
         nearby_vesicle_count = len(nearby_vesicles)
         

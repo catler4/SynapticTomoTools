@@ -9,7 +9,7 @@ from scipy.spatial import KDTree
 
 
 
-def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]], tomogram_path):
+def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]], tomogram_path, alignment_dir: str = "best_alignment"):
     """
     Calculate and save volumes for each membrane segmentation from GLB mesh data using convex hull.
     This method is more robust for non-watertight meshes that may extend beyond tomogram boundaries.
@@ -21,7 +21,7 @@ def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarra
     import trimesh
     
     tomogram_path = Path(tomogram_path)
-    stt_results_dir = tomogram_path / "best_alignment" / "STT_results"
+    stt_results_dir = tomogram_path / alignment_dir / "STT_results"
     
     # Create activezone directory
     active_zones_dir = stt_results_dir / "activezone"
@@ -88,7 +88,7 @@ def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarra
     return volumes_data
 
 
-def load_membrane_volumes(tomogram_path) -> Dict[str, Any]:
+def load_membrane_volumes(tomogram_path, alignment_dir: str = "best_alignment") -> Dict[str, Any]:
     """
     Load membrane volumes from JSON file and calculate averages.
     
@@ -99,7 +99,7 @@ def load_membrane_volumes(tomogram_path) -> Dict[str, Any]:
         Dictionary containing volume statistics with averages for pre and post
     """
     tomogram_path = Path(tomogram_path)
-    volumes_file = tomogram_path / "best_alignment" / "STT_results" / "activezone" / "membrane_volumes.json"
+    volumes_file = tomogram_path / alignment_dir / "STT_results" / "activezone" / "membrane_volumes.json"
     
     if not volumes_file.exists():
         print(f"Warning: Membrane volumes file not found: {volumes_file}")
@@ -150,7 +150,7 @@ def load_membrane_volumes(tomogram_path) -> Dict[str, Any]:
         }
 
 
-def import_membrane_segmentations(tomogram_path) -> Dict[str, List[np.ndarray]]:
+def import_membrane_segmentations(tomogram_path, alignment_dir: str = "best_alignment") -> Dict[str, List[np.ndarray]]:
     """
     Import presynaptic and postsynaptic membrane segmentation files.
     
@@ -161,7 +161,7 @@ def import_membrane_segmentations(tomogram_path) -> Dict[str, List[np.ndarray]]:
         Dictionary containing lists of coordinate arrays for each membrane type
     """
     tomogram_path = Path(tomogram_path)
-    aunps_dir = tomogram_path / "best_alignment" / "aunps"
+    aunps_dir = tomogram_path / alignment_dir / "aunps"
     
     if not aunps_dir.exists():
         raise FileNotFoundError(f"AuNPs directory not found: {aunps_dir}")
@@ -197,7 +197,7 @@ def import_membrane_segmentations(tomogram_path) -> Dict[str, List[np.ndarray]]:
     
     return membranes
 
-def import_membrane_segmentations_from_glb(tomogram_path) -> Dict[str, List[Dict[str, np.ndarray]]]:
+def import_membrane_segmentations_from_glb(tomogram_path, alignment_dir: str = "best_alignment") -> Dict[str, List[Dict[str, np.ndarray]]]:
     """
     Import presynaptic and postsynaptic membrane segmentations from a GLB file.
     
@@ -210,7 +210,7 @@ def import_membrane_segmentations_from_glb(tomogram_path) -> Dict[str, List[Dict
     import trimesh
 
     tomogram_path = Path(tomogram_path)
-    aunps_dir = tomogram_path / "best_alignment" / "aunps"
+    aunps_dir = tomogram_path / alignment_dir / "aunps"
     
     if not aunps_dir.exists():
         raise FileNotFoundError(f"AuNPs directory not found: {aunps_dir}")
@@ -232,7 +232,7 @@ def import_membrane_segmentations_from_glb(tomogram_path) -> Dict[str, List[Dict
     membranes['postsynaptic'] = [{'vertices': mesh['vertices'][:, [0, 2, 1]] * np.array([10, -10, 10]),'faces':mesh['faces'],'normals':mesh['vertex_normals'][:, [0, 2, 1]] * np.array([10, -10, 10])} for mesh in postsyn["geometry"].values()]
 
     # Save volumes to STT_results/volumes
-    save_membrane_volumes_from_glb(membranes, tomogram_path)
+    save_membrane_volumes_from_glb(membranes, tomogram_path, alignment_dir=alignment_dir)
 
     return membranes
 
@@ -436,14 +436,20 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
                 # Keep only faces pointing toward postsynaptic side (positive dot product)
                 front_facing_mask = dot_products > 0
                 front_facing_face_indices = np.where(front_facing_mask)[0]
+                back_facing_face_indices = np.where(~front_facing_mask)[0]
                 front_facing_faces = len(front_facing_face_indices)
                 
                 if len(front_facing_face_indices) == 0:
                     raise ValueError(f"No front-facing faces found for {zone_name}. Cannot calculate active zone area.")
                 
-                # Create mesh with only front-facing faces
+                # Create mesh with only front-facing faces (outer-facing toward cleft)
                 front_facing_mesh = active_pre_mesh.submesh([front_facing_face_indices], append=True)
                 active_pre_area = front_facing_mesh.area / 1e6  # Convert to µm²
+                # Derive explicit outer/inner point sets from face orientation
+                pre_outer_vertex_indices = np.unique(active_pre_mesh.faces[front_facing_face_indices].reshape(-1))
+                pre_inner_vertex_indices = np.unique(active_pre_mesh.faces[back_facing_face_indices].reshape(-1)) if len(back_facing_face_indices) > 0 else np.array([], dtype=int)
+                active_pre_outer_points = active_pre_mesh.vertices[pre_outer_vertex_indices] if len(pre_outer_vertex_indices) > 0 else np.array([])
+                active_pre_inner_points = active_pre_mesh.vertices[pre_inner_vertex_indices] if len(pre_inner_vertex_indices) > 0 else np.array([])
                 
                 # Calculate postsynaptic active zone area (faces pointing toward presynaptic side)
                 total_post_faces = len(active_post_mesh.faces)
@@ -466,14 +472,19 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
                     # Keep only faces pointing toward presynaptic side (positive dot product)
                     post_front_facing_mask = post_dot_products > 0
                     post_front_facing_face_indices = np.where(post_front_facing_mask)[0]
+                    post_back_facing_face_indices = np.where(~post_front_facing_mask)[0]
                     post_front_facing_faces = len(post_front_facing_face_indices)
                     
                     if len(post_front_facing_face_indices) == 0:
                         raise ValueError(f"No front-facing faces found on postsynaptic side for {zone_name}. Cannot calculate postsynaptic active zone area.")
                     
-                    # Create mesh with only front-facing faces
+                    # Create mesh with only front-facing faces (outer-facing toward cleft)
                     post_front_facing_mesh = active_post_mesh.submesh([post_front_facing_face_indices], append=True)
                     active_post_area = post_front_facing_mesh.area / 1e6  # Convert to µm²
+                    post_outer_vertex_indices = np.unique(active_post_mesh.faces[post_front_facing_face_indices].reshape(-1))
+                    post_inner_vertex_indices = np.unique(active_post_mesh.faces[post_back_facing_face_indices].reshape(-1)) if len(post_back_facing_face_indices) > 0 else np.array([], dtype=int)
+                    active_post_outer_points = active_post_mesh.vertices[post_outer_vertex_indices] if len(post_outer_vertex_indices) > 0 else np.array([])
+                    active_post_inner_points = active_post_mesh.vertices[post_inner_vertex_indices] if len(post_inner_vertex_indices) > 0 else np.array([])
                 else:
                     raise ValueError(f"No faces found in postsynaptic mesh for {zone_name}. Cannot calculate postsynaptic active zone area.")
                 
@@ -481,6 +492,8 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
                     'presynaptic_membrane_index': pre_idx + 1,
                     'postsynaptic_membrane_index': post_idx + 1,
                     'active_presynaptic_points': active_pre_coords,
+                    'active_presynaptic_outer_points': active_pre_outer_points,
+                    'active_presynaptic_inner_points': active_pre_inner_points,
                     'active_presynaptic_faces': active_pre_mesh.faces,
                     'active_presynaptic_mesh': active_pre_mesh,
                     'active_presynaptic_area': active_pre_area,
@@ -488,6 +501,8 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
                     'front_facing_faces': front_facing_faces,
                     'back_facing_faces': total_faces - front_facing_faces,
                     'active_postsynaptic_points': postsyn_coords[active_post_indices] if len(active_post_indices) > 0 else np.array([]),
+                    'active_postsynaptic_outer_points': active_post_outer_points,
+                    'active_postsynaptic_inner_points': active_post_inner_points,
                     'active_postsynaptic_faces': active_post_mesh.faces,
                     'active_postsynaptic_mesh': active_post_mesh,
                     'active_postsynaptic_area': active_post_area,
@@ -513,7 +528,7 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
     }
 
 
-def save_active_zone_segmentations(active_zones: Dict[str, Any], tomogram_path):
+def save_active_zone_segmentations(active_zones: Dict[str, Any], tomogram_path, alignment_dir: str = "best_alignment"):
     """
     Save active zone segmentations to files.
     
@@ -522,27 +537,31 @@ def save_active_zone_segmentations(active_zones: Dict[str, Any], tomogram_path):
         tomogram_path: Path to tomogram directory (str or Path)
     """
     tomogram_path = Path(tomogram_path)
-    stt_results_dir = tomogram_path / "best_alignment" / "STT_results"
+    stt_results_dir = tomogram_path / alignment_dir / "STT_results"
     
     # Create activezone directory
     active_zone_dir = stt_results_dir / "activezone"
     active_zone_dir.mkdir(parents=True, exist_ok=True)
     
     for zone_name, zone_data in active_zones['active_zones'].items():
-        # Save active presynaptic points
-        if len(zone_data['active_presynaptic_points']) > 0:
-            pre_filename = f"{zone_name}_pre.txt"
-            pre_filepath = active_zone_dir / pre_filename
-            np.savetxt(pre_filepath, zone_data['active_presynaptic_points'], fmt='%.6e')
-        
-        # Save active postsynaptic points
-        if len(zone_data['active_postsynaptic_points']) > 0:
-            post_filename = f"{zone_name}_post.txt"
-            post_filepath = active_zone_dir / post_filename
-            np.savetxt(post_filepath, zone_data['active_postsynaptic_points'], fmt='%.6e')
+        # Save outer-facing (toward cleft) membranes for downstream usage
+        pre_outer = zone_data.get('active_presynaptic_outer_points', zone_data.get('active_presynaptic_points', np.array([])))
+        post_outer = zone_data.get('active_postsynaptic_outer_points', zone_data.get('active_postsynaptic_points', np.array([])))
+        if len(pre_outer) > 0:
+            np.savetxt(active_zone_dir / f"{zone_name}_pre_outer.txt", pre_outer, fmt='%.6e')
+        if len(post_outer) > 0:
+            np.savetxt(active_zone_dir / f"{zone_name}_post_outer.txt", post_outer, fmt='%.6e')
+
+        # Save inner-facing (away from cleft) membranes for future use
+        pre_inner = zone_data.get('active_presynaptic_inner_points', np.array([]))
+        post_inner = zone_data.get('active_postsynaptic_inner_points', np.array([]))
+        if len(pre_inner) > 0:
+            np.savetxt(active_zone_dir / f"{zone_name}_pre_inner.txt", pre_inner, fmt='%.6e')
+        if len(post_inner) > 0:
+            np.savetxt(active_zone_dir / f"{zone_name}_post_inner.txt", post_inner, fmt='%.6e')
 
 
-def match_active_zones_by_aunps(tomogram_path, active_zone_indices, all_active_zones) -> Dict[int, str]:
+def match_active_zones_by_aunps(tomogram_path, active_zone_indices, all_active_zones, alignment_dir: str = "best_alignment") -> Dict[int, str]:
     """
     Match active zone indices to zone names using smart matching based on AuNP locations.
     This is done once and the mapping can be reused.
@@ -561,10 +580,10 @@ def match_active_zones_by_aunps(tomogram_path, active_zone_indices, all_active_z
     try:
         import starfile
         import pandas as pd
-        aunps_dir = Path(tomogram_path) / "best_alignment" / "aunps"
+        aunps_dir = Path(tomogram_path) / alignment_dir / "aunps"
         star_dfs = []
         for idx in active_zone_indices:
-            star_file = aunps_dir / f"aunp_tm_BP_active_zone_{idx}.star"
+            star_file = aunps_dir / f"aunp_tm_BP_active_zone_{idx}_manual_refined.star"
             if star_file.exists():
                 star_data = starfile.read(star_file)
                 if isinstance(star_data, dict):
@@ -629,10 +648,10 @@ def match_active_zones_by_aunps(tomogram_path, active_zone_indices, all_active_z
     return az_mapping
 
 
-def save_active_zone_mapping(tomogram_path, az_mapping: Dict[int, str]):
+def save_active_zone_mapping(tomogram_path, az_mapping: Dict[int, str], alignment_dir: str = "best_alignment"):
     """Save the active zone index to zone name mapping to a JSON file."""
     tomogram_path = Path(tomogram_path)
-    active_zone_dir = tomogram_path / "best_alignment" / "STT_results" / "activezone"
+    active_zone_dir = tomogram_path / alignment_dir / "STT_results" / "activezone"
     active_zone_dir.mkdir(parents=True, exist_ok=True)
     
     mapping_file = active_zone_dir / "active_zone_mapping.json"
@@ -642,10 +661,10 @@ def save_active_zone_mapping(tomogram_path, az_mapping: Dict[int, str]):
     print(f"Saved active zone mapping to {mapping_file}")
 
 
-def load_active_zone_mapping(tomogram_path) -> Dict[int, str]:
+def load_active_zone_mapping(tomogram_path, alignment_dir: str = "best_alignment") -> Dict[int, str]:
     """Load the active zone index to zone name mapping from JSON file."""
     tomogram_path = Path(tomogram_path)
-    active_zone_dir = tomogram_path / "best_alignment" / "STT_results" / "activezone"
+    active_zone_dir = tomogram_path / alignment_dir / "STT_results" / "activezone"
     mapping_file = active_zone_dir / "active_zone_mapping.json"
     
     if mapping_file.exists():
@@ -659,7 +678,7 @@ def load_active_zone_mapping(tomogram_path) -> Dict[int, str]:
     return {}
 
 
-def define_active_zone(tomogram_path, active_zone_indices=None, distance_range=None) -> Dict[str, Any]:
+def define_active_zone(tomogram_path, active_zone_indices=None, distance_range=None, alignment_dir: str = "best_alignment") -> Dict[str, Any]:
     """
     Define active zone in tomogram.
     If active_zone_indices is specified, only includes active zones that correspond to those indices.
@@ -680,7 +699,7 @@ def define_active_zone(tomogram_path, active_zone_indices=None, distance_range=N
     
     # Import membrane segmentations from GLB
     try:
-        membranes = import_membrane_segmentations_from_glb(tomogram_path)
+        membranes = import_membrane_segmentations_from_glb(tomogram_path, alignment_dir=alignment_dir)
         
         # Find active zones from GLB
         active_zones = find_active_zones_from_glb(membranes, distance_range=distance_range)
@@ -689,7 +708,9 @@ def define_active_zone(tomogram_path, active_zone_indices=None, distance_range=N
         az_mapping = {}
         if active_zone_indices is not None and len(active_zone_indices) > 0:
             # Do smart matching once
-            az_mapping = match_active_zones_by_aunps(tomogram_path, active_zone_indices, active_zones['active_zones'])
+            az_mapping = match_active_zones_by_aunps(
+                tomogram_path, active_zone_indices, active_zones['active_zones'], alignment_dir=alignment_dir
+            )
             
             if az_mapping:
                 # Filter to only include matched zones
@@ -699,7 +720,7 @@ def define_active_zone(tomogram_path, active_zone_indices=None, distance_range=N
                 active_zones['total_active_zones'] = len(filtered_zones)
                 
                 # Save the mapping for reuse by other functions
-                save_active_zone_mapping(tomogram_path, az_mapping)
+                save_active_zone_mapping(tomogram_path, az_mapping, alignment_dir=alignment_dir)
                 print(f"Filtered to {len(filtered_zones)} active zones using smart matching (indices: {active_zone_indices})")
             else:
                 # Fallback to order-based matching if smart matching failed
@@ -716,11 +737,11 @@ def define_active_zone(tomogram_path, active_zone_indices=None, distance_range=N
                 filtered_zones = {name: data for name, data in active_zones['active_zones'].items() if name in zones_to_include}
                 active_zones['active_zones'] = filtered_zones
                 active_zones['total_active_zones'] = len(filtered_zones)
-                save_active_zone_mapping(tomogram_path, az_mapping)
+                save_active_zone_mapping(tomogram_path, az_mapping, alignment_dir=alignment_dir)
                 print(f"Filtered to {len(filtered_zones)} active zones using order-based matching (indices: {active_zone_indices})")
         
         # Save active zone segmentations
-        save_active_zone_segmentations(active_zones, tomogram_path)
+        save_active_zone_segmentations(active_zones, tomogram_path, alignment_dir=alignment_dir)
         
         # Calculate summary statistics
         total_active_pre_points = sum(len(zone['active_presynaptic_points']) for zone in active_zones['active_zones'].values())
@@ -758,7 +779,7 @@ def define_active_zone(tomogram_path, active_zone_indices=None, distance_range=N
         total_active_zone_post_area = np.sum(active_zone_post_areas)
         
         # Load membrane volumes
-        volumes_data = load_membrane_volumes(tomogram_path)
+        volumes_data = load_membrane_volumes(tomogram_path, alignment_dir=alignment_dir)
         
         results = {
             'active_zone_count': active_zones['total_active_zones'],
@@ -796,7 +817,7 @@ def define_active_zone(tomogram_path, active_zone_indices=None, distance_range=N
     return results
 
 
-def import_active_zone_segmentations(tomogram_path) -> Dict[str, Any]:
+def import_active_zone_segmentations(tomogram_path, alignment_dir: str = "best_alignment") -> Dict[str, Any]:
     """
     Import active zone segmentation files.
     
@@ -807,41 +828,54 @@ def import_active_zone_segmentations(tomogram_path) -> Dict[str, Any]:
         Dictionary containing active zone segmentations
     """
     tomogram_path = Path(tomogram_path)
-    active_zone_dir = tomogram_path / "best_alignment" / "STT_results" / "activezone"
+    active_zone_dir = tomogram_path / alignment_dir / "STT_results" / "activezone"
     
     if not active_zone_dir.exists():
         raise FileNotFoundError(f"Active zones directory not found: {active_zone_dir}")
     
     active_zones = {}
     
-    # Find all active zone files
-    pre_files = list(active_zone_dir.glob("*_pre.txt"))
-    post_files = list(active_zone_dir.glob("*_post.txt"))
+    # Find all active zone outer files
+    pre_files = list(active_zone_dir.glob("*_pre_outer.txt"))
+    post_files = list(active_zone_dir.glob("*_post_outer.txt"))
     
     print(f"Found {len(pre_files)} active presynaptic files")
     print(f"Found {len(post_files)} active postsynaptic files")
     
     # Group files by active zone name
     for pre_file in pre_files:
-        # Extract zone name by removing the final '_pre' from the filename stem
+        # Extract zone name from *_pre_outer
         stem = pre_file.stem
-        if stem.endswith('_pre'):
-            zone_name = stem[:-4]  # Remove last 4 characters ('_pre')
+        if stem.endswith('_pre_outer'):
+            zone_name = stem[:-10]  # remove '_pre_outer'
         else:
-            zone_name = stem  # Fallback if no '_pre' suffix
-        
-        post_file = active_zone_dir / f"{zone_name}_post.txt"
+            zone_name = stem
+
+        post_file = active_zone_dir / f"{zone_name}_post_outer.txt"
         
         if post_file.exists():
             try:
-                pre_coords = np.loadtxt(pre_file, delimiter=None)
-                post_coords = np.loadtxt(post_file, delimiter=None)
+                pre_coords = np.atleast_2d(np.loadtxt(pre_file, delimiter=None))
+                post_coords = np.atleast_2d(np.loadtxt(post_file, delimiter=None))
                 
+                pre_inner_file = active_zone_dir / f"{zone_name}_pre_inner.txt"
+                post_inner_file = active_zone_dir / f"{zone_name}_post_inner.txt"
+                pre_inner_coords = np.atleast_2d(np.loadtxt(pre_inner_file, delimiter=None)) if pre_inner_file.exists() else np.array([])
+                post_inner_coords = np.atleast_2d(np.loadtxt(post_inner_file, delimiter=None)) if post_inner_file.exists() else np.array([])
+
                 active_zones[zone_name] = {
+                    # Backward-compatible keys (outer membranes)
                     'presynaptic_coords': pre_coords,
                     'postsynaptic_coords': post_coords,
+                    # Explicit outer/inner keys
+                    'presynaptic_outer_coords': pre_coords,
+                    'postsynaptic_outer_coords': post_coords,
+                    'presynaptic_inner_coords': pre_inner_coords,
+                    'postsynaptic_inner_coords': post_inner_coords,
                     'presynaptic_count': len(pre_coords),
-                    'postsynaptic_count': len(post_coords)
+                    'postsynaptic_count': len(post_coords),
+                    'presynaptic_inner_count': len(pre_inner_coords) if np.size(pre_inner_coords) > 0 else 0,
+                    'postsynaptic_inner_count': len(post_inner_coords) if np.size(post_inner_coords) > 0 else 0,
                 }
                 
                 print(f"  ✓ Imported active zone: {zone_name} ({len(pre_coords)} pre, {len(post_coords)} post points)")
@@ -902,7 +936,7 @@ def calculate_cleft_width_for_active_zone(pre_coords: np.ndarray, post_coords: n
     }
 
 
-def calculate_cleft_width(tomogram_path, active_zone_indices=None, set_name=None) -> Dict[str, Any]:
+def calculate_cleft_width(tomogram_path, active_zone_indices=None, set_name=None, alignment_dir: str = "best_alignment") -> Dict[str, Any]:
     """
     Calculate synaptic cleft width for active zones.
     If active_zone_indices is specified, only includes active zones that correspond to those indices.
@@ -919,12 +953,12 @@ def calculate_cleft_width(tomogram_path, active_zone_indices=None, set_name=None
     
     try:
         # Import active zone segmentations
-        active_zones = import_active_zone_segmentations(tomogram_path)
+        active_zones = import_active_zone_segmentations(tomogram_path, alignment_dir=alignment_dir)
         
         # Filter active zones if indices are specified - use saved mapping from define_active_zone
         if active_zone_indices is not None and len(active_zone_indices) > 0:
             # Load the saved mapping (created by define_active_zone)
-            az_mapping = load_active_zone_mapping(tomogram_path)
+            az_mapping = load_active_zone_mapping(tomogram_path, alignment_dir=alignment_dir)
             
             if az_mapping:
                 # Convert string keys to int (JSON stores dict keys as strings)

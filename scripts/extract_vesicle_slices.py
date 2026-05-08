@@ -130,8 +130,8 @@ def load_active_zone_data(tomogram_path):
         print(f"No active zones directory found: {az_dir}")
         return []
     
-    # Load all active zone pre files
-    az_files = list(az_dir.glob("*_pre.txt"))
+    # Load all active zone pre outer files
+    az_files = list(az_dir.glob("*_pre_outer.txt"))
     active_zone_points = []
     
     for az_file in az_files:

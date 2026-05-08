@@ -33,7 +33,7 @@ def load_tomograms(csv_path, analysis_type, set_name=None):
     """
     Load filtered tomogram paths based on analysis type and set,
     with support for per-set data root directories.
-    Returns a list of (path, set_name) tuples.
+    Returns a list of (path, set_name, aunp_active_zones, alignment_dir) tuples.
     """
     df = pd.read_csv(csv_path)
 
@@ -61,6 +61,13 @@ def load_tomograms(csv_path, analysis_type, set_name=None):
     assert isinstance(filtered, pd.DataFrame)
     # type: ignore[union-attr]
 
+    # Require explicit alignment_dir in CSV (no fallback).
+    if "alignment_dir" not in df.columns:
+        raise ValueError(
+            f"Column 'alignment_dir' not found in {csv_path}. "
+            "Each CSV row must specify alignment_dir (e.g., best_alignment, liza_az0)."
+        )
+
     # Construct full paths based on set-specific root
     # Dynamically construct paths using TOMO_ROOT_BASE (same approach as GUI)
     paths = []
@@ -72,9 +79,15 @@ def load_tomograms(csv_path, analysis_type, set_name=None):
             SET_ROOTS[set_name] = Path(TOMO_ROOT_BASE) / set_name / "TOP_TOMOS"
         root = SET_ROOTS[set_name]
         full_path = root / row["tomoname"]
+        alignment_dir = str(row["alignment_dir"]).strip()
+        if alignment_dir == "" or alignment_dir.lower() == "nan":
+            raise ValueError(
+                f"Missing alignment_dir for tomogram '{row['tomoname']}' in {csv_path}. "
+                "Please set alignment_dir explicitly for every row."
+            )
         # Get aunp_active_zones if present, else empty string
         aunp_active_zones = row.get("aunp_active_zones", "") if "aunp_active_zones" in row else ""
-        paths.append((full_path, set_name, aunp_active_zones))
+        paths.append((full_path, set_name, aunp_active_zones, alignment_dir))
 
     return paths
 
@@ -112,24 +125,25 @@ SYNAPTIC TOMO TOOLS
 def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True, az_distance_min=None, az_distance_max=None):
     if print_ascii:
         print_synapse_ascii_art()
-    for i, (tomo, set_name, aunp_active_zones) in enumerate(tomo_paths):
+    for i, (tomo, set_name, aunp_active_zones, alignment_dir) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
+        analysis_name = f"{tomogram_name}__{alignment_dir}"
         print(f"\n{'='*33} TOMOGRAM {i+1}/{len(tomo_paths)} {'='*33}")
         print(f"Analyzing: {tomogram_name}")
         print("="*80)
         
         # Check if analysis already completed successfully
-        existing_results = results_manager.get_tomogram_results(tomogram_name, 'activezone')
+        existing_results = results_manager.get_tomogram_results(analysis_name, 'activezone')
         has_completed = (existing_results and 
                         'results' in existing_results and 
                         'active_zone' in existing_results['results'] and
                         existing_results['results']['active_zone'].get('status') == 'completed')
         
         if has_completed and not rerun:
-            print(f"Skipping active zone analysis for {tomogram_name} (already completed successfully)")
+            print(f"Skipping active zone analysis for {analysis_name} (already completed successfully)")
             continue
         
-        print(f"Running active zone analysis on {tomogram_name}")
+        print(f"Running active zone analysis on {analysis_name}")
         try:
             # Parse aunp_active_zones to get active zone indices (same as in run_aunps and run_vesicles)
             az_str = str(aunp_active_zones) if aunp_active_zones is not None else ""
@@ -155,15 +169,15 @@ def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True, a
                 max_dist = az_distance_max if az_distance_max is not None else 40.0
                 distance_range = (min_dist, max_dist)
             
-            az_results = define_active_zone(tomo, active_zone_indices=az_indices, distance_range=distance_range)
-            cleft_results = calculate_cleft_width(tomo, active_zone_indices=az_indices, set_name=set_name)
+            az_results = define_active_zone(tomo, active_zone_indices=az_indices, distance_range=distance_range, alignment_dir=alignment_dir)
+            cleft_results = calculate_cleft_width(tomo, active_zone_indices=az_indices, set_name=set_name, alignment_dir=alignment_dir)
             combined_results = {
                 'active_zone': az_results,
                 'cleft_width': cleft_results
             }
-            results_manager.store_tomogram_results(tomogram_name, 'activezone', combined_results, overwrite=rerun, set_name=set_name)
+            results_manager.store_tomogram_results(analysis_name, 'activezone', combined_results, overwrite=rerun, set_name=set_name)
         except Exception as e:
-            print(f"Error in active zone analysis for {tomogram_name}: {e}")
+            print(f"Error in active zone analysis for {analysis_name}: {e}")
             # Store error results so we know this analysis failed
             error_results = {
                 'active_zone': {
@@ -175,13 +189,14 @@ def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True, a
                     'error': str(e)
                 }
             }
-            results_manager.store_tomogram_results(tomogram_name, 'activezone', error_results, overwrite=True, set_name=set_name)
+            results_manager.store_tomogram_results(analysis_name, 'activezone', error_results, overwrite=True, set_name=set_name)
 
 def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True, vesicle_distance_threshold=None):
     if print_ascii:
         print_synapse_ascii_art()
-    for i, (tomo, set_name, aunp_active_zones) in enumerate(tomo_paths):
+    for i, (tomo, set_name, aunp_active_zones, alignment_dir) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
+        analysis_name = f"{tomogram_name}__{alignment_dir}"
         if i > 0:
             print("\n" + "="*80)
         print(f"\n{'='*33} TOMOGRAM {i+1}/{len(tomo_paths)} {'='*33}")
@@ -189,32 +204,32 @@ def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True, ves
         print("="*80)
         
         # Check if analysis already completed successfully
-        existing_results = results_manager.get_tomogram_results(tomogram_name, 'vesicles')
+        existing_results = results_manager.get_tomogram_results(analysis_name, 'vesicles')
         has_completed = (existing_results and 
                         'results' in existing_results and 
                         'vesicle_detection' in existing_results['results'] and
                         existing_results['results']['vesicle_detection'].get('status') == 'completed')
         
         if has_completed and not rerun:
-            print(f"Skipping vesicle analysis for {tomogram_name} (already completed successfully)")
+            print(f"Skipping vesicle analysis for {analysis_name} (already completed successfully)")
             continue
         
-        print(f"Running vesicle analysis on {tomogram_name}")
+        print(f"Running vesicle analysis on {analysis_name}")
         try:
             # Note: Active zones are already filtered by the active zone analysis step
             # to only include zones with AuNPs, so vesicle analysis will automatically
             # use only the relevant active zones
-            # Use custom vesicle distance threshold if provided, otherwise use default (20.0)
-            threshold = vesicle_distance_threshold if vesicle_distance_threshold is not None else 20.0
-            vesicle_results = detect_vesicles(tomo, set_name=set_name, vesicle_distance_threshold=threshold)
-            distance_results = measure_distances_to_az(tomo)
+            # Use custom vesicle distance threshold if provided, otherwise use default (10.0)
+            threshold = vesicle_distance_threshold if vesicle_distance_threshold is not None else 10.0
+            vesicle_results = detect_vesicles(tomo, set_name=set_name, vesicle_distance_threshold=threshold, alignment_dir=alignment_dir)
+            distance_results = measure_distances_to_az(tomo, alignment_dir=alignment_dir)
             combined_results = {
                 'vesicle_detection': vesicle_results,
                 'distance_measurements': distance_results
             }
-            results_manager.store_tomogram_results(tomogram_name, 'vesicles', combined_results, overwrite=rerun, set_name=set_name)
+            results_manager.store_tomogram_results(analysis_name, 'vesicles', combined_results, overwrite=rerun, set_name=set_name)
         except Exception as e:
-            print(f"Error in vesicle analysis for {tomogram_name}: {e}")
+            print(f"Error in vesicle analysis for {analysis_name}: {e}")
             # Store error results so we know this analysis failed
             error_results = {
                 'vesicle_detection': {
@@ -227,7 +242,7 @@ def run_vesicles(tomo_paths, results_manager, rerun=False, print_ascii=True, ves
                     'error': str(e)
                 }
             }
-            results_manager.store_tomogram_results(tomogram_name, 'vesicles', error_results, overwrite=True, set_name=set_name)
+            results_manager.store_tomogram_results(analysis_name, 'vesicles', error_results, overwrite=True, set_name=set_name)
 
 def generate_visualizations(tomo_paths, results_manager, rerun=False, print_ascii=True, csv_path=None, 
                             sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None,
@@ -247,11 +262,12 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
     base_viz_dir = Path(results_manager.results_dir) / 'visualizations'
     base_viz_dir.mkdir(parents=True, exist_ok=True)
     
-    for i, (tomo, set_name, aunp_active_zones) in enumerate(tomo_paths):
+    for i, (tomo, set_name, aunp_active_zones, alignment_dir) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
+        analysis_name = f"{tomogram_name}__{alignment_dir}"
         
         # Create visualization output directory within the tomogram's results folder
-        viz_output_dir = Path(tomo) / 'best_alignment' / 'STT_results' / 'visualizations'
+        viz_output_dir = Path(tomo) / alignment_dir / 'STT_results' / 'visualizations'
         viz_output_dir.mkdir(parents=True, exist_ok=True)
 
         # Check if all expected visualization files exist and skip_completed is True
@@ -296,14 +312,14 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
             
             # Generate the three visualization types
             # 1. In tomogram's own directory
-            plot_tomogram_overlays(tomo, viz_output_dir, az_indices, rerun=rerun,
+            plot_tomogram_overlays(tomo, viz_output_dir, az_indices, rerun=rerun, alignment_dir=alignment_dir,
                                    sphere_size=sphere_size, sphere_color=sphere_color,
                                    aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
                                    aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
                                    aunp_distance_cutoff_value=aunp_distance_cutoff_value)
             
             # 2. In the new organized structure
-            plot_tomogram_overlays(tomo, tomogram_viz_dir, az_indices, rerun=rerun,
+            plot_tomogram_overlays(tomo, tomogram_viz_dir, az_indices, rerun=rerun, alignment_dir=alignment_dir,
                                    sphere_size=sphere_size, sphere_color=sphere_color,
                                    aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
                                    aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
@@ -364,7 +380,9 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
                      aunp_distance_min=None, aunp_distance_max=None,
                      aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None,
                      cylinder_radius=None, receptor_crosssection=None, aunps_per_receptor=None,
-                     vertex_sampling_step=None):
+                     vertex_sampling_step=None, synaptic_designation_cutoff=None,
+                     min_cluster_size=None, fusion_point_threshold=None,
+                     fusing_perimeter_threshold=None, active_center_distance_metric=None):
     """Run all analyses in the correct order: activezone, vesicles, aunps, visualizations."""
     print_synapse_ascii_art()
     print("="*80)
@@ -395,7 +413,11 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
               vesicle_distance_threshold=vesicle_distance_threshold,
               dbscan_eps=dbscan_eps, dbscan_min_samples=dbscan_min_samples,
               cylinder_radius=cylinder_radius, receptor_crosssection=receptor_crosssection,
-              aunps_per_receptor=aunps_per_receptor, vertex_sampling_step=vertex_sampling_step)
+              aunps_per_receptor=aunps_per_receptor, vertex_sampling_step=vertex_sampling_step,
+              synaptic_designation_cutoff=synaptic_designation_cutoff,
+              min_cluster_size=min_cluster_size, fusion_point_threshold=fusion_point_threshold,
+              fusing_perimeter_threshold=fusing_perimeter_threshold,
+              active_center_distance_metric=active_center_distance_metric)
     
     # Step 4: Visualizations
     print("\n" + "="*80)
@@ -414,11 +436,14 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
 def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True, 
               vesicle_distance_threshold=None, dbscan_eps=None, dbscan_min_samples=None,
               cylinder_radius=None, receptor_crosssection=None, aunps_per_receptor=None,
-              vertex_sampling_step=None):
+              vertex_sampling_step=None, synaptic_designation_cutoff=None,
+              min_cluster_size=None, fusion_point_threshold=None,
+              fusing_perimeter_threshold=None, active_center_distance_metric=None):
     if print_ascii:
         print_synapse_ascii_art()
-    for i, (tomo, set_name, aunp_active_zones) in enumerate(tomo_paths):
+    for i, (tomo, set_name, aunp_active_zones, alignment_dir) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
+        analysis_name = f"{tomogram_name}__{alignment_dir}"
         
         # Print separator between tomograms
         if i > 0:
@@ -428,17 +453,17 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
         print("="*80)
         
         # Check if analysis already completed successfully
-        existing_results = results_manager.get_tomogram_results(tomogram_name, 'aunps')
+        existing_results = results_manager.get_tomogram_results(analysis_name, 'aunps')
         has_completed = (existing_results and 
                         'results' in existing_results and 
                         'aunp_analysis' in existing_results['results'] and
                         existing_results['results']['aunp_analysis'].get('status') == 'completed')
         
         if has_completed and not rerun:
-            print(f"Skipping AuNP analysis for {tomogram_name} (already completed successfully)")
+            print(f"Skipping AuNP analysis for {analysis_name} (already completed successfully)")
             continue
             
-        print(f"Running AuNP analysis on {tomogram_name}")
+        print(f"Running AuNP analysis on {analysis_name}")
         
         try:
             # Parse aunp_active_zones string to list of ints or None
@@ -455,7 +480,7 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
                     elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
                         az_indices.append(int(float(x)))
             # Use custom parameters if provided, otherwise use defaults
-            vesicle_threshold = vesicle_distance_threshold if vesicle_distance_threshold is not None else 20.0
+            vesicle_threshold = vesicle_distance_threshold if vesicle_distance_threshold is not None else 10.0
             eps = dbscan_eps if dbscan_eps is not None else 16.0
             min_samples = dbscan_min_samples if dbscan_min_samples is not None else 1
             
@@ -464,13 +489,23 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
             receptor_cs = receptor_crosssection if receptor_crosssection is not None else 122.0
             aunps_per_rec = aunps_per_receptor if aunps_per_receptor is not None else 2.0
             vert_step = vertex_sampling_step if vertex_sampling_step is not None else 50
-            aunp_results = analyze_aunps(tomo, az_indices, set_name=set_name, 
+            syn_cutoff = synaptic_designation_cutoff if synaptic_designation_cutoff is not None else 30.0
+            min_clust = min_cluster_size if min_cluster_size is not None else 4
+            fusion_thresh = fusion_point_threshold if fusion_point_threshold is not None else 20.0
+            fusing_thresh = fusing_perimeter_threshold if fusing_perimeter_threshold is not None else 5.0
+            center_metric = active_center_distance_metric if active_center_distance_metric is not None else "mean"
+            aunp_results = analyze_aunps(tomo, az_indices, set_name=set_name, alignment_dir=alignment_dir,
                                          vesicle_distance_threshold=vesicle_threshold,
                                          dbscan_eps=eps, dbscan_min_samples=min_samples,
                                          cylinder_radius=cylinder_rad,
                                          receptor_crosssection=receptor_cs,
                                          aunps_per_receptor=aunps_per_rec,
-                                         vertex_sampling_step=vert_step)
+                                         vertex_sampling_step=vert_step,
+                                         synaptic_designation_cutoff=syn_cutoff,
+                                         min_cluster_size=min_clust,
+                                         fusion_point_threshold=fusion_thresh,
+                                         fusing_perimeter_threshold=fusing_thresh,
+                                         active_center_distance_metric=center_metric)
             
             # Store combined results
             combined_results = {
@@ -478,9 +513,9 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
             }
             
             # Auto-overwrite if not using skip_completed (more intuitive behavior)
-            results_manager.store_tomogram_results(tomogram_name, 'aunps', combined_results, overwrite=rerun, set_name=set_name)
+            results_manager.store_tomogram_results(analysis_name, 'aunps', combined_results, overwrite=rerun, set_name=set_name)
         except Exception as e:
-            print(f"Error in AuNP analysis for {tomogram_name}: {e}")
+            print(f"Error in AuNP analysis for {analysis_name}: {e}")
             # Store error results so we know this analysis failed
             error_results = {
                 'aunp_analysis': {
@@ -488,7 +523,7 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
                     'error': str(e)
                 }
             }
-            results_manager.store_tomogram_results(tomogram_name, 'aunps', error_results, overwrite=True, set_name=set_name)
+            results_manager.store_tomogram_results(analysis_name, 'aunps', error_results, overwrite=True, set_name=set_name)
 
 def delete_csv_tomogram_results(csv_path, results_dir="results", data_dir="data"):
     """Delete results only for tomograms specified in the CSV file."""
@@ -674,7 +709,7 @@ def main():
     )
     parser.add_argument(
         "--vesicle-distance-threshold", type=float, default=None,
-        help="Custom distance threshold for 'close' vesicles (nm). Default: 20.0"
+        help="Custom distance threshold for 'close' vesicles (nm). Default: 10.0"
     )
     parser.add_argument(
         "--dbscan-eps", type=float, default=None,
@@ -725,6 +760,26 @@ def main():
         "--vertex-sampling-step", type=int, default=None,
         help="Sample every Nth mesh vertex for packing density (1=all, 50=every 50th). Default: 50"
     )
+    parser.add_argument(
+        "--synaptic-designation-cutoff", type=float, default=None,
+        help="Distance cutoff (nm) to postsynaptic active outer membrane for synaptic/extrasynaptic designation. Default: 30.0"
+    )
+    parser.add_argument(
+        "--min-cluster-size", type=int, default=None,
+        help="Minimum cluster size retained after DBSCAN (smaller clusters become noise). Default: 4"
+    )
+    parser.add_argument(
+        "--fusion-point-threshold", type=float, default=None,
+        help="Distance threshold (nm) for AZ points contributing to fusion point. Default: 20.0"
+    )
+    parser.add_argument(
+        "--fusing-perimeter-threshold", type=float, default=None,
+        help="Perimeter distance threshold (nm) for classifying fusing vesicles. Default: 5.0"
+    )
+    parser.add_argument(
+        "--active-center-distance-metric", type=str, default=None, choices=["mean", "min"],
+        help="How to combine active outer/inner distances for active-center distance. Options: mean|min. Default: mean"
+    )
 
     args = parser.parse_args()
 
@@ -750,9 +805,9 @@ def main():
             return
         print(f"Checking required files for {len(tomos)} tomograms...")
         missing = False
-        for tomo, set_name, _ in tomos:
+        for tomo, set_name, _, alignment_dir in tomos:
             missing_files = []
-            base = Path(tomo) / "best_alignment"
+            base = Path(tomo) / alignment_dir
             # Check for main reconstruction
             rec_file = list(base.glob("*_ddw.mrc"))
             if not rec_file:
@@ -771,13 +826,13 @@ def main():
                 missing_files.append("postsynaptic membrane files (postsynapticmembranes_*.txt)")
             # Check for active zone segmentations only if not running activezone or all
             if args.analysis not in ["activezone", "all"]:
-                az_dir = base.parent / "STT_results" / "activezone"
-                az_pre = list(az_dir.glob("*_pre.txt"))
-                az_post = list(az_dir.glob("*_post.txt"))
+                az_dir = base / "STT_results" / "activezone"
+                az_pre = list(az_dir.glob("*_pre_outer.txt"))
+                az_post = list(az_dir.glob("*_post_outer.txt"))
                 if not az_pre:
-                    missing_files.append("active zone pre files (*_pre.txt)")
+                    missing_files.append("active zone pre files (*_pre_outer.txt)")
                 if not az_post:
-                    missing_files.append("active zone post files (*_post.txt)")
+                    missing_files.append("active zone post files (*_post_outer.txt)")
             # Check for MemBrain segmentation
             membrain_dir = base / "membrain"
             membrain_files = list(membrain_dir.glob("*.mrc"))
@@ -848,6 +903,11 @@ def main():
     receptor_crosssection = args.receptor_crosssection
     aunps_per_receptor = args.aunps_per_receptor
     vertex_sampling_step = args.vertex_sampling_step
+    synaptic_designation_cutoff = args.synaptic_designation_cutoff
+    min_cluster_size = args.min_cluster_size
+    fusion_point_threshold = args.fusion_point_threshold
+    fusing_perimeter_threshold = args.fusing_perimeter_threshold
+    active_center_distance_metric = args.active_center_distance_metric
     
     if args.analysis == "activezone":
         run_activezone(tomos, results_manager, rerun=args.rerun, 
@@ -860,7 +920,11 @@ def main():
                   vesicle_distance_threshold=vesicle_distance_threshold,
                   dbscan_eps=dbscan_eps, dbscan_min_samples=dbscan_min_samples,
                   cylinder_radius=cylinder_radius, receptor_crosssection=receptor_crosssection,
-                  aunps_per_receptor=aunps_per_receptor, vertex_sampling_step=vertex_sampling_step)
+                  aunps_per_receptor=aunps_per_receptor, vertex_sampling_step=vertex_sampling_step,
+                  synaptic_designation_cutoff=synaptic_designation_cutoff,
+                  min_cluster_size=min_cluster_size, fusion_point_threshold=fusion_point_threshold,
+                  fusing_perimeter_threshold=fusing_perimeter_threshold,
+                  active_center_distance_metric=active_center_distance_metric)
     elif args.analysis == "visualizations":
         generate_visualizations(tomos, results_manager, rerun=args.rerun, csv_path=args.csv,
                                 sphere_size=sphere_size, sphere_color=sphere_color,
@@ -879,7 +943,11 @@ def main():
                          cylinder_radius=cylinder_radius,
                          receptor_crosssection=receptor_crosssection,
                          aunps_per_receptor=aunps_per_receptor,
-                         vertex_sampling_step=vertex_sampling_step)
+                         vertex_sampling_step=vertex_sampling_step,
+                         synaptic_designation_cutoff=synaptic_designation_cutoff,
+                         min_cluster_size=min_cluster_size, fusion_point_threshold=fusion_point_threshold,
+                         fusing_perimeter_threshold=fusing_perimeter_threshold,
+                         active_center_distance_metric=active_center_distance_metric)
 
     # Always export summary CSVs at the end
     print("\nExporting all summary CSVs from stored results...")

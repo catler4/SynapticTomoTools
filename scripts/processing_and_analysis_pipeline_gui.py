@@ -62,7 +62,7 @@ class AnalysisPipelineGUI(tk.Tk):
         self.az_distance_min = tk.StringVar(value="10.0")
         self.az_distance_max = tk.StringVar(value="40.0")
         # Vesicle analysis parameters
-        self.vesicle_distance_threshold = tk.StringVar(value="20.0")
+        self.vesicle_distance_threshold = tk.StringVar(value="10.0")
         # AuNP analysis parameters
         self.dbscan_eps = tk.StringVar(value="16.0")
         self.dbscan_min_samples = tk.StringVar(value="1")
@@ -77,6 +77,11 @@ class AnalysisPipelineGUI(tk.Tk):
         self.receptor_crosssection = tk.StringVar(value="122.0")
         self.aunps_per_receptor = tk.StringVar(value="2.0")
         self.vertex_sampling_step = tk.StringVar(value="50")
+        self.synaptic_designation_cutoff = tk.StringVar(value="30.0")
+        self.min_cluster_size = tk.StringVar(value="4")
+        self.fusion_point_threshold = tk.StringVar(value="20.0")
+        self.fusing_perimeter_threshold = tk.StringVar(value="5.0")
+        self.active_center_distance_metric = tk.StringVar(value="mean")
         
         self._build_tabs()
 
@@ -182,33 +187,63 @@ class AnalysisPipelineGUI(tk.Tk):
         az_frame = ttk.LabelFrame(self.custom_params_frame, text="Active Zone Parameters", padding=5)
         az_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         ttk.Label(az_frame, text="Distance range (nm):").grid(row=0, column=0, sticky=tk.W, padx=5)
-        ttk.Entry(az_frame, textvariable=self.az_distance_min, width=8).grid(row=0, column=1, padx=2)
+        az_min_entry = ttk.Entry(az_frame, textvariable=self.az_distance_min, width=8)
+        az_min_entry.grid(row=0, column=1, padx=2)
         ttk.Label(az_frame, text="to").grid(row=0, column=2, padx=2)
-        ttk.Entry(az_frame, textvariable=self.az_distance_max, width=8).grid(row=0, column=3, padx=2)
+        az_max_entry = ttk.Entry(az_frame, textvariable=self.az_distance_max, width=8)
+        az_max_entry.grid(row=0, column=3, padx=2)
         ttk.Label(az_frame, text="(default: 10.0 - 40.0)").grid(row=0, column=4, padx=5, sticky=tk.W)
         
         # Vesicle analysis parameters
         vesicle_frame = ttk.LabelFrame(self.custom_params_frame, text="Vesicle Analysis Parameters", padding=5)
         vesicle_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         ttk.Label(vesicle_frame, text="Distance from active zone for 'close' vesicles (nm):").grid(row=0, column=0, sticky=tk.W, padx=5)
-        ttk.Entry(vesicle_frame, textvariable=self.vesicle_distance_threshold, width=8).grid(row=0, column=1, padx=5)
-        ttk.Label(vesicle_frame, text="(default: 20.0)").grid(row=0, column=2, padx=5, sticky=tk.W)
+        vesicle_threshold_entry = ttk.Entry(vesicle_frame, textvariable=self.vesicle_distance_threshold, width=8)
+        vesicle_threshold_entry.grid(row=0, column=1, padx=5)
+        ttk.Label(vesicle_frame, text="(default: 10.0)").grid(row=0, column=2, padx=5, sticky=tk.W)
         
         # AuNP analysis parameters
         aunp_frame = ttk.LabelFrame(self.custom_params_frame, text="AuNP Analysis Parameters", padding=5)
         aunp_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         ttk.Label(aunp_frame, text="DBSCAN eps (nm):").grid(row=0, column=0, sticky=tk.W, padx=5)
-        ttk.Entry(aunp_frame, textvariable=self.dbscan_eps, width=8).grid(row=0, column=1, padx=5)
+        dbscan_eps_entry = ttk.Entry(aunp_frame, textvariable=self.dbscan_eps, width=8)
+        dbscan_eps_entry.grid(row=0, column=1, padx=5)
         ttk.Label(aunp_frame, text="(default: 16.0)").grid(row=0, column=2, padx=5, sticky=tk.W)
         ttk.Label(aunp_frame, text="DBSCAN min_samples:").grid(row=1, column=0, sticky=tk.W, padx=5)
-        ttk.Entry(aunp_frame, textvariable=self.dbscan_min_samples, width=8).grid(row=1, column=1, padx=5)
+        dbscan_min_samples_entry = ttk.Entry(aunp_frame, textvariable=self.dbscan_min_samples, width=8)
+        dbscan_min_samples_entry.grid(row=1, column=1, padx=5)
         ttk.Label(aunp_frame, text="(default: 1)").grid(row=1, column=2, padx=5, sticky=tk.W)
+        ttk.Label(aunp_frame, text="Synaptic designation cutoff (nm from postsynaptic outer membrane):").grid(row=2, column=0, sticky=tk.W, padx=5)
+        synaptic_cutoff_entry = ttk.Entry(aunp_frame, textvariable=self.synaptic_designation_cutoff, width=8)
+        synaptic_cutoff_entry.grid(row=2, column=1, padx=5)
+        ttk.Label(aunp_frame, text="(default: 30.0)").grid(row=2, column=2, padx=5, sticky=tk.W)
+        ttk.Label(aunp_frame, text="Minimum cluster size (post-DBSCAN):").grid(row=3, column=0, sticky=tk.W, padx=5)
+        min_cluster_size_entry = ttk.Entry(aunp_frame, textvariable=self.min_cluster_size, width=8)
+        min_cluster_size_entry.grid(row=3, column=1, padx=5)
+        ttk.Label(aunp_frame, text="(default: 4)").grid(row=3, column=2, padx=5, sticky=tk.W)
+        ttk.Label(aunp_frame, text="Fusion point threshold (nm):").grid(row=4, column=0, sticky=tk.W, padx=5)
+        fusion_point_threshold_entry = ttk.Entry(aunp_frame, textvariable=self.fusion_point_threshold, width=8)
+        fusion_point_threshold_entry.grid(row=4, column=1, padx=5)
+        ttk.Label(aunp_frame, text="(default: 20.0)").grid(row=4, column=2, padx=5, sticky=tk.W)
+        ttk.Label(aunp_frame, text="Fusing perimeter threshold (nm):").grid(row=5, column=0, sticky=tk.W, padx=5)
+        fusing_perimeter_threshold_entry = ttk.Entry(aunp_frame, textvariable=self.fusing_perimeter_threshold, width=8)
+        fusing_perimeter_threshold_entry.grid(row=5, column=1, padx=5)
+        ttk.Label(aunp_frame, text="(default: 5.0)").grid(row=5, column=2, padx=5, sticky=tk.W)
+        ttk.Label(aunp_frame, text="Active center distance metric:").grid(row=6, column=0, sticky=tk.W, padx=5)
+        center_metric_combo = ttk.Combobox(
+            aunp_frame, textvariable=self.active_center_distance_metric,
+            values=["mean", "min"], width=8, state="readonly"
+        )
+        center_metric_combo.grid(row=6, column=1, padx=5)
+        center_metric_combo.set("mean")
+        ttk.Label(aunp_frame, text="(default: mean)").grid(row=6, column=2, padx=5, sticky=tk.W)
         
         # Visualization parameters
         viz_frame = ttk.LabelFrame(self.custom_params_frame, text="Visualization Parameters", padding=5)
         viz_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         ttk.Label(viz_frame, text="Sphere size for active zonogram overlays:").grid(row=0, column=0, sticky=tk.W, padx=5)
-        ttk.Entry(viz_frame, textvariable=self.sphere_size, width=8).grid(row=0, column=1, padx=5)
+        sphere_size_entry = ttk.Entry(viz_frame, textvariable=self.sphere_size, width=8)
+        sphere_size_entry.grid(row=0, column=1, padx=5)
         ttk.Label(viz_frame, text="(default: 36)").grid(row=0, column=2, padx=5, sticky=tk.W)
         ttk.Label(viz_frame, text="Sphere color:").grid(row=1, column=0, sticky=tk.W, padx=5)
         # Color dropdown with matplotlib-compatible colors
@@ -221,9 +256,11 @@ class AnalysisPipelineGUI(tk.Tk):
         self.sphere_color_combo.set('gold')  # Set default
         ttk.Label(viz_frame, text="(default: gold)").grid(row=1, column=2, padx=5, sticky=tk.W)
         ttk.Label(viz_frame, text="AuNP distance range for color scale (nm):").grid(row=2, column=0, sticky=tk.W, padx=5)
-        ttk.Entry(viz_frame, textvariable=self.aunp_distance_min, width=8).grid(row=2, column=1, padx=2)
+        aunp_distance_min_entry = ttk.Entry(viz_frame, textvariable=self.aunp_distance_min, width=8)
+        aunp_distance_min_entry.grid(row=2, column=1, padx=2)
         ttk.Label(viz_frame, text="to").grid(row=2, column=2, padx=2)
-        ttk.Entry(viz_frame, textvariable=self.aunp_distance_max, width=8).grid(row=2, column=3, padx=2)
+        aunp_distance_max_entry = ttk.Entry(viz_frame, textvariable=self.aunp_distance_max, width=8)
+        aunp_distance_max_entry.grid(row=2, column=3, padx=2)
         ttk.Label(viz_frame, text="(default: auto from data)").grid(row=2, column=4, padx=5, sticky=tk.W)
         ttk.Label(viz_frame, text="AuNP distance cutoff filter:").grid(row=3, column=0, sticky=tk.W, padx=5)
         cutoff_direction_combo = ttk.Combobox(viz_frame, textvariable=self.aunp_distance_cutoff_direction, 
@@ -231,20 +268,47 @@ class AnalysisPipelineGUI(tk.Tk):
         cutoff_direction_combo.grid(row=3, column=1, padx=2)
         cutoff_direction_combo.set('below')
         ttk.Label(viz_frame, text="(nm)").grid(row=3, column=2, padx=2)
-        ttk.Entry(viz_frame, textvariable=self.aunp_distance_cutoff_value, width=8).grid(row=3, column=3, padx=2)
+        aunp_distance_cutoff_value_entry = ttk.Entry(viz_frame, textvariable=self.aunp_distance_cutoff_value, width=8)
+        aunp_distance_cutoff_value_entry.grid(row=3, column=3, padx=2)
         ttk.Label(viz_frame, text="(default: below 15 nm)").grid(row=3, column=4, padx=5, sticky=tk.W)
         ttk.Label(viz_frame, text="Sliding cylinder radius (nm) for packing density heat map:").grid(row=4, column=0, sticky=tk.W, padx=5)
-        ttk.Entry(viz_frame, textvariable=self.cylinder_radius, width=8).grid(row=4, column=1, padx=5)
+        cylinder_radius_entry = ttk.Entry(viz_frame, textvariable=self.cylinder_radius, width=8)
+        cylinder_radius_entry.grid(row=4, column=1, padx=5)
         ttk.Label(viz_frame, text="(default: 25.0)").grid(row=4, column=2, padx=5, sticky=tk.W)
         ttk.Label(viz_frame, text="Receptor cross-sectional area (nm²):").grid(row=5, column=0, sticky=tk.W, padx=5)
-        ttk.Entry(viz_frame, textvariable=self.receptor_crosssection, width=8).grid(row=5, column=1, padx=5)
+        receptor_crosssection_entry = ttk.Entry(viz_frame, textvariable=self.receptor_crosssection, width=8)
+        receptor_crosssection_entry.grid(row=5, column=1, padx=5)
         ttk.Label(viz_frame, text="(default: 122.0)").grid(row=5, column=2, padx=5, sticky=tk.W)
         ttk.Label(viz_frame, text="AuNPs per receptor (e.g. cylinder < AuNP pair distance may need 1):").grid(row=6, column=0, sticky=tk.W, padx=5)
-        ttk.Entry(viz_frame, textvariable=self.aunps_per_receptor, width=8).grid(row=6, column=1, padx=5)
+        aunps_per_receptor_entry = ttk.Entry(viz_frame, textvariable=self.aunps_per_receptor, width=8)
+        aunps_per_receptor_entry.grid(row=6, column=1, padx=5)
         ttk.Label(viz_frame, text="(default: 2.0)").grid(row=6, column=2, padx=5, sticky=tk.W)
         ttk.Label(viz_frame, text="Vertex sampling step (1=all, 50=every 50th):").grid(row=7, column=0, sticky=tk.W, padx=5)
-        ttk.Entry(viz_frame, textvariable=self.vertex_sampling_step, width=8).grid(row=7, column=1, padx=5)
+        vertex_sampling_step_entry = ttk.Entry(viz_frame, textvariable=self.vertex_sampling_step, width=8)
+        vertex_sampling_step_entry.grid(row=7, column=1, padx=5)
         ttk.Label(viz_frame, text="(default: 50)").grid(row=7, column=2, padx=5, sticky=tk.W)
+
+        # Tooltips for custom parameters
+        ToolTip(az_min_entry, "Active-zone minimum pre/post membrane distance in nm (default 10.0).")
+        ToolTip(az_max_entry, "Active-zone maximum pre/post membrane distance in nm (default 40.0).")
+        ToolTip(vesicle_threshold_entry, "Maximum vesicle distance_to_az (nm) considered 'close' for vesicle-linked analyses (default 10.0).")
+        ToolTip(dbscan_eps_entry, "DBSCAN epsilon in nm for AuNP clustering neighborhood radius (default 16.0).")
+        ToolTip(dbscan_min_samples_entry, "DBSCAN min_samples core-point threshold (default 1).")
+        ToolTip(synaptic_cutoff_entry, "AuNP is labeled synaptic if distance to postsynaptic active outer membrane is <= this cutoff in nm (default 30.0).")
+        ToolTip(min_cluster_size_entry, "Post-DBSCAN minimum retained cluster size; smaller clusters are reassigned to noise (default 4).")
+        ToolTip(fusion_point_threshold_entry, "Radius in nm for active-zone points contributing to per-vesicle fusion point estimation (default 20.0).")
+        ToolTip(fusing_perimeter_threshold_entry, "Vesicle is fusing if minimum sphere perimeter distance to active zone is <= this nm threshold (default 5.0).")
+        ToolTip(center_metric_combo, "How active-center distance is computed from outer/inner distances: mean or min (default mean).")
+        ToolTip(sphere_size_entry, "Marker size for visualization sphere overlays (default 36).")
+        ToolTip(self.sphere_color_combo, "Marker color for visualization sphere overlays (default gold).")
+        ToolTip(aunp_distance_min_entry, "Minimum distance (nm) for AuNP color scale; leave empty for auto.")
+        ToolTip(aunp_distance_max_entry, "Maximum distance (nm) for AuNP color scale; leave empty for auto.")
+        ToolTip(cutoff_direction_combo, "Direction of AuNP distance cutoff filter: keep below or above cutoff value.")
+        ToolTip(aunp_distance_cutoff_value_entry, "Distance cutoff value in nm for AuNP visualization filtering.")
+        ToolTip(cylinder_radius_entry, "Sliding-cylinder radius in nm for packing-density calculation (default 25.0).")
+        ToolTip(receptor_crosssection_entry, "Receptor cross-sectional area in nm² used in packing-density conversion (default 122.0).")
+        ToolTip(aunps_per_receptor_entry, "AuNPs per receptor scaling factor for packing density (2=dimer/full receptor, 1=monomer/half receptor).")
+        ToolTip(vertex_sampling_step_entry, "Use every Nth mesh vertex for packing-density computation (1=all vertices; default 50).")
         
         # Initially hide custom params frame
         self.custom_params_frame.grid_remove()
@@ -975,6 +1039,28 @@ Do you want to continue?"""
                     cli += ["--dbscan-min-samples", str(int(self.dbscan_min_samples.get()))]
                 except ValueError:
                     pass
+            if self.synaptic_designation_cutoff.get():
+                try:
+                    cli += ["--synaptic-designation-cutoff", str(float(self.synaptic_designation_cutoff.get()))]
+                except ValueError:
+                    pass
+            if self.min_cluster_size.get():
+                try:
+                    cli += ["--min-cluster-size", str(int(self.min_cluster_size.get()))]
+                except ValueError:
+                    pass
+            if self.fusion_point_threshold.get():
+                try:
+                    cli += ["--fusion-point-threshold", str(float(self.fusion_point_threshold.get()))]
+                except ValueError:
+                    pass
+            if self.fusing_perimeter_threshold.get():
+                try:
+                    cli += ["--fusing-perimeter-threshold", str(float(self.fusing_perimeter_threshold.get()))]
+                except ValueError:
+                    pass
+            if self.active_center_distance_metric.get():
+                cli += ["--active-center-distance-metric", str(self.active_center_distance_metric.get())]
             
             # Visualization parameters
             if self.sphere_size.get():

@@ -88,14 +88,14 @@ def calculate_packing_density_using_sliding_cylinder(
 
     return (v_array, packing_coefficient)
 
-def compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0, fusion_point_threshold=20.0):
+def compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0, fusion_point_threshold=20.0, alignment_dir: str = "best_alignment"):
     """
     For each vesicle within 20 nm of the presynaptic active zone, compute the putative fusion point as the average
     of all presynaptic active zone points within 20 nm of any vesicle point. Supports multiple active zones.
     Returns a list of fusion points (np.ndarray shape (N, 3)).
     """
     # Load vesicle results
-    vesicles_file = Path(tomogram_path) / "best_alignment" / "STT_results" / "vesicles" / "vesicle_results.json"
+    vesicles_file = Path(tomogram_path) / alignment_dir / "STT_results" / "vesicles" / "vesicle_results.json"
     if not vesicles_file.exists():
         print(f"No vesicle results found: {vesicles_file}")
         return []
@@ -103,7 +103,7 @@ def compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0, fusion
         vesicle_data = json.load(f)
     vesicles = vesicle_data['vesicles']
     # Load presynaptic membranes and active zones
-    membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path)
+    membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir=alignment_dir)
     fusion_points = []
     for vesicle in vesicles:
         # Only consider vesicles within 10 nm of the presynaptic active zone
@@ -170,7 +170,8 @@ def check_if_fusing_vesicle(vesicle, active_zone_points, perimeter_threshold=5.0
 
 def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, vesicle_distance_threshold=20.0, 
                                                   fusion_point_threshold=20.0, max_distance=500.0, bin_width=5.0,
-                                                  fusing_only=False, fusing_perimeter_threshold=5.0):
+                                                  fusing_only=False, fusing_perimeter_threshold=5.0,
+                                                  alignment_dir: str = "best_alignment"):
     """
     For each vesicle within vesicle_distance_threshold of the presynaptic active zone:
     1. Compute the putative fusion point
@@ -194,7 +195,7 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
     tomogram_name = Path(tomogram_path).name
     
     # Load vesicle results
-    vesicles_file = Path(tomogram_path) / "best_alignment" / "STT_results" / "vesicles" / "vesicle_results.json"
+    vesicles_file = Path(tomogram_path) / alignment_dir / "STT_results" / "vesicles" / "vesicle_results.json"
     if not vesicles_file.exists():
         print(f"No vesicle results found: {vesicles_file}")
         return pd.DataFrame()
@@ -204,7 +205,7 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
     vesicles = vesicle_data['vesicles']
     
     # Load presynaptic membranes and active zones
-    membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path)
+    membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir=alignment_dir)
     
     # Create histogram bin edges
     bin_edges = np.arange(0, max_distance + bin_width, bin_width)
@@ -284,10 +285,12 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
     
     return pd.DataFrame(results)
 
-def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, 
+def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, alignment_dir: str = "best_alignment",
                   vesicle_distance_threshold=20.0, dbscan_eps=16.0, dbscan_min_samples=1,
                   cylinder_radius=25.0, receptor_crosssection=122.0, aunps_per_receptor=2.0,
-                  vertex_sampling_step=1):
+                  vertex_sampling_step=1, synaptic_designation_cutoff=30.0,
+                  min_cluster_size=4, fusion_point_threshold=20.0,
+                  fusing_perimeter_threshold=5.0, active_center_distance_metric="mean"):
     """
     Performs analysis of gold nanoparticles (AuNPs) in the tomogram.
 
@@ -302,17 +305,24 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         receptor_crosssection (float): Receptor cross-sectional area for packing density (nm²). Default: 122.0.
         aunps_per_receptor (float): AuNPs per receptor (e.g. 2 for dimer, 1 for monomer). Default: 2.0.
         vertex_sampling_step (int): Sample every Nth mesh vertex for packing (1=all, 50=every 50th). Default: 50.
+        synaptic_designation_cutoff (float): Distance cutoff (nm) to postsynaptic active outer membrane for
+            synaptic vs extrasynaptic label. Default: 30.0.
+        min_cluster_size (int): Minimum cluster size to keep after DBSCAN (smaller clusters -> noise). Default: 4.
+        fusion_point_threshold (float): Radius (nm) for AZ points contributing to fusion point. Default: 20.0.
+        fusing_perimeter_threshold (float): Max perimeter-to-AZ distance (nm) for fusing vesicles. Default: 5.0.
+        active_center_distance_metric (str): How to combine outer/inner distances for active center.
+            Options: "mean", "min". Default: "mean".
     """
     print(f"Analyzing AuNPs in {Path(tomogram_path).name}")
     
     try:
-        aunps_dir = Path(tomogram_path) / "best_alignment" / "aunps"
+        aunps_dir = Path(tomogram_path) / alignment_dir / "aunps"
         import glob
         import os
         star_dfs = []
         if active_zone_indices is not None:
             for idx in active_zone_indices:
-                star_file = aunps_dir / f"aunp_tm_BP_active_zone_{idx}.star"
+                star_file = aunps_dir / f"aunp_tm_BP_active_zone_{idx}_manual_refined.star"
                 print("Trying to load:", star_file)
                 if star_file.exists():
                     star_data = starfile.read(star_file)
@@ -330,11 +340,11 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                         df['active_zone'] = idx
                         star_dfs.append(df)
         else:
-            # Load all aunp_tm_BP_active_zone_*.star files with numeric suffix (not _all.star)
-            pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
+            # Load all aunp_tm_BP_active_zone_<N>_manual_refined.star files with numeric suffix
+            pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*_manual_refined.star")
             for file in glob.glob(pattern):
                 fname = Path(file).name
-                m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
+                m = re.match(r"aunp_tm_BP_active_zone_(\d+)_manual_refined\.star", fname)
                 if m:
                     az_id = int(m.group(1))
                     star_data = starfile.read(Path(file))
@@ -353,7 +363,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                         star_dfs.append(df)
         
         if not star_dfs:
-            print("No numeric aunp_tm_BP_active_zone_*.star files found and _all.star fallback is disabled.")
+            print("No numeric aunp_tm_BP_active_zone_<N>_manual_refined.star files found.")
             return {
                 'aunp_count': 0,
                 'status': 'completed',
@@ -394,7 +404,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         
         # Note: Nearest neighbor and clustering analysis will be done AFTER membrane filtering
 
-        aunps_results_dir = Path(tomogram_path) / "best_alignment" / "STT_results" / "aunps"
+        aunps_results_dir = Path(tomogram_path) / alignment_dir / "STT_results" / "aunps"
         aunps_results_dir.mkdir(parents=True, exist_ok=True)
         output_file = aunps_results_dir / "aunp_nearest_neighbor_distances.csv"
 
@@ -488,52 +498,74 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         df_valid['distance_to_postsynaptic'] = post_dists
         # --- End new ---
         
-        # --- Apply membrane distance filtering (findingampa-style: within 40nm of both membranes) ---
-        print(f"Applying membrane distance filtering (findingampa-style: < 40nm from both presynaptic and postsynaptic)...")
-        n_before_filter = len(df_valid)
-        
-        # Filter: keep AuNPs within 40nm of both presynaptic AND postsynaptic membranes
-        # Only include AuNPs with valid (non-NaN) distance measurements
-        valid_pre = ~np.isnan(df_valid['distance_to_presynaptic'])
-        valid_post = ~np.isnan(df_valid['distance_to_postsynaptic'])
-        within_pre_threshold = df_valid['distance_to_presynaptic'] < 40
-        within_post_threshold = df_valid['distance_to_postsynaptic'] < 40
-        
-        membrane_filter_mask = np.logical_and.reduce([
-            valid_pre,
-            valid_post,
-            within_pre_threshold,
-            within_post_threshold
-        ])
-        
-        df_valid = df_valid[membrane_filter_mask].copy()
-        n_after_filter = len(df_valid)
-        n_filtered = n_before_filter - n_after_filter
-        
-        print(f"  Filtered {n_filtered} AuNPs ({n_before_filter} -> {n_after_filter})")
-        print(f"  Kept {n_after_filter} AuNPs within 40nm of both membranes")
-        
-        if df_valid.empty:
-            print("No AuNPs remaining after membrane distance filtering.")
-            return {
-                'aunp_count': 0,
-                'status': 'completed',
-                'error': 'No AuNPs within 40nm of both membranes'
-            }
-        
-        # Update coordinates array to match filtered dataframe
+        # --- No membrane distance filtering ---
+        # Keep all AuNPs in analysis; downstream consumers can filter later using
+        # distance columns and synaptic_designation.
+        print("Skipping membrane distance filtering (all AuNPs retained).")
         coords = np.asarray(df_valid[coord_cols]).astype(float)
-        # --- End membrane distance filtering ---
         
-        # --- Calculate distance to active zone center (on filtered AuNPs) ---
+        # --- Calculate active-zone distances (on filtered AuNPs) ---
+        def _nearest_distances_to_cloud(points: np.ndarray, cloud: np.ndarray) -> np.ndarray:
+            """Return nearest-neighbor distances from points to cloud (NaN if cloud empty)."""
+            if cloud is None or len(cloud) == 0:
+                return np.full(points.shape[0], np.nan)
+            tree = KDTree(cloud)
+            dists, _ = tree.query(points)
+            return dists
+
         try:
-            az_segmentations = import_active_zone_segmentations(tomogram_path)
+            az_segmentations = import_active_zone_segmentations(tomogram_path, alignment_dir=alignment_dir)
             all_az_points = []
+            pre_outer_clouds = []
+            post_outer_clouds = []
+            pre_inner_clouds = []
+            post_inner_clouds = []
             for az in az_segmentations.values():
                 if 'presynaptic_coords' in az and len(az['presynaptic_coords']) > 0:
-                    all_az_points.append(np.asarray(az['presynaptic_coords']))
+                    all_az_points.append(np.atleast_2d(np.asarray(az['presynaptic_coords'])))
                 if 'postsynaptic_coords' in az and len(az['postsynaptic_coords']) > 0:
-                    all_az_points.append(np.asarray(az['postsynaptic_coords']))
+                    all_az_points.append(np.atleast_2d(np.asarray(az['postsynaptic_coords'])))
+                if 'presynaptic_outer_coords' in az and len(az['presynaptic_outer_coords']) > 0:
+                    pre_outer_clouds.append(np.atleast_2d(np.asarray(az['presynaptic_outer_coords'])))
+                if 'postsynaptic_outer_coords' in az and len(az['postsynaptic_outer_coords']) > 0:
+                    post_outer_clouds.append(np.atleast_2d(np.asarray(az['postsynaptic_outer_coords'])))
+                if 'presynaptic_inner_coords' in az and len(az['presynaptic_inner_coords']) > 0:
+                    pre_inner_clouds.append(np.atleast_2d(np.asarray(az['presynaptic_inner_coords'])))
+                if 'postsynaptic_inner_coords' in az and len(az['postsynaptic_inner_coords']) > 0:
+                    post_inner_clouds.append(np.atleast_2d(np.asarray(az['postsynaptic_inner_coords'])))
+
+            pre_outer_points = np.vstack(pre_outer_clouds) if pre_outer_clouds else np.array([])
+            post_outer_points = np.vstack(post_outer_clouds) if post_outer_clouds else np.array([])
+            pre_inner_points = np.vstack(pre_inner_clouds) if pre_inner_clouds else np.array([])
+            post_inner_points = np.vstack(post_inner_clouds) if post_inner_clouds else np.array([])
+
+            df_valid['distance_to_presynaptic_active_outer'] = _nearest_distances_to_cloud(coords, pre_outer_points)
+            df_valid['distance_to_postsynaptic_active_outer'] = _nearest_distances_to_cloud(coords, post_outer_points)
+            df_valid['distance_to_presynaptic_active_inner'] = _nearest_distances_to_cloud(coords, pre_inner_points)
+            df_valid['distance_to_postsynaptic_active_inner'] = _nearest_distances_to_cloud(coords, post_inner_points)
+
+            pre_center_stack = np.vstack([
+                df_valid['distance_to_presynaptic_active_outer'].to_numpy(),
+                df_valid['distance_to_presynaptic_active_inner'].to_numpy()
+            ])
+            post_center_stack = np.vstack([
+                df_valid['distance_to_postsynaptic_active_outer'].to_numpy(),
+                df_valid['distance_to_postsynaptic_active_inner'].to_numpy()
+            ])
+            if active_center_distance_metric == "min":
+                df_valid['distance_to_presynaptic_active_center'] = np.nanmin(pre_center_stack, axis=0)
+                df_valid['distance_to_postsynaptic_active_center'] = np.nanmin(post_center_stack, axis=0)
+            else:
+                # Default: mean
+                df_valid['distance_to_presynaptic_active_center'] = np.nanmean(pre_center_stack, axis=0)
+                df_valid['distance_to_postsynaptic_active_center'] = np.nanmean(post_center_stack, axis=0)
+
+            # Synaptic if within cutoff of postsynaptic active outer membrane; else extrasynaptic
+            synaptic_mask = df_valid['distance_to_postsynaptic_active_outer'] <= synaptic_designation_cutoff
+            # If distance is NaN, default to extrasynaptic for explicit labeling
+            synaptic_mask = synaptic_mask.fillna(False)
+            df_valid['synaptic_designation'] = np.where(synaptic_mask, "synaptic", "extrasynaptic")
+
             if all_az_points:
                 all_az_points = np.vstack(all_az_points)
                 az_center = np.mean(all_az_points, axis=0)
@@ -545,6 +577,13 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             print(f"Error calculating active zone center: {e}")
             az_center = np.array([np.nan, np.nan, np.nan])
             distances_to_center = np.full(coords.shape[0], np.nan)
+            df_valid['distance_to_presynaptic_active_outer'] = np.full(coords.shape[0], np.nan)
+            df_valid['distance_to_postsynaptic_active_outer'] = np.full(coords.shape[0], np.nan)
+            df_valid['distance_to_presynaptic_active_inner'] = np.full(coords.shape[0], np.nan)
+            df_valid['distance_to_postsynaptic_active_inner'] = np.full(coords.shape[0], np.nan)
+            df_valid['distance_to_presynaptic_active_center'] = np.full(coords.shape[0], np.nan)
+            df_valid['distance_to_postsynaptic_active_center'] = np.full(coords.shape[0], np.nan)
+            df_valid['synaptic_designation'] = "extrasynaptic"
         df_valid['distance_to_active_zone_center'] = distances_to_center
         # --- End active zone center calculation ---
 
@@ -556,20 +595,20 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         # --- AuNP clustering analysis using DBSCAN (on filtered AuNPs) ---
         db = None  # Initialize so it's accessible for cluster summary
         try:
-            # Use DBSCAN with custom parameters, then filter out clusters with < 4 points
+            # Use DBSCAN with custom parameters, then filter out clusters with < min_cluster_size points
             db = DBSCAN(eps=dbscan_eps, min_samples=dbscan_min_samples).fit(coords)
             initial_labels = db.labels_
             
             # Count points in each cluster
             unique_labels, counts = np.unique(initial_labels, return_counts=True)
             
-            # Create a mapping: clusters with < 4 points become noise (-1)
+            # Create a mapping: clusters with < min_cluster_size points become noise (-1)
             label_mapping = {}
             valid_cluster_count = 0
             for label, count in zip(unique_labels, counts):
                 if label == -1:  # Keep noise as noise
                     label_mapping[label] = -1
-                elif count < 4:  # Small clusters become noise
+                elif count < min_cluster_size:  # Small clusters become noise
                     label_mapping[label] = -1
                 else:  # Renumber larger clusters starting from 1
                     valid_cluster_count += 1
@@ -582,10 +621,10 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             # Count final clusters (excluding noise)
             n_clusters = len(set(final_labels)) - (1 if -1 in final_labels else 0)
             n_small_clusters_filtered = len([count for label, count in zip(unique_labels, counts) 
-                                           if label != -1 and count < 4])
+                                           if label != -1 and count < min_cluster_size])
             
             print(f"DBSCAN found {n_clusters} AuNP clusters (eps={dbscan_eps} nm, min_samples={dbscan_min_samples})")
-            print(f"Filtered out {n_small_clusters_filtered} small clusters (< 4 points) and reassigned to noise")
+            print(f"Filtered out {n_small_clusters_filtered} small clusters (< {min_cluster_size} points) and reassigned to noise")
         except Exception as e:
             print(f"Error in DBSCAN clustering: {e}")
             df_valid['aunp_cluster'] = -1
@@ -598,10 +637,15 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             # Get base columns from original star file
             base_cols = [col for col in df.columns if col in df_valid.columns]
             # Add calculated distance columns if they exist
-            distance_cols = ['nearest_neighbor_distance', 'distance_to_presynaptic', 'distance_to_postsynaptic',
-                           'distance_to_fusion_point', 'distance_to_active_zone_center']
+            distance_cols = [
+                'nearest_neighbor_distance', 'distance_to_presynaptic', 'distance_to_postsynaptic',
+                'distance_to_fusion_point', 'distance_to_active_zone_center',
+                'distance_to_presynaptic_active_outer', 'distance_to_postsynaptic_active_outer',
+                'distance_to_presynaptic_active_inner', 'distance_to_postsynaptic_active_inner',
+                'distance_to_presynaptic_active_center', 'distance_to_postsynaptic_active_center',
+            ]
             additional_cols = [col for col in distance_cols if col in df_valid.columns]
-            star_cols = base_cols + additional_cols + ['aunp_cluster']
+            star_cols = base_cols + additional_cols + ['synaptic_designation', 'aunp_cluster']
             star_df = df_valid[star_cols].copy()
             if not isinstance(star_df, pd.DataFrame):
                 star_df = pd.DataFrame(star_df)
@@ -614,7 +658,12 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         
         # Save nearest neighbor distances in STT_results/aunps directory
         # Compute fusion points
-        fusion_points = compute_fusion_points(tomogram_path, vesicle_distance_threshold=vesicle_distance_threshold)
+        fusion_points = compute_fusion_points(
+            tomogram_path,
+            vesicle_distance_threshold=vesicle_distance_threshold,
+            fusion_point_threshold=fusion_point_threshold,
+            alignment_dir=alignment_dir,
+        )
         fusion_points = np.asarray(fusion_points)
         if len(fusion_points) > 0 and fusion_points.shape[0] > 0:
             fusion_tree = KDTree(fusion_points)
@@ -626,12 +675,20 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         cols_out = [
             'active_zone', 'faCoordinateX_nm', 'faCoordinateY_nm', 'faCoordinateZ_nm',
             'nearest_neighbor_distance_nm', 'distance_to_presynaptic_nm', 'distance_to_postsynaptic_nm',
-            'distance_to_fusion_point_nm', 'distance_to_active_zone_center_nm', 'aunp_cluster'
+            'distance_to_fusion_point_nm', 'distance_to_active_zone_center_nm',
+            'distance_to_presynaptic_active_outer_nm', 'distance_to_postsynaptic_active_outer_nm',
+            'distance_to_presynaptic_active_inner_nm', 'distance_to_postsynaptic_active_inner_nm',
+            'distance_to_presynaptic_active_center_nm', 'distance_to_postsynaptic_active_center_nm',
+            'synaptic_designation', 'aunp_cluster'
         ]
         # Create a copy with renamed columns for CSV output
         df_output = df_valid[['active_zone', 'faCoordinateX', 'faCoordinateY', 'faCoordinateZ',
                               'nearest_neighbor_distance', 'distance_to_presynaptic', 'distance_to_postsynaptic',
-                              'distance_to_fusion_point', 'distance_to_active_zone_center', 'aunp_cluster']].copy()
+                              'distance_to_fusion_point', 'distance_to_active_zone_center',
+                              'distance_to_presynaptic_active_outer', 'distance_to_postsynaptic_active_outer',
+                              'distance_to_presynaptic_active_inner', 'distance_to_postsynaptic_active_inner',
+                              'distance_to_presynaptic_active_center', 'distance_to_postsynaptic_active_center',
+                              'synaptic_designation', 'aunp_cluster']].copy()
         df_output.columns = cols_out
         df_output.to_csv(output_file, index=False)
         print(f"Saved nearest neighbor, membrane, and fusion distances for AuNPs to {output_file}")
@@ -661,7 +718,13 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             'distance_to_presynaptic': 'distance_to_presynaptic_nm',
             'distance_to_postsynaptic': 'distance_to_postsynaptic_nm',
             'distance_to_fusion_point': 'distance_to_fusion_point_nm',
-            'distance_to_active_zone_center': 'distance_to_active_zone_center_nm'
+            'distance_to_active_zone_center': 'distance_to_active_zone_center_nm',
+            'distance_to_presynaptic_active_outer': 'distance_to_presynaptic_active_outer_nm',
+            'distance_to_postsynaptic_active_outer': 'distance_to_postsynaptic_active_outer_nm',
+            'distance_to_presynaptic_active_inner': 'distance_to_presynaptic_active_inner_nm',
+            'distance_to_postsynaptic_active_inner': 'distance_to_postsynaptic_active_inner_nm',
+            'distance_to_presynaptic_active_center': 'distance_to_presynaptic_active_center_nm',
+            'distance_to_postsynaptic_active_center': 'distance_to_postsynaptic_active_center_nm',
         }
         # Only rename columns that exist
         rename_dict = {k: v for k, v in rename_dict.items() if k in df_global.columns}
@@ -713,9 +776,10 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         df_vesicle_aunp_hist_bin5 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
             vesicle_distance_threshold=vesicle_distance_threshold,
-            fusion_point_threshold=20.0,
+            fusion_point_threshold=fusion_point_threshold,
             max_distance=500.0,
-            bin_width=5.0
+            bin_width=5.0,
+            alignment_dir=alignment_dir,
         )
         save_histogram_csv(df_vesicle_aunp_hist_bin5, Path("results/aunps/close_vesicles_aunp_histograms_bin5.csv"), "close", 5.0)
         
@@ -724,9 +788,10 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         df_vesicle_aunp_hist_bin10 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
             vesicle_distance_threshold=vesicle_distance_threshold,
-            fusion_point_threshold=20.0,
+            fusion_point_threshold=fusion_point_threshold,
             max_distance=500.0,
-            bin_width=10.0
+            bin_width=10.0,
+            alignment_dir=alignment_dir,
         )
         save_histogram_csv(df_vesicle_aunp_hist_bin10, Path("results/aunps/close_vesicles_aunp_histograms_bin10.csv"), "close", 10.0)
         
@@ -735,9 +800,10 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         df_vesicle_aunp_hist_bin50 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
             vesicle_distance_threshold=vesicle_distance_threshold,
-            fusion_point_threshold=20.0,
+            fusion_point_threshold=fusion_point_threshold,
             max_distance=500.0,
-            bin_width=50.0
+            bin_width=50.0,
+            alignment_dir=alignment_dir,
         )
         save_histogram_csv(df_vesicle_aunp_hist_bin50, Path("results/aunps/close_vesicles_aunp_histograms_bin50.csv"), "close", 50.0)
         # --- End close vesicle AuNP histograms ---
@@ -747,11 +813,12 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         df_fusing_vesicle_aunp_hist_bin5 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
             vesicle_distance_threshold=vesicle_distance_threshold,
-            fusion_point_threshold=20.0,
+            fusion_point_threshold=fusion_point_threshold,
             max_distance=500.0,
             bin_width=5.0,
             fusing_only=True,
-            fusing_perimeter_threshold=5.0
+            fusing_perimeter_threshold=fusing_perimeter_threshold,
+            alignment_dir=alignment_dir,
         )
         save_histogram_csv(df_fusing_vesicle_aunp_hist_bin5, Path("results/aunps/fusing_vesicles_aunp_histograms_bin5.csv"), "fusing", 5.0)
         
@@ -760,11 +827,12 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         df_fusing_vesicle_aunp_hist_bin10 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
             vesicle_distance_threshold=vesicle_distance_threshold,
-            fusion_point_threshold=20.0,
+            fusion_point_threshold=fusion_point_threshold,
             max_distance=500.0,
             bin_width=10.0,
             fusing_only=True,
-            fusing_perimeter_threshold=5.0
+            fusing_perimeter_threshold=fusing_perimeter_threshold,
+            alignment_dir=alignment_dir,
         )
         save_histogram_csv(df_fusing_vesicle_aunp_hist_bin10, Path("results/aunps/fusing_vesicles_aunp_histograms_bin10.csv"), "fusing", 10.0)
         
@@ -773,11 +841,12 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         df_fusing_vesicle_aunp_hist_bin50 = compute_aunp_distance_histograms_per_vesicle(
             tomogram_path, coords, 
             vesicle_distance_threshold=vesicle_distance_threshold,
-            fusion_point_threshold=20.0,
+            fusion_point_threshold=fusion_point_threshold,
             max_distance=500.0,
             bin_width=50.0,
             fusing_only=True,
-            fusing_perimeter_threshold=5.0
+            fusing_perimeter_threshold=fusing_perimeter_threshold,
+            alignment_dir=alignment_dir,
         )
         save_histogram_csv(df_fusing_vesicle_aunp_hist_bin50, Path("results/aunps/fusing_vesicles_aunp_histograms_bin50.csv"), "fusing", 50.0)
         # --- End fusing vesicle AuNP histograms ---
@@ -789,7 +858,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             
             print("Calculating packing density for active zones...")
             # Load active zones from GLB
-            membrane_data = import_membrane_segmentations_from_glb(tomogram_path)
+            membrane_data = import_membrane_segmentations_from_glb(tomogram_path, alignment_dir=alignment_dir)
             active_zones_glb = find_active_zones_from_glb(membrane_data, distance_range=(10.0, 40.0))
             
             if active_zones_glb and 'active_zones' in active_zones_glb and len(active_zones_glb['active_zones']) > 0:
