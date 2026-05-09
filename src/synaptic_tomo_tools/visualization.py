@@ -120,7 +120,10 @@ def load_vesicles(tomo_path, *, alignment_dir: str):
     return data['vesicles']
 
 def load_aunps(tomo_path, active_zone_indices=None, *, alignment_dir: str):
-    """Load AuNP coordinates from filtered aunp_clusters.star file, optionally filtered by active_zone_indices."""
+    """Load AuNP coordinates from ``STT_results/aunps/aunp_clusters.star``.
+
+    Raises ``FileNotFoundError`` if that file is missing (run AuNP analysis first).
+    """
     alignment_dir = require_alignment_dir(alignment_dir)
     aunps_results_dir = Path(tomo_path) / alignment_dir / 'STT_results' / 'aunps'
     import starfile
@@ -130,57 +133,10 @@ def load_aunps(tomo_path, active_zone_indices=None, *, alignment_dir: str):
     cluster_star = aunps_results_dir / "aunp_clusters.star"
     
     if not cluster_star.exists():
-        print(f"[viz] Warning: Filtered AuNP file not found at {cluster_star}")
-        print("[viz] Falling back to original input files (this should not happen if analysis was run)")
-        # Fallback to original files if filtered file doesn't exist (for backward compatibility)
-        aunps_dir = Path(tomo_path) / alignment_dir / 'aunps'
-        import glob
-        import re
-        star_dfs = []
-        if active_zone_indices is not None:
-            for idx in active_zone_indices:
-                star_file = aunps_dir / f"aunp_tm_BP_active_zone_{idx}.star"
-                print("[viz] Fallback: Trying to load:", star_file)
-                if star_file.exists():
-                    star_data = starfile.read(star_file)
-                    if isinstance(star_data, dict):
-                        for v in star_data.values():
-                            if isinstance(v, pd.DataFrame):
-                                v = v.copy()
-                                if 'active_zone' not in v.columns:
-                                    v['active_zone'] = idx
-                                star_dfs.append(v)
-                                break
-                    elif isinstance(star_data, pd.DataFrame):
-                        star_data = star_data.copy()
-                        if 'active_zone' not in star_data.columns:
-                            star_data['active_zone'] = idx
-                        star_dfs.append(star_data)
-        else:
-            pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
-            for file in glob.glob(pattern):
-                fname = Path(file).name
-                m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
-                if m:
-                    az_id = int(m.group(1))
-                    star_data = starfile.read(Path(file))
-                    if isinstance(star_data, dict):
-                        for v in star_data.values():
-                            if isinstance(v, pd.DataFrame):
-                                v = v.copy()
-                                if 'active_zone' not in v.columns:
-                                    v['active_zone'] = az_id
-                                star_dfs.append(v)
-                                break
-                    elif isinstance(star_data, pd.DataFrame):
-                        star_data = star_data.copy()
-                        if 'active_zone' not in star_data.columns:
-                            star_data['active_zone'] = az_id
-                        star_dfs.append(star_data)
-        if not star_dfs:
-            print("[viz] No AuNP files found.")
-            return None
-        return pd.concat(star_dfs, ignore_index=True)
+        raise FileNotFoundError(
+            f"Required AuNP cluster file not found: {cluster_star}. "
+            "Run AuNP analysis (analyze_aunps) to produce aunp_clusters.star."
+        )
     
     # Load filtered AuNP data
     print(f"[viz] Loading filtered AuNPs from: {cluster_star}")
@@ -437,61 +393,32 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
         # Auto-detect all available active zone numbers from filtered AuNP file
         aunps_results_dir = Path(tomo_path) / alignment_dir / "STT_results" / "aunps"
         cluster_star = aunps_results_dir / "aunp_clusters.star"
-        
-        if cluster_star.exists():
-            try:
-                import starfile
-                star_data = starfile.read(cluster_star)
-                if isinstance(star_data, dict):
-                    for v in star_data.values():
-                        if isinstance(v, pd.DataFrame):
-                            df = v
-                            break
-                    else:
-                        df = None
-                else:
-                    df = star_data
-                
-                if df is not None and 'active_zone' in df.columns:
-                    aunp_az_numbers = sorted(df['active_zone'].unique().tolist())
-                    # Remove -1 if present (means "not in any active zone")
-                    aunp_az_numbers = [az for az in aunp_az_numbers if az != -1]
-                    aunp_active_zone_indices = aunp_az_numbers
-                    print(f"Auto-detected active zones from filtered AuNP file: {aunp_active_zone_indices}")
-                else:
-                    print("Warning: Could not extract active zones from filtered file, falling back to input files")
-                    raise ValueError("No active_zone column in filtered file")
-            except Exception as e:
-                print(f"Error reading filtered file for auto-detection: {e}")
-                # Fallback to original method
-                aunps_dir = Path(tomo_path) / alignment_dir / "aunps"
-                import glob
-                import re
-                pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
-                aunp_az_numbers = []
-                for file in glob.glob(pattern):
-                    fname = Path(file).name
-                    m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
-                    if m:
-                        aunp_az_numbers.append(int(m.group(1)))
-                aunp_az_numbers.sort()
-                aunp_active_zone_indices = aunp_az_numbers
-                print(f"Auto-detected active zones (fallback): {aunp_active_zone_indices}")
+        if not cluster_star.exists():
+            raise FileNotFoundError(
+                f"Required AuNP cluster file not found: {cluster_star}. "
+                "Run AuNP analysis (analyze_aunps) to produce aunp_clusters.star."
+            )
+        import starfile
+        star_data = starfile.read(cluster_star)
+        if isinstance(star_data, dict):
+            df = None
+            for v in star_data.values():
+                if isinstance(v, pd.DataFrame):
+                    df = v
+                    break
         else:
-            print("Warning: Filtered AuNP file not found, falling back to input files")
-            aunps_dir = Path(tomo_path) / alignment_dir / "aunps"
-            import glob
-            import re
-            pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
-            aunp_az_numbers = []
-            for file in glob.glob(pattern):
-                fname = Path(file).name
-                m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
-                if m:
-                    aunp_az_numbers.append(int(m.group(1)))
-            aunp_az_numbers.sort()
+            df = star_data
+
+        if df is not None and 'active_zone' in df.columns:
+            aunp_az_numbers = sorted(df['active_zone'].unique().tolist())
+            # Remove -1 if present (means "not in any active zone")
+            aunp_az_numbers = [az for az in aunp_az_numbers if az != -1]
             aunp_active_zone_indices = aunp_az_numbers
-            print(f"Auto-detected active zones (fallback): {aunp_active_zone_indices}")
+            print(f"Auto-detected active zones from filtered AuNP file: {aunp_active_zone_indices}")
+        else:
+            raise ValueError(
+                f"Could not read active zones from {cluster_star}: missing DataFrame or 'active_zone' column."
+            )
     
     # Load only the active zone membranes for CSV-specified or auto-detected active zones, matched by distance to AuNPs
     azs_pre, azs_post, azs_pre_inner, azs_post_inner = load_specific_active_zone_coords(
@@ -913,32 +840,25 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
     if aunp_clusters is not None and not aunp_clusters.empty:
         # Check if cluster assignments are already in the dataframe (should be if loaded from aunp_clusters.star)
         if 'aunp_cluster' not in aunp_clusters.columns:
-            # Fallback: Try to load cluster assignments separately (shouldn't be needed but kept for backward compatibility)
             aunps_results_dir = Path(tomo_path) / alignment_dir / "STT_results" / "aunps"
             cluster_star = aunps_results_dir / "aunp_clusters.star"
-            cluster_csv = aunps_results_dir / "aunp_nearest_neighbor_distances.csv"
-            
-            # Load cluster assignments
+            if not cluster_star.exists():
+                raise FileNotFoundError(
+                    f"Required AuNP cluster file not found: {cluster_star}. "
+                    "Run AuNP analysis (analyze_aunps) to produce aunp_clusters.star."
+                )
+            import starfile
+            cluster_data = starfile.read(cluster_star)
             cluster_assignments = None
-            if cluster_star.exists():
-                try:
-                    import starfile
-                    cluster_data = starfile.read(cluster_star)
-                    if isinstance(cluster_data, dict):
-                        for v in cluster_data.values():
-                            if isinstance(v, pd.DataFrame):
-                                cluster_assignments = v
-                                break
-                    elif isinstance(cluster_data, pd.DataFrame):
-                        cluster_assignments = cluster_data
-                except Exception:
-                    cluster_assignments = None
-            
-            if cluster_assignments is None and cluster_csv.exists():
-                try:
-                    cluster_assignments = pd.read_csv(cluster_csv)
-                except Exception:
-                    cluster_assignments = None
+            if isinstance(cluster_data, dict):
+                for v in cluster_data.values():
+                    if isinstance(v, pd.DataFrame):
+                        cluster_assignments = v
+                        break
+            elif isinstance(cluster_data, pd.DataFrame):
+                cluster_assignments = cluster_data
+            if cluster_assignments is None:
+                raise ValueError(f"Could not read DataFrame from {cluster_star}")
             
             # Match cluster assignments to filtered AuNPs by coordinates
             if cluster_assignments is not None and not cluster_assignments.empty:
@@ -1224,7 +1144,10 @@ def select_aunps_findingampa_style(active_zone_data, aunp_data, tomogram_path, a
     aunp_file = Path(tomogram_path) / alignment_dir / "STT_results" / "aunps" / "aunp_clusters.star"
 
     if not aunp_file.exists():
-        return []
+        raise FileNotFoundError(
+            f"Required AuNP cluster file not found: {aunp_file}. "
+            "Run AuNP analysis (analyze_aunps) to produce aunp_clusters.star."
+        )
     
     try:
         import starfile
@@ -1289,7 +1212,10 @@ def select_aunps_with_distances_findingampa_style(active_zone_data, aunp_data, t
     aunp_file = Path(tomogram_path) / alignment_dir / "STT_results" / "aunps" / "aunp_clusters.star"
 
     if not aunp_file.exists():
-        return {'positions': np.array([]), 'distances': np.array([])}
+        raise FileNotFoundError(
+            f"Required AuNP cluster file not found: {aunp_file}. "
+            "Run AuNP analysis (analyze_aunps) to produce aunp_clusters.star."
+        )
     
     try:
         import starfile
@@ -1365,7 +1291,10 @@ def select_aunps_by_cluster_findingampa_style(active_zone_data, cluster_data, to
     cluster_file = Path(tomogram_path) / alignment_dir / "STT_results" / "aunps" / "aunp_clusters.star"
 
     if not cluster_file.exists():
-        return [], []
+        raise FileNotFoundError(
+            f"Required AuNP cluster file not found: {cluster_file}. "
+            "Run AuNP analysis (analyze_aunps) to produce aunp_clusters.star."
+        )
     
     try:
         import starfile
@@ -1456,38 +1385,25 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
             print("No active zones found. Skipping active zonogram analysis.")
             return {"success": False, "reason": "No active zones found"}
         
-        # Load AuNP data for smart active zone matching (always try to load if file exists)
+        # Load AuNP data to match active zones (required)
+        aunp_star_path = Path(tomogram_path) / alignment_dir / "STT_results" / "aunps" / "aunp_clusters.star"
+        if not aunp_star_path.exists():
+            raise FileNotFoundError(
+                f"Required AuNP cluster file not found: {aunp_star_path}. "
+                "Run AuNP analysis (analyze_aunps) to produce aunp_clusters.star."
+            )
+        import starfile
+        star_data = starfile.read(aunp_star_path)
         aunp_data = None
-        try:
-            # Load AuNP data to match active zones
-            aunp_star_path = Path(tomogram_path) / alignment_dir / "STT_results" / "aunps" / "aunp_clusters.star"
-            if aunp_star_path.exists():
-                import starfile
-                star_data = starfile.read(aunp_star_path)
-                # Handle both dict and DataFrame formats
-                if isinstance(star_data, dict):
-                    for v in star_data.values():
-                        if isinstance(v, pd.DataFrame):
-                            aunp_data = v
-                            break
-                    else:
-                        aunp_data = None
-                elif isinstance(star_data, pd.DataFrame):
-                    aunp_data = star_data
-                else:
-                    aunp_data = None
-                if aunp_data is not None:
-                    # Loaded AuNP data for smart active zone matching
-                    pass
-                else:
-                    print(f"Warning: Could not extract DataFrame from {aunp_star_path}, smart matching will not be available")
-                    aunp_data = None
-            else:
-                print(f"Warning: AuNP data not found at {aunp_star_path}, smart matching will not be available")
-                aunp_data = None
-        except Exception as e:
-            print(f"Warning: Error loading AuNP data: {e}, smart matching will not be available")
-            aunp_data = None
+        if isinstance(star_data, dict):
+            for v in star_data.values():
+                if isinstance(v, pd.DataFrame):
+                    aunp_data = v
+                    break
+        elif isinstance(star_data, pd.DataFrame):
+            aunp_data = star_data
+        if aunp_data is None:
+            raise ValueError(f"Could not read AuNP DataFrame from {aunp_star_path}")
         
         # Filter active zones based on CSV specification using smart matching
         if aunp_active_zones is not None and aunp_active_zones != []:
@@ -1524,60 +1440,32 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
         if selected_az_indices is None:
             aunps_results_dir = Path(tomogram_path) / alignment_dir / "STT_results" / "aunps"
             cluster_star = aunps_results_dir / "aunp_clusters.star"
-            
-            if cluster_star.exists():
-                try:
-                    import starfile
-                    star_data = starfile.read(cluster_star)
-                    if isinstance(star_data, dict):
-                        for v in star_data.values():
-                            if isinstance(v, pd.DataFrame):
-                                df = v
-                                break
-                        else:
-                            df = None
-                    else:
-                        df = star_data
-                    
-                    if df is not None and 'active_zone' in df.columns:
-                        aunp_az_numbers = sorted(df['active_zone'].unique().tolist())
-                        # Remove -1 if present (means "not in any active zone")
-                        aunp_az_numbers = [az for az in aunp_az_numbers if az != -1]
-                        selected_az_indices = aunp_az_numbers
-                        print(f"Using all available active zones from filtered AuNP file: {selected_az_indices}")
-                    else:
-                        raise ValueError("No active_zone column in filtered file")
-                except Exception as e:
-                    print(f"Error reading filtered file for active zone detection: {e}, falling back to input files")
-                    # Fallback to original method
-                    aunps_dir = Path(tomogram_path) / alignment_dir / "aunps"
-                    import glob
-                    import re
-                    pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
-                    aunp_az_numbers = []
-                    for file in glob.glob(pattern):
-                        fname = Path(file).name
-                        m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
-                        if m:
-                            aunp_az_numbers.append(int(m.group(1)))
-                    aunp_az_numbers.sort()
-                    selected_az_indices = aunp_az_numbers
-                    print(f"Using all available active zones from input files (fallback): {selected_az_indices}")
+            if not cluster_star.exists():
+                raise FileNotFoundError(
+                    f"Required AuNP cluster file not found: {cluster_star}. "
+                    "Run AuNP analysis (analyze_aunps) to produce aunp_clusters.star."
+                )
+            import starfile
+            star_data = starfile.read(cluster_star)
+            if isinstance(star_data, dict):
+                df = None
+                for v in star_data.values():
+                    if isinstance(v, pd.DataFrame):
+                        df = v
+                        break
             else:
-                print("Warning: Filtered AuNP file not found, falling back to input files")
-                aunps_dir = Path(tomogram_path) / alignment_dir / "aunps"
-                import glob
-                import re
-                pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*.star")
-                aunp_az_numbers = []
-                for file in glob.glob(pattern):
-                    fname = Path(file).name
-                    m = re.match(r"aunp_tm_BP_active_zone_(\d+)\.star", fname)
-                    if m:
-                        aunp_az_numbers.append(int(m.group(1)))
-                aunp_az_numbers.sort()
+                df = star_data
+
+            if df is not None and 'active_zone' in df.columns:
+                aunp_az_numbers = sorted(df['active_zone'].unique().tolist())
+                # Remove -1 if present (means "not in any active zone")
+                aunp_az_numbers = [az for az in aunp_az_numbers if az != -1]
                 selected_az_indices = aunp_az_numbers
-                print(f"Using all available active zones from input files (fallback): {selected_az_indices}")
+                print(f"Using all available active zones from filtered AuNP file: {selected_az_indices}")
+            else:
+                raise ValueError(
+                    f"Could not read active zones from {cluster_star}: missing DataFrame or 'active_zone' column."
+                )
         
         # Use saved mapping from activezone.py (created by define_active_zone)
         from .activezone import load_active_zone_mapping
@@ -2212,14 +2100,16 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
         cluster_data_path = aunp_analysis_path / "aunp_clusters.star"
         
         if not aunp_analysis_path.exists():
-            print(f"Warning: AuNP analysis directory not found at {aunp_analysis_path}")
-            print("Skipping mini zonogram analysis - AuNP analysis must be completed first.")
-            return {"success": True, "regular_zonograms": len(files_created), "mini_zonograms": 0, "files_created": files_created}
-        
+            raise FileNotFoundError(
+                f"Required AuNP results directory not found: {aunp_analysis_path}. "
+                "Run AuNP analysis (analyze_aunps) first."
+            )
+
         if not cluster_data_path.exists():
-            print(f"Warning: AuNP cluster data not found at {cluster_data_path}")
-            print("Skipping mini zonogram analysis - AuNP analysis must be completed first.")
-            return {"success": True, "regular_zonograms": len(files_created), "mini_zonograms": 0, "files_created": files_created}
+            raise FileNotFoundError(
+                f"Required AuNP cluster file not found: {cluster_data_path}. "
+                "Run AuNP analysis (analyze_aunps) to produce aunp_clusters.star."
+            )
         
         # AuNP analysis files found, proceeding with mini zonogram analysis
         
@@ -3001,18 +2891,19 @@ def generate_mini_zonograms_pdf(tomo_paths, data_dir=None):
             # Get cluster data to identify clusters with 4 AuNPs
             cluster_data_path = tomogram_path / alignment_dir / "STT_results" / "aunps" / "aunp_clusters.star"
             clusters_with_4_aunps = set()
-            
-            if cluster_data_path.exists():
-                try:
-                    import starfile
-                    cluster_df = starfile.read(cluster_data_path)
-                    # Count AuNPs per cluster
-                    cluster_counts = cluster_df['aunp_cluster'].value_counts()
-                    # Get clusters with exactly 4 AuNPs
-                    clusters_with_4_aunps = set(cluster_counts[cluster_counts == 4].index)
-                    # Found clusters with 4 AuNPs
-                except Exception as e:
-                    print(f"      Warning: Could not read cluster data: {e}")
+
+            if not cluster_data_path.exists():
+                raise FileNotFoundError(
+                    f"Required AuNP cluster file not found: {cluster_data_path}. "
+                    "Run AuNP analysis (analyze_aunps) to produce aunp_clusters.star."
+                )
+            try:
+                import starfile
+                cluster_df = starfile.read(cluster_data_path)
+                cluster_counts = cluster_df['aunp_cluster'].value_counts()
+                clusters_with_4_aunps = set(cluster_counts[cluster_counts == 4].index)
+            except Exception as e:
+                raise RuntimeError(f"Could not read cluster data from {cluster_data_path}: {e}") from e
             
             if mini_zonogram_files:
                 story.append(

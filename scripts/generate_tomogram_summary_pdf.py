@@ -133,9 +133,9 @@ def get_active_zonogram_images(tomo_name, base_data_dir, selected_az_indices=Non
         return []
     az_dir = az_dir_candidates[0]
     
-    # Find all *_position.png and *_selected_aunps.png pairs
+    # Find all *_position.png and *_selected_aunps_manual.png pairs
     position_imgs = sorted(az_dir.glob('active_zonogram_*_position.png'))
-    selected_imgs = sorted(az_dir.glob('active_zonogram_*_selected_aunps.png'))
+    selected_imgs = sorted(az_dir.glob('active_zonogram_*_selected_aunps_manual.png'))
     
     # Filter by selected active zone indices if provided
     if selected_az_indices is not None:
@@ -160,8 +160,8 @@ def get_active_zonogram_images(tomo_name, base_data_dir, selected_az_indices=Non
         if not m:
             continue
         idx = m.group(1)
-        # Find corresponding selected_aunps image
-        sel_img = az_dir / f"active_zonogram_{idx}_selected_aunps.png"
+        # Find corresponding selected_aunps_manual image
+        sel_img = az_dir / f"active_zonogram_{idx}_selected_aunps_manual.png"
         if sel_img.exists():
             pairs.append((pos_img, sel_img))
         else:
@@ -300,7 +300,7 @@ def generate_pdf_for_tomogram(
         for az_idx in selected_az_indices:
             # Add active zonogram images for this active zone
             img_types.append((f"Active Zonogram Position (AZ {az_idx})", f"active_zonogram_{az_idx}_position.png"))
-            img_types.append((f"Active Zonogram Selected AuNPs (AZ {az_idx})", f"active_zonogram_{az_idx}_selected_aunps.png"))
+            img_types.append((f"Active Zonogram Selected AuNPs manual (AZ {az_idx})", f"active_zonogram_{az_idx}_selected_aunps_manual.png"))
             # Add main visualizations for this active zone
             img_types.append((f"Analysis Summary (AZ {az_idx})", f"{tomo_name}_combined_az{az_idx}.png"))
             img_types.append((f"AuNP Clusters Overlay (AZ {az_idx})", f"{tomo_name}_combined_aunpclusters_az{az_idx}.png"))
@@ -326,7 +326,7 @@ def generate_pdf_for_tomogram(
         # No active zones specified - use az0 as default
         img_types = [
             ("Active Zonogram Position (AZ 0)", f"active_zonogram_0_position.png"),
-            ("Active Zonogram Selected AuNPs (AZ 0)", f"active_zonogram_0_selected_aunps.png"),
+            ("Active Zonogram Selected AuNPs manual (AZ 0)", f"active_zonogram_0_selected_aunps_manual.png"),
             ("Analysis Summary (AZ 0)", f"{tomo_name}_combined_az0.png"),
             ("AuNP Clusters Overlay (AZ 0)", f"{tomo_name}_combined_aunpclusters_az0.png"),
             ("Active Zone AuNP Clusters (AZ 0)", f"{tomo_name}_active_zonogram_active_zone_pre1_post1_selected_aunps_by_cluster_az0.png"),
@@ -336,8 +336,7 @@ def generate_pdf_for_tomogram(
     for _, fname in img_types:
         print(f"Processing image: {fname}")
         if "active_zonogram" in fname and "active_zone_pre1_post1" not in fname and "selected_aunps_by_cluster" not in fname:
-            # Active zonogram position/selected images are in the tomogram's active_zonograms directory
-            # Find the actual tomogram directory
+            # position.png and selected_aunps_manual.png under tomogram .../active_zonograms/
             tomo_dirs = list(base_data_dir.glob(f"**/{tomo_name}"))
             if tomo_dirs:
                 az_dir = tomo_dirs[0] / alignment_dir / "active_zonograms"
