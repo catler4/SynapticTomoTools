@@ -4,6 +4,8 @@ from PIL import Image, ImageTk
 import subprocess
 import threading
 import os
+import sys
+import socket
 import webbrowser
 import pandas as pd
 from pathlib import Path
@@ -51,9 +53,10 @@ class AnalysisPipelineGUI(tk.Tk):
         self.geometry("900x900")
         self.csv_path = tk.StringVar()
         self.root_dir = tk.StringVar()
-        self.alignment_dir = tk.StringVar(value="")
         self.start_tomogram = tk.StringVar()
         self.log_text = None
+        self._session_log_fp = None
+        self._session_log_path = None
         self._img_refs = []  # Keep references to PhotoImage objects
         self._current_process = None  # Track running process for stopping
         
@@ -84,6 +87,58 @@ class AnalysisPipelineGUI(tk.Tk):
         self.fusing_perimeter_threshold = tk.StringVar(value="1.0")
         
         self._build_tabs()
+        self.protocol("WM_DELETE_WINDOW", self._on_app_close)
+
+    def _open_gui_session_log(self):
+        """Create results/logs and open a timestamped session log file."""
+        logs_dir = REPO_ROOT / "results" / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        pid = os.getpid()
+        csv_part = ""
+        try:
+            csv_p = self.csv_path.get().strip()
+            if csv_p:
+                stem = Path(csv_p).stem.replace(" ", "_")
+                for ch in '<>:"/\\|?*':
+                    stem = stem.replace(ch, "_")
+                csv_part = "_" + stem[:80]
+        except Exception:
+            pass
+        name = f"gui_session_{ts}_pid{pid}{csv_part}.log"
+        path = logs_dir / name
+        self._session_log_path = path
+        started = datetime.now().isoformat(timespec="seconds")
+        self._session_log_fp = open(path, "w", encoding="utf-8", newline="\n")
+        host = socket.gethostname()
+        self._session_log_fp.write("=== Synaptic TomoTools Analysis Pipeline GUI ===\n")
+        self._session_log_fp.write(f"Session started: {started}\n")
+        self._session_log_fp.write(f"Host: {host}\n")
+        self._session_log_fp.write(f"Python: {sys.version.split()[0]}  pid={pid}\n")
+        self._session_log_fp.write(f"Repo root: {REPO_ROOT}\n")
+        self._session_log_fp.write(f"Working directory: {os.getcwd()}\n")
+        csv_now = self.csv_path.get().strip() if self.csv_path.get() else "(not set yet)"
+        root_now = self.root_dir.get().strip() if self.root_dir.get() else "(not set yet)"
+        self._session_log_fp.write(f"CSV path: {csv_now}\n")
+        self._session_log_fp.write(f"Tomogram root: {root_now}\n")
+        self._session_log_fp.write("--- Log output (same as GUI) ---\n")
+        self._session_log_fp.flush()
+
+    def _close_gui_session_log(self):
+        if self._session_log_fp is not None:
+            try:
+                self._session_log_fp.write(
+                    f"\n=== Session ended: {datetime.now().isoformat(timespec='seconds')} ===\n"
+                )
+                self._session_log_fp.flush()
+                self._session_log_fp.close()
+            except Exception:
+                pass
+            self._session_log_fp = None
+
+    def _on_app_close(self):
+        self._close_gui_session_log()
+        self.destroy()
 
     def _build_home_tab_content(self, tab):
         # Create a scrollable frame
@@ -145,17 +200,12 @@ class AnalysisPipelineGUI(tk.Tk):
         root_entry.grid(row=2, column=1, sticky=tk.W)
         ttk.Button(frame, text="Browse...", command=self._browse_root).grid(row=2, column=2, padx=5)
         
-        ttk.Label(frame, text="Alignment subdirectory:").grid(row=3, column=0, sticky=tk.W)
-        alignment_entry = ttk.Entry(frame, textvariable=self.alignment_dir, width=40)
-        alignment_entry.grid(row=3, column=1, sticky=tk.W)
-        ToolTip(alignment_entry, "Folder name under each tomogram for aligned data (e.g. best_alignment)")
-        
-        # Starting tomogram selection
-        ttk.Label(frame, text="Processing mode:").grid(row=4, column=0, sticky=tk.W)
+        # Starting tomogram selection (alignment_dir comes only from the CSV)
+        ttk.Label(frame, text="Processing mode:").grid(row=3, column=0, sticky=tk.W)
         self.processing_mode = tk.StringVar(value="All tomograms")
         self.processing_mode_combo = ttk.Combobox(frame, textvariable=self.processing_mode, width=37, state="readonly")
-        self.processing_mode_combo.grid(row=4, column=1, sticky=tk.W)
-        ttk.Button(frame, text="Load CSV", command=self._load_tomograms_from_csv).grid(row=4, column=2, padx=5)
+        self.processing_mode_combo.grid(row=3, column=1, sticky=tk.W)
+        ttk.Button(frame, text="Load CSV", command=self._load_tomograms_from_csv).grid(row=3, column=2, padx=5)
         
         # Starting tomogram selection (initially hidden)
         self.start_tomogram_label = ttk.Label(frame, text="Start from tomogram:")
@@ -163,21 +213,21 @@ class AnalysisPipelineGUI(tk.Tk):
         
         # Add tooltip for the dropdown
         ToolTip(self.processing_mode_combo, "Select processing mode: 'All tomograms' for entire CSV, 'Single tomogram' for one specific tomogram, or 'Start from' to process from a specific tomogram onwards")
-        ToolTip(frame.grid_slaves(row=4, column=2)[0], "Load tomogram names from the selected CSV file into the dropdown")
+        ToolTip(frame.grid_slaves(row=3, column=2)[0], "Load tomogram names from the selected CSV file into the dropdown")
         
         # Bind the mode combo to show/hide the starting tomogram selection
         self.processing_mode_combo.bind('<<ComboboxSelected>>', self._on_processing_mode_change)
         
         # Add a separator at a fixed position
         separator = ttk.Separator(frame, orient='horizontal')
-        separator.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        separator.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
         
         # Analysis Parameters section
-        ttk.Label(frame, text="Analysis Parameters:", font=('TkDefaultFont', 10, 'bold')).grid(row=7, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
+        ttk.Label(frame, text="Analysis Parameters:", font=('TkDefaultFont', 10, 'bold')).grid(row=6, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
         
         # Parameter mode switch
         params_mode_frame = ttk.Frame(frame)
-        params_mode_frame.grid(row=8, column=0, columnspan=3, sticky=tk.W, pady=5)
+        params_mode_frame.grid(row=7, column=0, columnspan=3, sticky=tk.W, pady=5)
         ttk.Label(params_mode_frame, text="Parameter mode:").pack(side=tk.LEFT, padx=(0, 10))
         ttk.Radiobutton(params_mode_frame, text="Default", variable=self.use_custom_params, value=False, 
                        command=self._toggle_custom_params).pack(side=tk.LEFT, padx=5)
@@ -186,7 +236,7 @@ class AnalysisPipelineGUI(tk.Tk):
         
         # Custom parameters frame (initially hidden)
         self.custom_params_frame = ttk.LabelFrame(frame, text="Custom Parameters", padding=10)
-        self.custom_params_frame.grid(row=9, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5, padx=0)
+        self.custom_params_frame.grid(row=8, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5, padx=0)
         
         # Active zone parameters
         az_frame = ttk.LabelFrame(self.custom_params_frame, text="Active Zone Parameters", padding=5)
@@ -311,14 +361,14 @@ class AnalysisPipelineGUI(tk.Tk):
         
         # Add separator before Results Management
         separator2 = ttk.Separator(frame, orient='horizontal')
-        separator2.grid(row=10, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        separator2.grid(row=9, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
         
         # Results management section
-        ttk.Label(frame, text="Results Management:", font=('TkDefaultFont', 10, 'bold')).grid(row=11, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
+        ttk.Label(frame, text="Results Management:", font=('TkDefaultFont', 10, 'bold')).grid(row=10, column=0, columnspan=3, sticky=tk.W, pady=(10, 5))
         
         # Archive current results
         archive_frame = ttk.Frame(frame)
-        archive_frame.grid(row=12, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+        archive_frame.grid(row=11, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
         ttk.Label(archive_frame, text="Archive note:").pack(side=tk.LEFT, padx=(0, 5))
         self.archive_note_var = tk.StringVar()
         archive_entry = ttk.Entry(archive_frame, textvariable=self.archive_note_var, width=30)
@@ -329,7 +379,7 @@ class AnalysisPipelineGUI(tk.Tk):
         
         # Delete previous results
         delete_btn = ttk.Button(frame, text="Delete previous results", command=self._delete_previous_results)
-        delete_btn.grid(row=13, column=0, columnspan=3, sticky=tk.W, pady=5)
+        delete_btn.grid(row=12, column=0, columnspan=3, sticky=tk.W, pady=5)
         ToolTip(delete_btn, "Delete results from individual tomogram STT_results directories (for tomograms in CSV) and the results directory. Does NOT delete archived results.")
 
     def _load_and_display_image(self, path, parent, max_width=400, max_height=180):
@@ -341,12 +391,15 @@ class AnalysisPipelineGUI(tk.Tk):
             tk_img = ImageTk.PhotoImage(img)
             return tk_img
         except Exception as e:
-            print(f"Could not load image {path}: {e}")
+            self._log(f"Could not load image {path}: {e}\n")
             return None
 
     def _build_tabs(self):
         for widget in self.winfo_children():
             widget.destroy()
+
+        self._close_gui_session_log()
+        self._open_gui_session_log()
         
         # Create a PanedWindow to allow resizing between tabs and log
         self.paned_window = ttk.PanedWindow(self, orient=tk.VERTICAL)
@@ -469,6 +522,8 @@ class AnalysisPipelineGUI(tk.Tk):
         if self.log_text is None:
             self.log_text = scrolledtext.ScrolledText(self.log_frame, height=12, state=tk.NORMAL, font=("Courier", 10))
         self.log_text.pack(fill=tk.BOTH, expand=True)
+
+        self._log(f"Session log file: {self._session_log_path}\n")
         
         # Track if log frame is currently in the paned window
         self.log_frame_visible = False
@@ -581,7 +636,7 @@ Do you want to continue?"""
                     env = os.environ.copy()
                     self._run_subprocess(cli, env, self.findingampa_single_dir.get())
                 elif self.findingampa_all_mode.get() or not self.findingampa_single_mode.get():
-                    # Run for all tomograms in CSV, using the configured alignment subdirectory for each
+                    # Run for all tomograms in CSV; alignment subdirectory per row from CSV only
                     csv_path = self.csv_path.get()
                     root_dir = self.root_dir.get()
                     if not csv_path or not root_dir:
@@ -772,9 +827,9 @@ Do you want to continue?"""
         mode = self.processing_mode.get()
         
         if mode in ["Single tomogram", "Start from"]:
-            # Show the starting tomogram selection
-            self.start_tomogram_label.grid(row=5, column=0, sticky=tk.W)
-            self.start_tomogram_combo.grid(row=5, column=1, sticky=tk.W)
+            # Show the starting tomogram selection (row 4: below processing mode, above separator)
+            self.start_tomogram_label.grid(row=4, column=0, sticky=tk.W)
+            self.start_tomogram_combo.grid(row=4, column=1, sticky=tk.W)
         else:
             # Hide the starting tomogram selection
             self.start_tomogram_label.grid_remove()
@@ -1175,6 +1230,14 @@ Do you want to continue?"""
             self._log("\n[No process is currently running]\n\n")
 
     def _log(self, msg):
+        if self._session_log_fp is not None:
+            try:
+                self._session_log_fp.write(msg)
+                self._session_log_fp.flush()
+            except Exception:
+                pass
+        if self.log_text is None:
+            return
         self.log_text.config(state=tk.NORMAL)
         self.log_text.insert(tk.END, msg)
         self.log_text.see(tk.END)
@@ -1182,6 +1245,8 @@ Do you want to continue?"""
 
     def _clear_last_line(self):
         """Clear the last line in the log text widget."""
+        if self.log_text is None:
+            return
         self.log_text.config(state=tk.NORMAL)
         # Get the current content
         content = self.log_text.get("1.0", tk.END)

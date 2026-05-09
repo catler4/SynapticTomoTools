@@ -276,6 +276,8 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
     if plot_tomogram_overlays is None:
         print("Skipping visualization generation (visualization module not available)")
         return
+
+    from synaptic_tomo_tools.visualization import run_combined_zonogram_analysis_single_tomogram
         
     print("\nGenerating visualizations...")
     
@@ -287,30 +289,22 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
     for i, (tomo, set_name, aunp_active_zones, alignment_dir) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
         analysis_name = f"{tomogram_name}__{alignment_dir}"
+
+        # Check if visualization step already completed successfully.
+        existing_results = results_manager.get_tomogram_results(analysis_name, 'visualizations')
+        has_completed = (
+            existing_results and
+            'results' in existing_results and
+            'visualizations' in existing_results['results'] and
+            existing_results['results']['visualizations'].get('status') == 'completed'
+        )
+        if has_completed and not rerun:
+            print(f"Skipping visualization for {analysis_name} (already completed successfully)")
+            continue
         
         # Create visualization output directory within the tomogram's results folder
         viz_output_dir = Path(tomo) / alignment_dir / 'STT_results' / 'visualizations'
         viz_output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Check if all expected visualization files exist and skip_completed is True
-        # Basic visualization files
-        basic_files = [
-            viz_output_dir / f"{tomogram_name}_vesicles_active_zones.png",
-            viz_output_dir / f"{tomogram_name}_vesicles_aunps.png",
-            viz_output_dir / f"{tomogram_name}_combined.png",
-        ]
-        
-        # Active zonogram files (check for at least one of each type)
-        active_zonogram_files = list(viz_output_dir.glob(f"{tomogram_name}_active_zonogram_*.png"))
-        mini_zonogram_files = list(viz_output_dir.glob(f"{tomogram_name}_mini_zonogram_*.png"))
-        
-        # Check if we have the minimum required files
-        basic_files_exist = all(f.exists() for f in basic_files)
-        zonogram_files_exist = len(active_zonogram_files) > 0 and len(mini_zonogram_files) > 0
-        
-        if basic_files_exist and zonogram_files_exist and not rerun:
-            print(f"Skipping visualization for {tomogram_name} (already completed)")
-            continue
         
         print(f"[{i+1}/{len(tomo_paths)}] Processing {tomogram_name}...", end=" ", flush=True)
         
@@ -346,11 +340,52 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
                                    aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
                                    aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
                                    aunp_distance_cutoff_value=aunp_distance_cutoff_value)
+
+            zonogram_result = run_combined_zonogram_analysis_single_tomogram(
+                tomo, None, aunp_active_zones, rerun,
+                alignment_dir=alignment_dir,
+                sphere_size=sphere_size, sphere_color=sphere_color,
+                aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
+                aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
+                aunp_distance_cutoff_value=aunp_distance_cutoff_value,
+            )
+            if not zonogram_result.get("success"):
+                raise RuntimeError(
+                    zonogram_result.get("reason", "Active zonogram analysis failed")
+                )
+
+            viz_results = {
+                'visualizations': {
+                    'status': 'completed',
+                }
+            }
+            results_manager.store_tomogram_results(
+                analysis_name,
+                'visualizations',
+                viz_results,
+                overwrite=rerun,
+                set_name=set_name,
+                alignment_dir=alignment_dir
+            )
             
             print("✅")
         except Exception as e:
             print("❌")
             print(f"    Error: {e}")
+            error_results = {
+                'visualizations': {
+                    'status': 'error',
+                    'error': str(e)
+                }
+            }
+            results_manager.store_tomogram_results(
+                analysis_name,
+                'visualizations',
+                error_results,
+                overwrite=True,
+                set_name=set_name,
+                alignment_dir=alignment_dir
+            )
             continue
     
     print(f"\nAll visualizations saved to:")
@@ -358,41 +393,33 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
     print(f"  Organized results directory: {base_viz_dir}")
 
     
-    # Run active zonogram analysis for all tomograms
+    # Per-tomogram active zonogram analysis runs in the loop above. PDF summaries are generated once here.
     print("\n" + "="*60)
-    print("RUNNING ACTIVE ZONOGRAM ANALYSIS")
+    print("GENERATING VISUALIZATION PDF SUMMARIES")
     print("="*60)
     try:
-        # Import the active zonogram analysis function using absolute import
-        import sys
-        from pathlib import Path as PathLib
-        
-        # Add the src directory to the path if not already there
-        src_path = PathLib(__file__).parent.parent
-        if str(src_path) not in sys.path:
-            sys.path.insert(0, str(src_path))
-        
-        from synaptic_tomo_tools.visualization import run_zonogram_analysis_for_all_tomograms, unpack_tomo_csv_row
-        
-        # Create output directory for active zonogram analysis
-        output_dir = Path("results")
-        # Extract root directory from tomogram paths for PDF generation
+        from synaptic_tomo_tools.visualization import (
+            unpack_tomo_csv_row,
+            generate_default_visualization_pdf_summary,
+            generate_zonogram_pdf_summaries,
+        )
+
         root_dir = None
+        data_dir = None
         if tomo_paths:
             first_path, _, _, _ = unpack_tomo_csv_row(tomo_paths[0])
             first_tomo_path = Path(first_path)
-            # Go up to find the root (assuming structure: root/set/TOP_TOMOS/tomogram)
             if first_tomo_path.parent.name == "TOP_TOMOS":
                 root_dir = str(first_tomo_path.parent.parent.parent)
-        
-        run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=csv_path, root_dir=root_dir, rerun=rerun,
-                                                 sphere_size=sphere_size, sphere_color=sphere_color,
-                                                 aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
-                                                 aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
-                                                 aunp_distance_cutoff_value=aunp_distance_cutoff_value)
-        print("Active zonogram analysis completed successfully!")
+                data_dir = root_dir
+
+        print("\nGenerating PDF summary...")
+        generate_default_visualization_pdf_summary(tomo_paths, csv_path, root_dir)
+        print("\nGenerating zonogram PDF summaries...")
+        generate_zonogram_pdf_summaries(None, tomo_paths, data_dir)
+        print("Visualization PDF summaries completed successfully!")
     except Exception as e:
-        print(f"Error in active zonogram analysis: {e}")
+        print(f"Error generating visualization PDF summaries (tomogram results unchanged): {e}")
         import traceback
         traceback.print_exc()
 
