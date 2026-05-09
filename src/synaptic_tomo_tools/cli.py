@@ -277,8 +277,8 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
         print("Skipping visualization generation (visualization module not available)")
         return
 
-    from synaptic_tomo_tools.visualization import run_combined_zonogram_analysis_single_tomogram
-        
+    from .visualization import run_combined_zonogram_analysis_single_tomogram
+
     print("\nGenerating visualizations...")
     
     # Create combined visualization directory in results (structure: visualizations/{tomogram_name}/aunps_and_vesicles/full/)
@@ -398,7 +398,7 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
     print("GENERATING VISUALIZATION PDF SUMMARIES")
     print("="*60)
     try:
-        from synaptic_tomo_tools.visualization import (
+        from .visualization import (
             unpack_tomo_csv_row,
             generate_default_visualization_pdf_summary,
             generate_zonogram_pdf_summaries,
