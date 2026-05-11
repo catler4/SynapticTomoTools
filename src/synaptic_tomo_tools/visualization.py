@@ -539,6 +539,43 @@ def _get_cluster_colors(n_clusters):
     
     return colors, cmap
 
+
+def _json_bool_truthy(x) -> bool:
+    if x is True:
+        return True
+    if isinstance(x, str) and x.strip().lower() in ("true", "1", "yes"):
+        return True
+    return False
+
+
+def _vesicle_distance_class_edge_style(v) -> dict:
+    """
+    Matplotlib Circle kwargs from vesicle_results.json ``vesicle_distance_class``:
+    fusing, close, far, unknown. Fallback: ``is_fusing`` / ``is_close``; then non-finite
+    distance -> unknown; else far.
+    """
+    cls = v.get("vesicle_distance_class")
+    if cls is not None and str(cls).strip():
+        s = str(cls).strip().lower()
+        if s in ("fusing", "fusion"):
+            return {"edgecolor": "crimson", "linewidth": 2.5, "alpha": 0.95}
+        if s == "close":
+            return {"edgecolor": "aqua", "linewidth": 2.0, "alpha": 0.85}
+        if s == "far":
+            return {"edgecolor": "pink", "linewidth": 1.5, "alpha": 0.7}
+        if s == "unknown":
+            return {"edgecolor": "gray", "linewidth": 1.5, "alpha": 0.65}
+        return {"edgecolor": "gray", "linewidth": 1.5, "alpha": 0.65}
+    if _json_bool_truthy(v.get("is_fusing")):
+        return {"edgecolor": "crimson", "linewidth": 2.5, "alpha": 0.95}
+    if _json_bool_truthy(v.get("is_close")):
+        return {"edgecolor": "aqua", "linewidth": 2.0, "alpha": 0.85}
+    d = v.get("distance_to_az", float("nan"))
+    if not np.isfinite(d):
+        return {"edgecolor": "gray", "linewidth": 1.5, "alpha": 0.65}
+    return {"edgecolor": "pink", "linewidth": 1.5, "alpha": 0.7}
+
+
 def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center, vesicles, 
                                      pre_mem, post_mem, azs_pre, azs_post, azs_pre_inner, azs_post_inner,
                                      aunps, fusion_points, 
@@ -578,21 +615,46 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
         fig1, ax1 = plt.subplots(figsize=(12, 12))
         ax1.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax, origin='lower')
         
-        # Overlay vesicles with transparency
-        for v in vesicles_in_slice:
-            c = np.array(v['center'])
-            r = v['radius']
-            circ = Circle((c[0], c[1]), r, color='pink', fill=False, lw=1.5, alpha=0.7, 
-                         label='Vesicle' if 'Vesicle' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
-            ax1.add_patch(circ)
-        
-        # Highlight vesicles within 20 nm with transparency
-        for v in vesicles_in_slice:
-            if v.get('distance_to_az', 99) <= 20:
-                c = np.array(v['center'])
-                r = v['radius']
-                circ = Circle((c[0], c[1]), r, color='aqua', fill=False, lw=2, alpha=0.8, 
-                             label='<=20nm' if '<=20nm' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
+        # Overlay vesicles intersecting slice, colored by vesicle_distance_class (see vesicle_results.json)
+        draw_order = ("far", "unknown", "close", "fusing")
+
+        def _class_bucket(v):
+            cls = v.get("vesicle_distance_class")
+            if cls is not None and str(cls).strip():
+                s = str(cls).strip().lower()
+                if s in ("fusing", "fusion"):
+                    return "fusing"
+                if s == "close":
+                    return "close"
+                if s == "far":
+                    return "far"
+                if s == "unknown":
+                    return "unknown"
+                return "unknown"
+            if _json_bool_truthy(v.get("is_fusing")):
+                return "fusing"
+            if _json_bool_truthy(v.get("is_close")):
+                return "close"
+            d = v.get("distance_to_az", float("nan"))
+            if not np.isfinite(d):
+                return "unknown"
+            return "far"
+
+        for bucket in draw_order:
+            for v in vesicles_in_slice:
+                if _class_bucket(v) != bucket:
+                    continue
+                c = np.array(v["center"])
+                r = v["radius"]
+                st = _vesicle_distance_class_edge_style(v)
+                circ = Circle(
+                    (c[0], c[1]),
+                    r,
+                    facecolor="none",
+                    edgecolor=st["edgecolor"],
+                    linewidth=st["linewidth"],
+                    alpha=st["alpha"],
+                )
                 ax1.add_patch(circ)
         
         # Inner active zones (faded; underneath outer)
@@ -613,10 +675,11 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
             ax1.scatter(coords[:,0], coords[:,1], color='green', s=3, alpha=0.1, 
                     label='Postsynaptic AZ (outer)' if 'Postsynaptic AZ (outer)' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
         
-        # Add note about distance filtering to legend
         legend_elements = [
-            Line2D([0], [0], color='pink', lw=1.5, label='Vesicles (intersecting slice)'),
-            Line2D([0], [0], color='aqua', lw=2, label='Vesicles <20 nm from AZ'),
+            Line2D([0], [0], color="crimson", lw=2.5, label="Vesicles fusing"),
+            Line2D([0], [0], color="aqua", lw=2, label="Vesicles close"),
+            Line2D([0], [0], color="pink", lw=1.5, label="Vesicles far"),
+            Line2D([0], [0], color="gray", lw=1.5, label="Vesicles unknown"),
             Line2D([0], [0], color=inner_pre_rgb, lw=1.5, label='Presynaptic AZ (inner)'),
             Line2D([0], [0], color=inner_post_rgb, lw=1.5, label='Postsynaptic AZ (inner)'),
             Line2D([0], [0], color='red', lw=1.5, label='Presynaptic AZ (outer)'),
@@ -630,6 +693,126 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
         plt.savefig(output_file1, dpi=300, bbox_inches='tight')
         plt.close()
         print(f"  ✓ Saved vesicles and active zones: {output_file1.name}")
+
+    # Version 1b: All vesicles (XY projection on same slice), same class coloring as Version 1
+    output_file1_all = output_dir / f"{tomo_name}_vesicles_active_zones_all_{suffix}.png"
+    vesicles_all_xy = list(vesicles) if vesicles is not None else []
+    if output_file1_all.exists() and not rerun:
+        print(f"Skipping {output_file1_all}, already exists.")
+    else:
+        fig1b, ax1b = plt.subplots(figsize=(12, 12))
+        ax1b.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax, origin='lower')
+
+        draw_order_all = ("far", "unknown", "close", "fusing")
+
+        def _class_bucket_all(v):
+            cls = v.get("vesicle_distance_class")
+            if cls is not None and str(cls).strip():
+                s = str(cls).strip().lower()
+                if s in ("fusing", "fusion"):
+                    return "fusing"
+                if s == "close":
+                    return "close"
+                if s == "far":
+                    return "far"
+                if s == "unknown":
+                    return "unknown"
+                return "unknown"
+            if _json_bool_truthy(v.get("is_fusing")):
+                return "fusing"
+            if _json_bool_truthy(v.get("is_close")):
+                return "close"
+            d = v.get("distance_to_az", float("nan"))
+            if not np.isfinite(d):
+                return "unknown"
+            return "far"
+
+        for bucket in draw_order_all:
+            for v in vesicles_all_xy:
+                if _class_bucket_all(v) != bucket:
+                    continue
+                c = np.array(v["center"])
+                r = v["radius"]
+                st = _vesicle_distance_class_edge_style(v)
+                circ = Circle(
+                    (c[0], c[1]),
+                    r,
+                    facecolor="none",
+                    edgecolor=st["edgecolor"],
+                    linewidth=st["linewidth"],
+                    alpha=st["alpha"],
+                )
+                ax1b.add_patch(circ)
+
+        for coords in azs_pre_inner_in_slice:
+            ax1b.scatter(
+                coords[:, 0],
+                coords[:, 1],
+                color=inner_pre_rgb,
+                s=3,
+                alpha=inner_az_alpha,
+                label="Presynaptic AZ (inner)"
+                if "Presynaptic AZ (inner)"
+                not in [l.get_label() for l in ax1b.get_legend_handles_labels()[0]]
+                else "",
+            )
+        for coords in azs_post_inner_in_slice:
+            ax1b.scatter(
+                coords[:, 0],
+                coords[:, 1],
+                color=inner_post_rgb,
+                s=3,
+                alpha=inner_az_alpha,
+                label="Postsynaptic AZ (inner)"
+                if "Postsynaptic AZ (inner)"
+                not in [l.get_label() for l in ax1b.get_legend_handles_labels()[0]]
+                else "",
+            )
+        for coords in azs_pre_in_slice:
+            ax1b.scatter(
+                coords[:, 0],
+                coords[:, 1],
+                color="red",
+                s=3,
+                alpha=0.1,
+                label="Presynaptic AZ (outer)"
+                if "Presynaptic AZ (outer)"
+                not in [l.get_label() for l in ax1b.get_legend_handles_labels()[0]]
+                else "",
+            )
+        for coords in azs_post_in_slice:
+            ax1b.scatter(
+                coords[:, 0],
+                coords[:, 1],
+                color="green",
+                s=3,
+                alpha=0.1,
+                label="Postsynaptic AZ (outer)"
+                if "Postsynaptic AZ (outer)"
+                not in [l.get_label() for l in ax1b.get_legend_handles_labels()[0]]
+                else "",
+            )
+
+        legend_all = [
+            Line2D([0], [0], color="crimson", lw=2.5, label="Vesicles fusing"),
+            Line2D([0], [0], color="aqua", lw=2, label="Vesicles close"),
+            Line2D([0], [0], color="pink", lw=1.5, label="Vesicles far"),
+            Line2D([0], [0], color="gray", lw=1.5, label="Vesicles unknown"),
+            Line2D([0], [0], color=inner_pre_rgb, lw=1.5, label="Presynaptic AZ (inner)"),
+            Line2D([0], [0], color=inner_post_rgb, lw=1.5, label="Postsynaptic AZ (inner)"),
+            Line2D([0], [0], color="red", lw=1.5, label="Presynaptic AZ (outer)"),
+            Line2D([0], [0], color="green", lw=1.5, label="Postsynaptic AZ (outer)"),
+        ]
+        ax1b.legend(handles=legend_all)
+        ax1b.set_title(
+            f"All vesicles (XY projection) and active zones — {tomo_name} (slice z≈{z_center})"
+        )
+        ax1b.set_xlabel("X (pixels)")
+        ax1b.set_ylabel("Y (pixels)")
+
+        plt.savefig(output_file1_all, dpi=300, bbox_inches="tight")
+        plt.close()
+        print(f"  ✓ Saved all-vesicle XY overlay: {output_file1_all.name}")
     
     # Version 2: Vesicles and AuNPs
     output_file2 = output_dir / f"{tomo_name}_vesicles_aunps_{suffix}.png"
@@ -947,6 +1130,153 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
             plt.savefig(out_tomo, dpi=300, bbox_inches='tight')
             plt.close(fig2)
             print(f"  ✓ Also saved cluster overlay under {tomo_viz_dir}")
+
+        # --- AuNP synaptic / extrasynaptic overlay (AZ membranes + AuNPs; same marker style as combined_aunpclusters) ---
+        tomo_viz_dir_syn = Path(tomo_path) / alignment_dir / "STT_results" / "visualizations"
+        tomo_viz_dir_syn.mkdir(parents=True, exist_ok=True)
+        out_syn_primary = output_dir / f"{tomo_name}_combined_aunps_synaptic_designation_{suffix}.png"
+        out_syn_tomo = tomo_viz_dir_syn / f"{tomo_name}_combined_aunps_synaptic_designation_{suffix}.png"
+        if out_syn_primary.exists() and out_syn_tomo.exists() and not rerun:
+            print(f"Skipping synaptic-designation AuNP overlay ({suffix}), already exist.")
+        else:
+            desig_col = None
+            if "synaptic_designation" in aunp_clusters.columns:
+                desig_col = "synaptic_designation"
+            elif "synaptic_designation_nm" in aunp_clusters.columns:
+                desig_col = "synaptic_designation_nm"
+            if desig_col is None:
+                print(
+                    "  Warning: No synaptic_designation column in aunp data; "
+                    f"skipping {out_syn_primary.name}"
+                )
+            else:
+                syn_gold = "#DAA520"
+                extra_orange = "#FF8C00"
+                unknown_gray = (0.55, 0.55, 0.55, 1.0)
+                raw = (
+                    aunp_clusters[desig_col]
+                    .astype(str)
+                    .str.strip()
+                    .str.lower()
+                )
+                point_colors = []
+                for v in raw:
+                    if v in ("synaptic", "true", "1"):
+                        point_colors.append(syn_gold)
+                    elif v in ("extrasynaptic", "false", "0"):
+                        point_colors.append(extra_orange)
+                    elif v in ("nan", "none", ""):
+                        point_colors.append(unknown_gray)
+                    else:
+                        point_colors.append(unknown_gray)
+
+                fig_syn, ax_syn = plt.subplots(figsize=(12, 12))
+                ax_syn.imshow(slice2d, cmap="gray", vmin=vmin, vmax=vmax, origin="lower")
+
+                for coords in azs_pre_inner_in_slice:
+                    ax_syn.scatter(
+                        coords[:, 0],
+                        coords[:, 1],
+                        color=inner_pre_rgb,
+                        s=3,
+                        alpha=inner_az_alpha,
+                        label="Presynaptic AZ (inner)"
+                        if "Presynaptic AZ (inner)"
+                        not in [l.get_label() for l in ax_syn.get_legend_handles_labels()[0]]
+                        else "",
+                    )
+                for coords in azs_post_inner_in_slice:
+                    ax_syn.scatter(
+                        coords[:, 0],
+                        coords[:, 1],
+                        color=inner_post_rgb,
+                        s=3,
+                        alpha=inner_az_alpha,
+                        label="Postsynaptic AZ (inner)"
+                        if "Postsynaptic AZ (inner)"
+                        not in [l.get_label() for l in ax_syn.get_legend_handles_labels()[0]]
+                        else "",
+                    )
+                for coords in azs_pre_in_slice:
+                    ax_syn.scatter(
+                        coords[:, 0],
+                        coords[:, 1],
+                        color="red",
+                        s=3,
+                        alpha=0.1,
+                        label="Presynaptic AZ (outer)"
+                        if "Presynaptic AZ (outer)"
+                        not in [l.get_label() for l in ax_syn.get_legend_handles_labels()[0]]
+                        else "",
+                    )
+                for coords in azs_post_in_slice:
+                    ax_syn.scatter(
+                        coords[:, 0],
+                        coords[:, 1],
+                        color="green",
+                        s=3,
+                        alpha=0.1,
+                        label="Postsynaptic AZ (outer)"
+                        if "Postsynaptic AZ (outer)"
+                        not in [l.get_label() for l in ax_syn.get_legend_handles_labels()[0]]
+                        else "",
+                    )
+
+                # Match combined_aunpclusters: filled markers, s=30, alpha=0.8 (no heavy edge stroke)
+                ax_syn.scatter(
+                    aunp_clusters["faCoordinateX"],
+                    aunp_clusters["faCoordinateY"],
+                    c=point_colors,
+                    s=30,
+                    alpha=0.8,
+                    linewidths=0,
+                    edgecolors="none",
+                )
+                ax_syn.set_title(
+                    f"{tomo_name} - AuNPs by synaptic designation (with active zone membranes)"
+                )
+                ax_syn.set_xlabel("X (pixels)")
+                ax_syn.set_ylabel("Y (pixels)")
+
+                legend_syn = [
+                    Line2D([0], [0], color=inner_pre_rgb, lw=1.5, label="Presynaptic AZ (inner)"),
+                    Line2D([0], [0], color=inner_post_rgb, lw=1.5, label="Postsynaptic AZ (inner)"),
+                    Line2D([0], [0], color="red", lw=1.5, label="Presynaptic AZ (outer)"),
+                    Line2D([0], [0], color="green", lw=1.5, label="Postsynaptic AZ (outer)"),
+                    plt.scatter([], [], c=syn_gold, s=30, alpha=0.8, linewidths=0, edgecolors="none", label="Synaptic AuNP"),
+                    plt.scatter(
+                        [],
+                        [],
+                        c=extra_orange,
+                        s=30,
+                        alpha=0.8,
+                        linewidths=0,
+                        edgecolors="none",
+                        label="Extrasynaptic AuNP",
+                    ),
+                    plt.scatter(
+                        [],
+                        [],
+                        c=[unknown_gray],
+                        s=30,
+                        alpha=0.8,
+                        linewidths=0,
+                        edgecolors="none",
+                        label="Unknown designation",
+                    ),
+                ]
+                ax_syn.legend(handles=legend_syn, loc="best")
+
+                plt.savefig(out_syn_primary, dpi=300, bbox_inches="tight")
+                print(f"  ✓ Saved synaptic-designation AuNP overlay: {out_syn_primary.name}")
+                if suffix == "az0" or suffix == "middle":
+                    out_syn_pdf = output_dir / f"{tomo_name}_combined_aunps_synaptic_designation.png"
+                    plt.savefig(out_syn_pdf, dpi=300, bbox_inches="tight")
+                    print(f"  ✓ Saved synaptic-designation overlay for PDF: {out_syn_pdf.name}")
+
+                plt.savefig(out_syn_tomo, dpi=300, bbox_inches="tight")
+                plt.close(fig_syn)
+                print(f"  ✓ Also saved synaptic-designation overlay under {tomo_viz_dir_syn}")
     # --- End AuNP Cluster Visualization ---
 
 
