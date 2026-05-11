@@ -11,6 +11,11 @@ Usage:
 
 Or with custom data path:
     streamlit run scripts/zonogram_viewer.py -- --data-dir /path/to/data
+
+In the sidebar, optional **Tomogram CSV** (columns ``tomoname``, ``set``, ``alignment_dir``) limits Prev/Next
+and the tomogram list to those rows only; each row’s ``alignment_dir`` is the only alignment scanned
+for zonograms (same layout as pipeline CSVs under ``tomogram_csv_files/``). With a CSV loaded, **Group (from CSV)**
+filters rows by the ``set`` column (choose **All** for every row in the file).
 """
 
 import csv
@@ -227,6 +232,52 @@ def get_alignment_dirs(tomo_path: Path) -> list[tuple[str, Path]]:
     return results
 
 
+def get_alignment_dirs_named(tomo_path: Path, alignment_name: str) -> list[tuple[str, Path]]:
+    """Return zonogram dirs only under ``tomo_path / alignment_name`` (for CSV-filtered browsing)."""
+    sub = tomo_path / alignment_name.strip()
+    if not sub.is_dir():
+        return []
+    results: list[tuple[str, Path]] = []
+    for az_dir in find_az_dirs(sub):
+        results.append((alignment_name.strip(), az_dir))
+    return results
+
+
+def parse_tomogram_csv(csv_path: Path) -> tuple[list[tuple[str, str, str]], str | None]:
+    """
+    Load pipeline-style tomogram CSV.
+    Returns (list of (tomoname, set_name, alignment_dir), error_message_or_None).
+    """
+    required = ("tomoname", "set", "alignment_dir")
+    rows: list[tuple[str, str, str]] = []
+    try:
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames:
+                return [], "CSV has no header row."
+            fields_lower = {h.strip().lower(): h for h in reader.fieldnames if h}
+            missing = [c for c in required if c not in fields_lower]
+            if missing:
+                return [], f"Missing columns {missing}. Need: {', '.join(required)}."
+            h_t = fields_lower["tomoname"]
+            h_s = fields_lower["set"]
+            h_a = fields_lower["alignment_dir"]
+            for row in reader:
+                t = (row.get(h_t) or "").strip()
+                s = (row.get(h_s) or "").strip()
+                a = (row.get(h_a) or "").strip()
+                if not t:
+                    continue
+                if not s or not a or a.lower() == "nan":
+                    return [], f"Row with tomoname '{t}' missing set or alignment_dir."
+                rows.append((t, s, a))
+    except OSError as e:
+        return [], str(e)
+    if not rows:
+        return [], "No data rows in CSV."
+    return rows, None
+
+
 def infer_alignment_dir_from_az_dir(az_dir: Path, tomo_path: Path) -> Path | None:
     """Infer alignment directory from an active_zonograms directory path."""
     for candidate in [az_dir, *az_dir.parents]:
@@ -326,40 +377,128 @@ def main():
         st.info("Set the data root in the sidebar to the directory containing your tomogram sets.")
         return
 
-    # Discover groups
+    csv_input = st.sidebar.text_input(
+        "Tomogram CSV (optional)",
+        value="",
+        help=(
+            "Path to a CSV with columns tomoname, set, alignment_dir (same as pipeline). "
+            "Relative paths are resolved from the SynapticTomoTools repo root. "
+            "When set, only those tomograms and alignment directories are browsed."
+        ),
+    )
+    csv_path_raw = csv_input.strip()
+    csv_rows_all: list[tuple[str, str, str]] | None = None
+    csv_parse_error: str | None = None
+    csv_p: Path | None = None
+    if csv_path_raw:
+        csv_p = Path(csv_path_raw)
+        if not csv_p.is_absolute():
+            csv_p = (PROJECT_ROOT / csv_p).resolve()
+        else:
+            csv_p = csv_p.resolve()
+        if not csv_p.exists():
+            csv_parse_error = f"CSV not found: {csv_p}"
+        else:
+            csv_rows_all, csv_parse_error = parse_tomogram_csv(csv_p)
+            if csv_parse_error:
+                csv_rows_all = None
+    if csv_parse_error:
+        st.sidebar.warning(csv_parse_error)
+
+    csv_mode = bool(csv_rows_all)
+    csv_rows: list[tuple[str, str, str]] | None = None
+    csv_group_pick = "All"
+    if csv_mode:
+        assert csv_rows_all is not None
+        assert csv_p is not None
+        unique_sets = sorted({r[1] for r in csv_rows_all})
+        csv_group_options = ["All"] + unique_sets
+        csv_group_pick = st.sidebar.selectbox(
+            "Group (from CSV)",
+            csv_group_options,
+            index=0,
+            help="Restrict the tomogram list to one ``set`` value from the CSV, or All for every row.",
+            key=f"zonogram_csv_group_{csv_p}",
+        )
+        if csv_group_pick == "All":
+            csv_rows = list(csv_rows_all)
+        else:
+            csv_rows = [r for r in csv_rows_all if r[1] == csv_group_pick]
+        if not csv_rows:
+            st.warning("No CSV rows match the selected group.")
+            return
+        n_all = len(csv_rows_all)
+        n_f = len(csv_rows)
+        count_msg = f"{n_f} row(s)" if n_f == n_all else f"{n_f} of {n_all} row(s) (group filter)"
+        st.sidebar.success(f"CSV: {count_msg} — {csv_p.name}")
+        st.caption(f"Browsing tomograms from CSV ({csv_p}); group filter: **{csv_group_pick}**.")
     groups = discover_tomograms(data_path)
-    if not groups:
+    if not csv_mode and not groups:
         st.warning("No tomogram groups found. Ensure the data root has subdirs like 15F1/TOP_TOMOS/, 15F1-H4K2Cys/TOP_TOMOS/, etc.")
         return
 
-    group_names = sorted(groups.keys())
-    selected_group = st.sidebar.selectbox("Group", group_names, index=0)
-    tomo_set_pairs = groups[selected_group]
+    selected_group = ""
+    tomo_set_pairs: list[tuple[str, str]] = []
+    csv_skipped: list[str] = []
 
-    # Build flat sequence: for each tomogram, each alignment, each active zone
-    # Order: tomo0 align0 az0, tomo0 align0 az1, ..., tomo0 align1 az0, ..., tomo1 align0 az0, ...
-    flat_sequence: list[tuple[int, int, int]] = []
-    for ti, (tomo_name, set_name) in enumerate(tomo_set_pairs):
-        tomo_path = get_tomogram_path(data_path, set_name, tomo_name)
-        if not tomo_path:
-            continue
-        alignments = get_alignment_dirs(tomo_path)
-        for ai, (_, align_az_dir) in enumerate(alignments):
-            pairs = get_az_pairs(align_az_dir)
-            for pi in range(len(pairs)):
-                flat_sequence.append((ti, ai, pi))
+    if csv_mode:
+        assert csv_rows is not None
+        flat_sequence: list[tuple[int, int, int]] = []
+        for ri, (tomo_name, set_name, alignment_dir) in enumerate(csv_rows):
+            tomo_path = get_tomogram_path(data_path, set_name, tomo_name)
+            if not tomo_path:
+                csv_skipped.append(f"{tomo_name} ({set_name}): tomogram path missing under data root")
+                continue
+            sub = tomo_path / alignment_dir
+            if not sub.is_dir():
+                csv_skipped.append(f"{tomo_name} / {alignment_dir}: alignment directory not found")
+                continue
+            alignments = get_alignment_dirs_named(tomo_path, alignment_dir)
+            if not alignments:
+                csv_skipped.append(f"{tomo_name} / {alignment_dir}: no active_zonograms images in expected locations")
+                continue
+            n_pairs = 0
+            for ai, (_, align_az_dir) in enumerate(alignments):
+                pairs = get_az_pairs(align_az_dir)
+                for pi in range(len(pairs)):
+                    flat_sequence.append((ri, ai, pi))
+                    n_pairs += 1
+            if n_pairs == 0:
+                csv_skipped.append(f"{tomo_name} / {alignment_dir}: no active zone PNG pairs")
+        if csv_skipped:
+            with st.sidebar.expander(f"CSV rows skipped ({len(csv_skipped)})", expanded=False):
+                for line in csv_skipped:
+                    st.text(line)
+    else:
+        group_names = sorted(groups.keys())
+        selected_group = st.sidebar.selectbox("Group", group_names, index=0)
+        tomo_set_pairs = groups[selected_group]
+
+        flat_sequence = []
+        for ti, (tomo_name, set_name) in enumerate(tomo_set_pairs):
+            tomo_path = get_tomogram_path(data_path, set_name, tomo_name)
+            if not tomo_path:
+                continue
+            alignments = get_alignment_dirs(tomo_path)
+            for ai, (_, align_az_dir) in enumerate(alignments):
+                pairs = get_az_pairs(align_az_dir)
+                for pi in range(len(pairs)):
+                    flat_sequence.append((ti, ai, pi))
 
     n_flat = len(flat_sequence)
 
-    # Session state for flat position (Prev/Next cycles through alignment→AZ within tomogram, then next tomogram)
     if "flat_pos" not in st.session_state:
         st.session_state.flat_pos = 0
-    if st.session_state.get("last_group") != selected_group:
-        st.session_state.last_group = selected_group
+    if csv_mode:
+        assert csv_p is not None
+        nav_sig = f"csv|{data_path.resolve()}|{csv_p}|{csv_group_pick}"
+    else:
+        nav_sig = f"dir|{data_path.resolve()}|{selected_group}"
+    if st.session_state.get("zv_nav_sig") != nav_sig:
+        st.session_state.zv_nav_sig = nav_sig
         st.session_state.flat_pos = 0
     flat_pos = max(0, min(st.session_state.flat_pos, n_flat - 1)) if n_flat else 0
 
-    # Prev / Next buttons
     c1, c2, _ = st.sidebar.columns([1, 1, 2])
     with c1:
         if st.button("←", use_container_width=True, key="prev_nav") and n_flat > 0:
@@ -370,20 +509,33 @@ def main():
             st.session_state.flat_pos = (flat_pos + 1) % n_flat
             st.rerun()
 
-    # Resolve current position from flat sequence
     if n_flat == 0:
-        st.warning("No active zonograms found in any tomogram in this group.")
+        if csv_mode:
+            st.warning("No active zonograms found for any CSV row (see sidebar for skipped rows).")
+        else:
+            st.warning("No active zonograms found in any tomogram in this group.")
         return
-    tomo_idx, align_idx, az_pair_idx = flat_sequence[flat_pos]
+
+    seq_idx, align_idx, az_pair_idx = flat_sequence[flat_pos]
     st.session_state.flat_pos = flat_pos
 
-    selected_tomo, set_name = tomo_set_pairs[tomo_idx]
-    tomo_path = get_tomogram_path(data_path, set_name, selected_tomo)
-    if not tomo_path:
-        st.error(f"Tomogram path not found: {set_name}/TOP_TOMOS/{selected_tomo}")
-        return
+    if csv_mode:
+        assert csv_rows is not None
+        selected_tomo, set_name, align_from_csv = csv_rows[seq_idx]
+        selected_group = set_name
+        tomo_path = get_tomogram_path(data_path, set_name, selected_tomo)
+        if not tomo_path:
+            st.error(f"Tomogram path not found: {set_name}/TOP_TOMOS/{selected_tomo}")
+            return
+        alignments = get_alignment_dirs_named(tomo_path, align_from_csv)
+    else:
+        selected_tomo, set_name = tomo_set_pairs[seq_idx]
+        tomo_path = get_tomogram_path(data_path, set_name, selected_tomo)
+        if not tomo_path:
+            st.error(f"Tomogram path not found: {set_name}/TOP_TOMOS/{selected_tomo}")
+            return
+        alignments = get_alignment_dirs(tomo_path)
 
-    alignments = get_alignment_dirs(tomo_path)
     align_names = [a[0] for a in alignments]
     selected_align_idx = min(align_idx, len(alignments) - 1) if alignments else 0
     selected_align_name, az_dir = alignments[selected_align_idx]
@@ -394,20 +546,33 @@ def main():
     selected_aunps_path = az_dir / f"active_zonogram_{idx}_selected_aunps.png"
     selected_aunps_manual_path = az_dir / f"active_zonogram_{idx}_selected_aunps_manual.png"
 
-    # Dropdowns for manual navigation; changing them updates flat_pos
-    def find_flat_pos(target_ti: int, target_ai: int, target_pi: int) -> int:
-        for i, (ti, ai, pi) in enumerate(flat_sequence):
-            if ti == target_ti and ai == target_ai and pi == target_pi:
+    def find_flat_pos(target_seq: int, target_ai: int, target_pi: int) -> int:
+        for i, (si, ai, pi) in enumerate(flat_sequence):
+            if si == target_seq and ai == target_ai and pi == target_pi:
                 return i
-        return flat_pos  # keep current if no match (e.g. different tomogram structure)
+        return flat_pos
 
-    tomo_select = st.sidebar.selectbox(
-        "Tomogram",
-        range(len(tomo_set_pairs)),
-        format_func=lambda i: tomo_set_pairs[i][0],
-        index=tomo_idx,
-    )
-    # Alignments and pairs are for current tomogram
+    if csv_mode:
+        assert csv_rows is not None
+
+        def _csv_row_label(i: int) -> str:
+            t, s, a = csv_rows[i]
+            return f"{t} / {a} ({s})"
+
+        tomo_select = st.sidebar.selectbox(
+            "Tomogram (CSV order)",
+            range(len(csv_rows)),
+            format_func=_csv_row_label,
+            index=seq_idx,
+        )
+    else:
+        tomo_select = st.sidebar.selectbox(
+            "Tomogram",
+            range(len(tomo_set_pairs)),
+            format_func=lambda i: tomo_set_pairs[i][0],
+            index=seq_idx,
+        )
+
     align_select = st.sidebar.selectbox(
         "Alignment directory",
         range(len(align_names)),
@@ -421,14 +586,11 @@ def main():
         format_func=lambda i: str(az_options[i]),
         index=az_pair_idx,
     )
-    # Sync flat_pos if user changed dropdowns
-    if tomo_select != tomo_idx:
-        # Different tomogram: jump to first (align 0, az 0) of that tomogram
-        new_flat = find_flat_pos(tomo_select, 0, 0)
-        st.session_state.flat_pos = new_flat
+
+    if tomo_select != seq_idx:
+        st.session_state.flat_pos = find_flat_pos(tomo_select, 0, 0)
         st.rerun()
     elif (align_select, az_select) != (selected_align_idx, az_pair_idx):
-        # Same tomogram, different align/az
         new_flat = find_flat_pos(tomo_select, align_select, az_select)
         if new_flat != flat_pos:
             st.session_state.flat_pos = new_flat
