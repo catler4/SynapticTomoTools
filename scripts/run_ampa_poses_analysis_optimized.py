@@ -24,16 +24,16 @@ def main():
         epilog="""
 Examples:
   # Basic optimized analysis with default parameters
-  python scripts/run_ampa_poses_analysis_optimized.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --output-dir results/ampa_poses_optimized
+  python scripts/run_ampa_poses_analysis_optimized.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --alignment-dir best_alignment --output-dir results/ampa_poses_optimized
   
   # Custom distance parameters and steric radius
-  python scripts/run_ampa_poses_analysis_optimized.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --output-dir results/ampa_poses_optimized --aunp-min-distance 5 --aunp-max-distance 12 --membrane-min-distance 15 --membrane-max-distance 25 --steric-radius 6
+  python scripts/run_ampa_poses_analysis_optimized.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --alignment-dir best_alignment --output-dir results/ampa_poses_optimized --aunp-min-distance 5 --aunp-max-distance 12 --membrane-min-distance 15 --membrane-max-distance 25 --steric-radius 6
   
   # Disable distance cutoffs (use all pairs)
-  python scripts/run_ampa_poses_analysis_optimized.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --output-dir results/ampa_poses_optimized --no-aunp-distance-cutoff --no-membrane-distance-cutoff
+  python scripts/run_ampa_poses_analysis_optimized.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --alignment-dir best_alignment --output-dir results/ampa_poses_optimized --no-aunp-distance-cutoff --no-membrane-distance-cutoff
   
   # Use ILP exact optimization method (saves to ilp/ subdirectory)
-  python scripts/run_ampa_poses_analysis_optimized.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --output-dir results/ampa_poses_optimized --method ilp
+  python scripts/run_ampa_poses_analysis_optimized.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --alignment-dir best_alignment --output-dir results/ampa_poses_optimized --method ilp
         """
     )
     
@@ -41,6 +41,12 @@ Examples:
         "--tomogram-path",
         required=True,
         help="Path to the tomogram directory"
+    )
+
+    parser.add_argument(
+        "--alignment-dir",
+        required=True,
+        help="Alignment subdirectory under the tomogram (e.g. best_alignment, liza_az0)",
     )
     
     parser.add_argument(
@@ -128,6 +134,7 @@ Examples:
     # Run the analysis
     try:
         print(f"Running optimized AMPA poses analysis on {args.tomogram_path}")
+        print(f"Alignment directory: {args.alignment_dir}")
         print(f"Output directory: {args.output_dir}")
         
         if args.no_aunp_distance_cutoff:
@@ -166,7 +173,8 @@ Examples:
             inter_aunp_distance=inter_aunp_distance,
             aunp_membrane_distance=aunp_membrane_distance,
             ampa_steric_radius=args.steric_radius,
-            method=args.method
+            method=args.method,
+            alignment_dir=args.alignment_dir,
         )
         
         if results["status"] == "success":

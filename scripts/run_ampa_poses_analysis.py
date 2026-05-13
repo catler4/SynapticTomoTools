@@ -22,8 +22,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python scripts/run_ampa_poses_analysis.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --output-dir results/ampa_poses
-  python scripts/run_ampa_poses_analysis.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --output-dir results/ampa_poses --aunp-min-distance 5 --aunp-max-distance 12 --membrane-min-distance 15 --membrane-max-distance 25
+  python scripts/run_ampa_poses_analysis.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --alignment-dir best_alignment --output-dir results/ampa_poses
+  python scripts/run_ampa_poses_analysis.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --alignment-dir best_alignment --output-dir results/ampa_poses --aunp-min-distance 5 --aunp-max-distance 12 --membrane-min-distance 15 --membrane-max-distance 25
         """
     )
     
@@ -31,6 +31,12 @@ Examples:
         "--tomogram-path",
         required=True,
         help="Path to the tomogram directory"
+    )
+
+    parser.add_argument(
+        "--alignment-dir",
+        required=True,
+        help="Alignment subdirectory under the tomogram (e.g. best_alignment, liza_az0); must match CSV alignment_dir",
     )
     
     parser.add_argument(
@@ -120,6 +126,7 @@ Examples:
     # Run the analysis
     try:
         print(f"Running AMPA poses analysis on {args.tomogram_path}")
+        print(f"Alignment directory: {args.alignment_dir}")
         print(f"Output directory: {args.output_dir}")
         
         if args.no_aunp_distance_cutoff:
@@ -163,7 +170,8 @@ Examples:
                 aunp_active_zones=args.aunp_active_zones,
                 inter_aunp_distance=inter_aunp_distance,
                 aunp_membrane_distance=aunp_membrane_distance,
-                pdb_file=args.pdb_file
+                pdb_file=args.pdb_file,
+                alignment_dir=args.alignment_dir,
             )
         else:
             results = run_ampa_poses_analysis_optimized(
@@ -174,7 +182,8 @@ Examples:
                 aunp_membrane_distance=aunp_membrane_distance,
                 ampa_steric_radius=args.steric_radius,
                 method=args.method,
-                pdb_file=args.pdb_file
+                pdb_file=args.pdb_file,
+                alignment_dir=args.alignment_dir,
             )
         
         if results["status"] == "success":

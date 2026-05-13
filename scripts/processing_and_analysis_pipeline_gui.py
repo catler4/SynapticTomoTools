@@ -1723,6 +1723,7 @@ Do you want to continue?"""
             
             cli = ["python", "-u", "scripts/run_ampa_poses_analysis.py"]
             cli += ["--tomogram-path", tomogram_path]
+            cli += ["--alignment-dir", align_sub]
             cli += ["--output-dir", full_output_dir]
             
             # Add distance parameters only if cutoffs are enabled
@@ -2083,6 +2084,7 @@ Do you want to continue?"""
                 
                 cli_original = ["python", "-u", "scripts/run_ampa_poses_analysis.py"]
                 cli_original += ["--tomogram-path", tomogram_path]
+                cli_original += ["--alignment-dir", align_sub]
                 cli_original += ["--output-dir", original_output_dir]
                 cli_original += ["--method", "original"]  # Explicitly set method to original
                 
@@ -2123,6 +2125,7 @@ Do you want to continue?"""
                 
                 cli_optimized = ["python", "-u", "scripts/run_ampa_poses_analysis.py"]
                 cli_optimized += ["--tomogram-path", tomogram_path]
+                cli_optimized += ["--alignment-dir", align_sub]
                 cli_optimized += ["--output-dir", optimized_output_dir]
                 cli_optimized += ["--steric-radius", str(steric_radius)]
                 

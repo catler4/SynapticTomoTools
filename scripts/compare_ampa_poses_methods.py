@@ -83,10 +83,10 @@ def main():
         epilog="""
 Examples:
   # Compare methods with default parameters
-  python scripts/compare_ampa_poses_methods.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --output-dir results/ampa_poses_comparison
+  python scripts/compare_ampa_poses_methods.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --alignment-dir best_alignment --output-dir results/ampa_poses_comparison
   
   # Compare with custom parameters
-  python scripts/compare_ampa_poses_methods.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --output-dir results/ampa_poses_comparison --aunp-min-distance 5 --aunp-max-distance 12 --membrane-min-distance 15 --membrane-max-distance 25 --steric-radius 6
+  python scripts/compare_ampa_poses_methods.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --alignment-dir best_alignment --output-dir results/ampa_poses_comparison --aunp-min-distance 5 --aunp-max-distance 12 --membrane-min-distance 15 --membrane-max-distance 25 --steric-radius 6
         """
     )
     
@@ -94,6 +94,12 @@ Examples:
         "--tomogram-path",
         required=True,
         help="Path to the tomogram directory"
+    )
+
+    parser.add_argument(
+        "--alignment-dir",
+        required=True,
+        help="Alignment subdirectory under the tomogram (e.g. best_alignment, liza_az0)",
     )
     
     parser.add_argument(
@@ -198,7 +204,8 @@ Examples:
             inter_aunp_distance=inter_aunp_distance,
             aunp_membrane_distance=aunp_membrane_distance,
             ampa_steric_radius=args.steric_radius,
-            method="greedy"
+            method="greedy",
+            alignment_dir=args.alignment_dir,
         )
         
         print("\n" + "=" * 60)
@@ -211,7 +218,8 @@ Examples:
             inter_aunp_distance=inter_aunp_distance,
             aunp_membrane_distance=aunp_membrane_distance,
             ampa_steric_radius=args.steric_radius,
-            method="ilp"
+            method="ilp",
+            alignment_dir=args.alignment_dir,
         )
         
         print("\n" + "=" * 60)
