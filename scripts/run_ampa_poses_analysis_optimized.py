@@ -116,6 +116,16 @@ Examples:
         help="Specific active zone indices to analyze (default: all active zones)"
     )
     
+    parser.add_argument(
+        "--aunp-pick-star-pattern",
+        type=str,
+        default=None,
+        help=(
+            "Per-active-zone AuNP pick STAR filename pattern; use '*' for the active zone index "
+            "(default: aunp_tm_BP_active_zone_*_manual_refined.star)"
+        ),
+    )
+    
     args = parser.parse_args()
     
     # Validate arguments only if cutoffs are enabled
@@ -153,6 +163,8 @@ Examples:
             print(f"Active zones: {args.aunp_active_zones}")
         else:
             print("Active zones: all")
+        if args.aunp_pick_star_pattern:
+            print(f"AuNP pick STAR pattern: {args.aunp_pick_star_pattern}")
         print()
         
         # Set distance parameters based on cutoff flags
@@ -175,6 +187,7 @@ Examples:
             ampa_steric_radius=args.steric_radius,
             method=args.method,
             alignment_dir=args.alignment_dir,
+            aunp_pick_star_pattern=args.aunp_pick_star_pattern,
         )
         
         if results["status"] == "success":

@@ -85,6 +85,7 @@ class AnalysisPipelineGUI(tk.Tk):
         self.min_cluster_size = tk.StringVar(value="4")
         self.fusion_point_threshold = tk.StringVar(value="20.0")
         self.fusing_perimeter_threshold = tk.StringVar(value="1.0")
+        self.aunp_pick_star_pattern = tk.StringVar(value="")
         
         self._build_tabs()
         self.protocol("WM_DELETE_WINDOW", self._on_app_close)
@@ -284,6 +285,15 @@ class AnalysisPipelineGUI(tk.Tk):
         fusion_point_threshold_entry = ttk.Entry(aunp_frame, textvariable=self.fusion_point_threshold, width=8)
         fusion_point_threshold_entry.grid(row=4, column=1, padx=5)
         ttk.Label(aunp_frame, text="(default: 20.0)").grid(row=4, column=2, padx=5, sticky=tk.W)
+        ttk.Label(aunp_frame, text="AuNP pick STAR filename pattern:").grid(row=5, column=0, sticky=tk.W, padx=5)
+        aunp_pick_star_pattern_entry = ttk.Entry(
+            aunp_frame, textvariable=self.aunp_pick_star_pattern, width=42
+        )
+        aunp_pick_star_pattern_entry.grid(row=5, column=1, columnspan=2, padx=5, sticky=tk.W)
+        ttk.Label(
+            aunp_frame,
+            text="(default: aunp_tm_BP_active_zone_*_manual_refined.star; * = AZ index)",
+        ).grid(row=6, column=0, columnspan=3, padx=5, sticky=tk.W)
         
         # Visualization parameters
         viz_frame = ttk.LabelFrame(self.custom_params_frame, text="Visualization Parameters", padding=5)
@@ -345,6 +355,12 @@ class AnalysisPipelineGUI(tk.Tk):
         ToolTip(min_cluster_size_entry, "Post-DBSCAN minimum retained cluster size; smaller clusters are reassigned to noise (default 4).")
         ToolTip(fusion_point_threshold_entry, "Radius in nm for active-zone points contributing to per-vesicle fusion point estimation (default 20.0).")
         ToolTip(fusing_perimeter_threshold_entry, "Vesicle is fusing if minimum distance from original vesicle segmentation points to presynaptic active-zone points is <= this threshold (default 1.0 nm).")
+        ToolTip(
+            aunp_pick_star_pattern_entry,
+            "Filename pattern for per-active-zone AuNP pick STAR files under {alignment}/aunps/. "
+            "Use exactly one * for the active zone number (e.g. aunps_other_name_*_etc.star). "
+            "Leave empty for the default aunp_tm_BP_active_zone_*_manual_refined.star.",
+        )
         ToolTip(sphere_size_entry, "Marker size for visualization sphere overlays (default 36).")
         ToolTip(self.sphere_color_combo, "Marker color for visualization sphere overlays (default gold).")
         ToolTip(aunp_distance_min_entry, "Minimum distance (nm) for AuNP color scale; leave empty for auto.")
@@ -835,6 +851,13 @@ Do you want to continue?"""
             self.start_tomogram_label.grid_remove()
             self.start_tomogram_combo.grid_remove()
     
+    def _cli_aunp_pick_star_pattern_args(self):
+        """CLI flags for custom AuNP pick STAR naming (Home → Custom Parameters)."""
+        pat = self.aunp_pick_star_pattern.get().strip()
+        if pat:
+            return ["--aunp-pick-star-pattern", pat]
+        return []
+
     def _toggle_custom_params(self):
         """Handle custom parameters toggle to show/hide custom parameters frame."""
         if self.use_custom_params.get():
@@ -1114,6 +1137,7 @@ Do you want to continue?"""
                     cli += ["--fusing-perimeter-threshold", str(float(self.fusing_perimeter_threshold.get()))]
                 except ValueError:
                     pass
+            cli += self._cli_aunp_pick_star_pattern_args()
             
             # Visualization parameters
             if self.sphere_size.get():
@@ -1743,6 +1767,8 @@ Do you want to continue?"""
             if aunp_active_zones is not None:
                 cli += ["--aunp-active-zones"] + [str(az) for az in aunp_active_zones]
             
+            cli += self._cli_aunp_pick_star_pattern_args()
+            
             all_commands.append((tomogram_name, cli, align_sub))
         
         if not all_commands:
@@ -2105,6 +2131,8 @@ Do you want to continue?"""
                 if aunp_active_zones is not None:
                     cli_original += ["--aunp-active-zones"] + [str(az) for az in aunp_active_zones]
                 
+                cli_original += self._cli_aunp_pick_star_pattern_args()
+                
                 # Add PDB file if specified
                 pdb_file = self.ampa_pdb_file.get().strip()
                 if pdb_file:
@@ -2145,6 +2173,8 @@ Do you want to continue?"""
                 # Add active zones if specified
                 if aunp_active_zones is not None:
                     cli_optimized += ["--aunp-active-zones"] + [str(az) for az in aunp_active_zones]
+                
+                cli_optimized += self._cli_aunp_pick_star_pattern_args()
                 
                 # Add optimization method
                 optimization_method = self.ampa_optimization_method.get()

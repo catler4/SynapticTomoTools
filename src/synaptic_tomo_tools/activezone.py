@@ -527,7 +527,14 @@ def save_active_zone_segmentations(active_zones: Dict[str, Any], tomogram_path, 
             np.savetxt(active_zone_dir / f"{zone_name}_post_inner.txt", post_inner, fmt='%.6e')
 
 
-def match_active_zones_by_aunps(tomogram_path, active_zone_indices, all_active_zones, alignment_dir: str) -> Dict[int, str]:
+def match_active_zones_by_aunps(
+    tomogram_path,
+    active_zone_indices,
+    all_active_zones,
+    alignment_dir: str,
+    *,
+    aunp_pick_star_pattern=None,
+) -> Dict[int, str]:
     """
     Match active zone indices to zone names using smart matching based on AuNP locations.
     This is done once and the mapping can be reused.
@@ -545,25 +552,15 @@ def match_active_zones_by_aunps(tomogram_path, active_zone_indices, all_active_z
     
     # Load AuNP data for smart matching
     try:
-        import starfile
         import pandas as pd
+        from .aunps import load_aunp_pick_star_dataframes
+
         aunps_dir = Path(tomogram_path) / alignment_dir / "aunps"
-        star_dfs = []
-        for idx in active_zone_indices:
-            star_file = aunps_dir / f"aunp_tm_BP_active_zone_{idx}_manual_refined.star"
-            if star_file.exists():
-                star_data = starfile.read(star_file)
-                if isinstance(star_data, dict):
-                    for v in star_data.values():
-                        if isinstance(v, pd.DataFrame):
-                            v = v.copy()
-                            v['active_zone'] = idx
-                            star_dfs.append(v)
-                            break
-                elif isinstance(star_data, pd.DataFrame):
-                    star_data = star_data.copy()
-                    star_data['active_zone'] = idx
-                    star_dfs.append(star_data)
+        star_dfs = load_aunp_pick_star_dataframes(
+            aunps_dir,
+            list(active_zone_indices),
+            pattern=aunp_pick_star_pattern,
+        )
         
         if not star_dfs:
             return az_mapping
@@ -653,6 +650,7 @@ def define_active_zone(
     distance_range=None,
     *,
     alignment_dir: str,
+    aunp_pick_star_pattern=None,
 ) -> Dict[str, Any]:
     """
     Define active zone in tomogram.
@@ -685,7 +683,11 @@ def define_active_zone(
         if active_zone_indices is not None and len(active_zone_indices) > 0:
             # Do smart matching once
             az_mapping = match_active_zones_by_aunps(
-                tomogram_path, active_zone_indices, active_zones['active_zones'], alignment_dir=alignment_dir
+                tomogram_path,
+                active_zone_indices,
+                active_zones['active_zones'],
+                alignment_dir=alignment_dir,
+                aunp_pick_star_pattern=aunp_pick_star_pattern,
             )
             
             if az_mapping:

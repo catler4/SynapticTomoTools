@@ -1,6 +1,7 @@
 # src/synaptic_tomo_tools/aunps.py
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+import glob
 import pandas as pd
 import numpy as np
 from scipy.spatial import KDTree, cKDTree
@@ -16,6 +17,101 @@ from .alignment_utils import require_alignment_dir
 import re
 
 # CSV export functions removed - now handled by ResultsManager
+
+DEFAULT_AUNP_PICK_STAR_PATTERN = "aunp_tm_BP_active_zone_*_manual_refined.star"
+
+
+def normalize_aunp_pick_star_pattern(pattern: Optional[str]) -> str:
+    """Return the AuNP pick filename pattern, using the pipeline default if unset."""
+    if pattern is None or not str(pattern).strip():
+        return DEFAULT_AUNP_PICK_STAR_PATTERN
+    pat = str(pattern).strip()
+    if "*" not in pat:
+        raise ValueError(
+            "AuNP pick STAR pattern must contain exactly one '*' for the active zone index "
+            f"(e.g. {DEFAULT_AUNP_PICK_STAR_PATTERN!r})."
+        )
+    if pat.count("*") != 1:
+        raise ValueError(
+            "AuNP pick STAR pattern must contain exactly one '*' for the active zone index."
+        )
+    if not pat.endswith(".star"):
+        raise ValueError("AuNP pick STAR pattern must end with '.star'.")
+    return pat
+
+
+def aunp_pick_star_filename(active_zone_idx: int, pattern: Optional[str] = None) -> str:
+    """Build pick STAR filename for one active zone (``*`` replaced by index)."""
+    pat = normalize_aunp_pick_star_pattern(pattern)
+    return pat.replace("*", str(int(active_zone_idx)), 1)
+
+
+def _aunp_pick_star_regex(pattern: str) -> re.Pattern:
+    pre, post = pattern.split("*", 1)
+    return re.compile("^" + re.escape(pre) + r"(\d+)" + re.escape(post) + "$")
+
+
+def discover_aunp_pick_star_files(
+    aunps_dir: Path,
+    active_zone_indices: Optional[List[int]] = None,
+    *,
+    pattern: Optional[str] = None,
+) -> List[Tuple[int, Path]]:
+    """
+    Find per-active-zone AuNP pick STAR files under ``aunps_dir``.
+
+    ``pattern`` uses a single ``*`` as the active zone index placeholder
+    (default: ``aunp_tm_BP_active_zone_*_manual_refined.star``).
+    """
+    pat = normalize_aunp_pick_star_pattern(pattern)
+    aunps_dir = Path(aunps_dir)
+    found: List[Tuple[int, Path]] = []
+
+    if active_zone_indices is not None:
+        for idx in active_zone_indices:
+            star_file = aunps_dir / aunp_pick_star_filename(idx, pat)
+            print("Trying to load:", star_file)
+            if star_file.exists():
+                found.append((int(idx), star_file))
+        return found
+
+    regex = _aunp_pick_star_regex(pat)
+    for file in glob.glob(str(aunps_dir / pat)):
+        fname = Path(file).name
+        m = regex.match(fname)
+        if m:
+            found.append((int(m.group(1)), Path(file)))
+    return sorted(found, key=lambda x: x[0])
+
+
+def _read_aunp_pick_star_dataframe(star_file: Path) -> Optional[pd.DataFrame]:
+    star_data = starfile.read(star_file)
+    if isinstance(star_data, dict):
+        for v in star_data.values():
+            if isinstance(v, pd.DataFrame):
+                return v.copy()
+    elif isinstance(star_data, pd.DataFrame):
+        return star_data.copy()
+    return None
+
+
+def load_aunp_pick_star_dataframes(
+    aunps_dir: Path,
+    active_zone_indices: Optional[List[int]] = None,
+    *,
+    pattern: Optional[str] = None,
+) -> List[pd.DataFrame]:
+    """Load AuNP pick STAR files; each DataFrame gets an ``active_zone`` column from the file index."""
+    star_dfs: List[pd.DataFrame] = []
+    for az_id, star_file in discover_aunp_pick_star_files(
+        aunps_dir, active_zone_indices, pattern=pattern
+    ):
+        df = _read_aunp_pick_star_dataframe(star_file)
+        if df is not None:
+            df["active_zone"] = az_id
+            star_dfs.append(df)
+    return star_dfs
+
 
 def calculate_packing_density_using_sliding_cylinder(
     active_zone: dict,
@@ -294,13 +390,16 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                   cylinder_radius=25.0, receptor_crosssection=122.0, aunps_per_receptor=2.0,
                   vertex_sampling_step=50, synaptic_designation_cutoff=30.0,
                   min_cluster_size=4, fusion_point_threshold=20.0,
-                  fusing_perimeter_threshold=1.0):
+                  fusing_perimeter_threshold=1.0,
+                  aunp_pick_star_pattern=None):
     """
     Performs analysis of gold nanoparticles (AuNPs) in the tomogram.
 
     Parameters:
         tomogram_path (str or Path): Path to the tomogram file.
         active_zone_indices (list of int or None): Which active zone .star files to read. If None, read all.
+        aunp_pick_star_pattern (str or None): Per-AZ pick STAR filename pattern with ``*`` for the active
+            zone index (default: ``aunp_tm_BP_active_zone_*_manual_refined.star``).
         set_name (str, optional): Name of the experimental set.
         vesicle_distance_threshold (float): Distance threshold for "close" vesicles (nm). Default: 20.0.
         dbscan_eps (float): DBSCAN eps parameter for clustering (nm). Default: 16.0.
@@ -320,53 +419,13 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
     
     try:
         aunps_dir = Path(tomogram_path) / alignment_dir / "aunps"
-        import glob
-        import os
-        star_dfs = []
-        if active_zone_indices is not None:
-            for idx in active_zone_indices:
-                star_file = aunps_dir / f"aunp_tm_BP_active_zone_{idx}_manual_refined.star"
-                print("Trying to load:", star_file)
-                if star_file.exists():
-                    star_data = starfile.read(star_file)
-                    if isinstance(star_data, dict):
-                        for v in star_data.values():
-                            if isinstance(v, pd.DataFrame):
-                                df = v.copy()
-                                # Ensure active_zone column matches the file index
-                                df['active_zone'] = idx
-                                star_dfs.append(df)
-                                break
-                    elif isinstance(star_data, pd.DataFrame):
-                        df = star_data.copy()
-                        # Ensure active_zone column matches the file index
-                        df['active_zone'] = idx
-                        star_dfs.append(df)
-        else:
-            # Load all aunp_tm_BP_active_zone_<N>_manual_refined.star files with numeric suffix
-            pattern = str(aunps_dir / "aunp_tm_BP_active_zone_*_manual_refined.star")
-            for file in glob.glob(pattern):
-                fname = Path(file).name
-                m = re.match(r"aunp_tm_BP_active_zone_(\d+)_manual_refined\.star", fname)
-                if m:
-                    az_id = int(m.group(1))
-                    star_data = starfile.read(Path(file))
-                    if isinstance(star_data, dict):
-                        for v in star_data.values():
-                            if isinstance(v, pd.DataFrame):
-                                df = v.copy()
-                                # Ensure active_zone column matches the file index
-                                df['active_zone'] = az_id
-                                star_dfs.append(df)
-                                break
-                    elif isinstance(star_data, pd.DataFrame):
-                        df = star_data.copy()
-                        # Ensure active_zone column matches the file index
-                        df['active_zone'] = az_id
-                        star_dfs.append(df)
+        pick_pattern = normalize_aunp_pick_star_pattern(aunp_pick_star_pattern)
+        star_dfs = load_aunp_pick_star_dataframes(
+            aunps_dir, active_zone_indices, pattern=pick_pattern
+        )
         
         if not star_dfs:
-            print("No numeric aunp_tm_BP_active_zone_<N>_manual_refined.star files found.")
+            print(f"No AuNP pick STAR files found matching pattern {pick_pattern!r} in {aunps_dir}.")
             return {
                 'aunp_count': 0,
                 'status': 'completed',

@@ -1612,6 +1612,7 @@ def run_ampa_poses_analysis_original(
     aunp_membrane_distance=(17, 23),
     pdb_file=None,
     alignment_dir: Optional[str] = None,
+    aunp_pick_star_pattern=None,
 ):
     """
     Run the original AMPA poses analysis method (all_poses).
@@ -1626,6 +1627,8 @@ def run_ampa_poses_analysis_original(
         inter_aunp_distance: Tuple of (min, max) distance between AuNPs in nm
         aunp_membrane_distance: Tuple of (min, max) distance from AuNP to membrane in nm
         pdb_file: Path to PDB file for structure template
+        aunp_pick_star_pattern: Per-AZ pick STAR filename pattern with ``*`` for the active zone index
+            (default: ``aunp_tm_BP_active_zone_*_manual_refined.star``).
         
     Returns:
         Dictionary with analysis results
@@ -1649,19 +1652,27 @@ def run_ampa_poses_analysis_original(
         print(f"❌ AuNPs directory not found: {aunps_dir}")
         return {"status": "error", "message": "AuNPs directory not found"}
     
-    # Load AuNP files
-    aunp_files = []
+    from .aunps import discover_aunp_pick_star_files, normalize_aunp_pick_star_pattern
+
+    pick_pattern = normalize_aunp_pick_star_pattern(aunp_pick_star_pattern)
     if aunp_active_zones is not None:
-        for az_idx in aunp_active_zones:
-            star_file = aunps_dir / f"aunp_tm_BP_active_zone_{az_idx}_manual_refined.star"
-            if star_file.exists():
-                aunp_files.append(star_file)
+        print(f"  Loading active zones: {aunp_active_zones}")
     else:
-        # Load all numerically named active zone files in manual refined format.
-        aunp_files = sorted(aunps_dir.glob("aunp_tm_BP_active_zone_[0-9]*_manual_refined.star"))
+        print(f"  Loading pick STAR files matching pattern: {pick_pattern}")
+    discovered = discover_aunp_pick_star_files(
+        aunps_dir, aunp_active_zones, pattern=pick_pattern
+    )
+    aunp_files = [path for _, path in discovered]
+    for az_id, az_file in discovered:
+        print(f"    Found AZ {az_id}: {az_file.name}")
+    if aunp_active_zones is not None:
+        found_ids = {az_id for az_id, _ in discovered}
+        for az_id in aunp_active_zones:
+            if az_id not in found_ids:
+                print(f"    ⚠️  Missing pick STAR for active zone {az_id}")
     
     if not aunp_files:
-        print(f"❌ No AuNP files found in {aunps_dir}")
+        print(f"❌ No AuNP pick STAR files found matching {pick_pattern!r} in {aunps_dir}")
         return {"status": "error", "message": "No AuNP files found"}
     
     # Load and combine AuNP data
@@ -1961,6 +1972,7 @@ def run_ampa_poses_analysis_optimized(
     method="greedy",
     pdb_file=None,
     alignment_dir: Optional[str] = None,
+    aunp_pick_star_pattern=None,
 ):
     """
     Run optimized AMPA poses analysis for a tomogram.
@@ -1974,6 +1986,8 @@ def run_ampa_poses_analysis_optimized(
         ampa_steric_radius: Minimum distance between particle positions in nm
         method: Optimization method ("greedy" or "ilp")
         pdb_file: Path to PDB file for structure template (None to skip PDB generation)
+        aunp_pick_star_pattern: Per-AZ pick STAR filename pattern with ``*`` for the active zone index
+            (default: ``aunp_tm_BP_active_zone_*_manual_refined.star``).
         
     Returns:
         Dictionary with analysis results
@@ -1993,31 +2007,34 @@ def run_ampa_poses_analysis_optimized(
     if not aunps_dir.exists():
         raise FileNotFoundError(f"AuNPs directory not found: {aunps_dir}")
     
-    # Load AuNP files
-    aunp_files = []
+    from .aunps import discover_aunp_pick_star_files, normalize_aunp_pick_star_pattern
+
+    pick_pattern = normalize_aunp_pick_star_pattern(aunp_pick_star_pattern)
     if aunp_active_zones is not None:
-        # Load specific active zones
         print(f"  Loading active zones: {aunp_active_zones}")
-        for az_id in aunp_active_zones:
-            az_file = aunps_dir / f"aunp_tm_BP_active_zone_{az_id}_manual_refined.star"
-            if az_file.exists():
-                aunp_files.append(az_file)
-                print(f"    Found: {az_file.name}")
-            else:
-                print(f"    ⚠️  Missing: {az_file.name}")
     else:
-        # Load all numerically named active zone files in manual refined format.
-        print("  Loading all numerically named active zone files...")
-        aunp_files = sorted(aunps_dir.glob("aunp_tm_BP_active_zone_[0-9]*_manual_refined.star"))
-        if aunp_files:
-            print(f"    Found {len(aunp_files)} active zone files:")
-            for aunp_file in aunp_files:
-                print(f"      - {aunp_file.name}")
-        else:
-            print("    ⚠️  No numerically named active zone files found")
+        print(f"  Loading pick STAR files matching pattern: {pick_pattern}")
+    discovered = discover_aunp_pick_star_files(
+        aunps_dir, aunp_active_zones, pattern=pick_pattern
+    )
+    aunp_files = [path for _, path in discovered]
+    for az_id, az_file in discovered:
+        print(f"    Found AZ {az_id}: {az_file.name}")
+    missing = []
+    if aunp_active_zones is not None:
+        found_ids = {az_id for az_id, _ in discovered}
+        for az_id in aunp_active_zones:
+            if az_id not in found_ids:
+                missing.append(az_id)
+        for az_id in missing:
+            print(f"    ⚠️  Missing pick STAR for active zone {az_id}")
+    if not discovered and aunp_active_zones is None:
+        print(f"    ⚠️  No pick STAR files found matching {pick_pattern!r}")
     
     if not aunp_files:
-        raise FileNotFoundError(f"No AuNP files found in {aunps_dir}")
+        raise FileNotFoundError(
+            f"No AuNP pick STAR files found matching {pick_pattern!r} in {aunps_dir}"
+        )
     
     # Load and combine AuNP data
     print(f"  Loading {len(aunp_files)} AuNP files...")

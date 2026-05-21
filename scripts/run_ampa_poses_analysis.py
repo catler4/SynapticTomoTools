@@ -112,6 +112,16 @@ Examples:
         help="Path to PDB file for structure template. If provided, generates PDB files with AMPA structures at calculated poses. Leave empty to skip PDB generation."
     )
     
+    parser.add_argument(
+        "--aunp-pick-star-pattern",
+        type=str,
+        default=None,
+        help=(
+            "Per-active-zone AuNP pick STAR filename pattern; use '*' for the active zone index "
+            "(default: aunp_tm_BP_active_zone_*_manual_refined.star)"
+        ),
+    )
+    
     args = parser.parse_args()
     
     # Validate arguments only if cutoffs are enabled
@@ -149,6 +159,8 @@ Examples:
             print(f"PDB file: {args.pdb_file}")
         else:
             print("PDB file: None (skipping PDB generation)")
+        if args.aunp_pick_star_pattern:
+            print(f"AuNP pick STAR pattern: {args.aunp_pick_star_pattern}")
         print()
         
         # Set distance parameters based on cutoff flags
@@ -172,6 +184,7 @@ Examples:
                 aunp_membrane_distance=aunp_membrane_distance,
                 pdb_file=args.pdb_file,
                 alignment_dir=args.alignment_dir,
+                aunp_pick_star_pattern=args.aunp_pick_star_pattern,
             )
         else:
             results = run_ampa_poses_analysis_optimized(
@@ -184,6 +197,7 @@ Examples:
                 method=args.method,
                 pdb_file=args.pdb_file,
                 alignment_dir=args.alignment_dir,
+                aunp_pick_star_pattern=args.aunp_pick_star_pattern,
             )
         
         if results["status"] == "success":
