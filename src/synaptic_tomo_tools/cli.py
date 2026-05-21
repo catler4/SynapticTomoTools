@@ -230,8 +230,8 @@ def run_vesicles(
             # Note: Active zones are already filtered by the active zone analysis step
             # to only include zones with AuNPs, so vesicle analysis will automatically
             # use only the relevant active zones
-            # Use custom vesicle distance threshold if provided, otherwise use default (10.0)
-            threshold = vesicle_distance_threshold if vesicle_distance_threshold is not None else 10.0
+            # Use custom vesicle distance threshold if provided, otherwise use default (20.0)
+            threshold = vesicle_distance_threshold if vesicle_distance_threshold is not None else 20.0
             fusing_threshold = fusing_perimeter_threshold if fusing_perimeter_threshold is not None else 1.0
             vesicle_results = detect_vesicles(
                 tomo,
@@ -268,7 +268,8 @@ def run_vesicles(
 
 def generate_visualizations(tomo_paths, results_manager, rerun=False, print_ascii=True, csv_path=None, 
                             sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None,
-                            aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None):
+                            aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None,
+                            vesicle_distance_threshold=None, fusing_perimeter_threshold=None):
     """Generate visualization images for each tomogram after analysis is complete."""
     if print_ascii:
         print_synapse_ascii_art()
@@ -278,6 +279,9 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
         return
 
     from .visualization import run_combined_zonogram_analysis_single_tomogram
+
+    vdist = vesicle_distance_threshold if vesicle_distance_threshold is not None else 20.0
+    vfuse = fusing_perimeter_threshold if fusing_perimeter_threshold is not None else 1.0
 
     print("\nGenerating visualizations...")
     
@@ -329,6 +333,8 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
             # Generate the three visualization types
             # 1. In tomogram's own directory
             plot_tomogram_overlays(tomo, viz_output_dir, az_indices, rerun=rerun, alignment_dir=alignment_dir,
+                                   vesicle_distance_threshold=vdist,
+                                   fusing_perimeter_threshold=vfuse,
                                    sphere_size=sphere_size, sphere_color=sphere_color,
                                    aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
                                    aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
@@ -336,6 +342,8 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
             
             # 2. In the new organized structure
             plot_tomogram_overlays(tomo, tomogram_viz_dir, az_indices, rerun=rerun, alignment_dir=alignment_dir,
+                                   vesicle_distance_threshold=vdist,
+                                   fusing_perimeter_threshold=vfuse,
                                    sphere_size=sphere_size, sphere_color=sphere_color,
                                    aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
                                    aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
@@ -344,6 +352,8 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
             zonogram_result = run_combined_zonogram_analysis_single_tomogram(
                 tomo, None, aunp_active_zones, rerun,
                 alignment_dir=alignment_dir,
+                vesicle_distance_threshold=vdist,
+                fusing_perimeter_threshold=vfuse,
                 sphere_size=sphere_size, sphere_color=sphere_color,
                 aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
                 aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
@@ -481,7 +491,9 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
                             sphere_size=sphere_size, sphere_color=sphere_color,
                             aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
                             aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
-                            aunp_distance_cutoff_value=aunp_distance_cutoff_value)
+                            aunp_distance_cutoff_value=aunp_distance_cutoff_value,
+                            vesicle_distance_threshold=vesicle_distance_threshold,
+                            fusing_perimeter_threshold=fusing_perimeter_threshold)
     
     print("\n" + "="*80)
     print("ALL ANALYSES COMPLETED!")
@@ -534,7 +546,7 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
                     elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
                         az_indices.append(int(float(x)))
             # Use custom parameters if provided, otherwise use defaults
-            vesicle_threshold = vesicle_distance_threshold if vesicle_distance_threshold is not None else 10.0
+            vesicle_threshold = vesicle_distance_threshold if vesicle_distance_threshold is not None else 20.0
             eps = dbscan_eps if dbscan_eps is not None else 16.0
             min_samples = dbscan_min_samples if dbscan_min_samples is not None else 1
             
@@ -788,7 +800,7 @@ def main():
     )
     parser.add_argument(
         "--vesicle-distance-threshold", type=float, default=None,
-        help="Custom distance threshold for 'close' vesicles (nm). Default: 10.0"
+        help="Custom distance threshold for 'close' vesicles (nm). Default: 20.0"
     )
     parser.add_argument(
         "--dbscan-eps", type=float, default=None,
@@ -1008,7 +1020,9 @@ def main():
                                 sphere_size=sphere_size, sphere_color=sphere_color,
                                 aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
                                 aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
-                                aunp_distance_cutoff_value=aunp_distance_cutoff_value)
+                                aunp_distance_cutoff_value=aunp_distance_cutoff_value,
+                                vesicle_distance_threshold=vesicle_distance_threshold,
+                                fusing_perimeter_threshold=fusing_perimeter_threshold)
     elif args.analysis == "all":
         run_all_analyses(tomos, results_manager, rerun=args.rerun, csv_path=args.csv,
                          az_distance_min=az_distance_min, az_distance_max=az_distance_max,

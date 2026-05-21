@@ -968,9 +968,19 @@ def calculate_cleft_width(
                 'status': 'no_active_zones'
             }
         
+        tomogram_name = Path(tomogram_path).name
+        if set_name is None or set_name == "unknown":
+            path_parts = Path(tomogram_path).parts
+            set_name = "unknown"
+            for i, part in enumerate(path_parts):
+                if part.endswith("_tomograms") and i > 0:
+                    set_name = part.replace("_tomograms", "")
+                    break
+        
         # Calculate cleft width for each active zone
         cleft_results = {}
         all_distances = []
+        measurement_rows: List[Dict[str, Any]] = []
         
         for zone_name, zone_data in active_zones.items():
             cleft_stats = calculate_cleft_width_for_active_zone(
@@ -1002,6 +1012,24 @@ def calculate_cleft_width(
                     # Add all distances to the global list
                     all_distances.extend(distances_pre_to_post)
                     all_distances.extend(distances_post_to_pre)
+                    for d in distances_pre_to_post:
+                        measurement_rows.append({
+                            'tomogram_name': tomogram_name,
+                            'set_name': set_name,
+                            'alignment_dir': alignment_dir,
+                            'active_zone': zone_name,
+                            'direction': 'pre_to_post',
+                            'cleft_distance_nm': float(d),
+                        })
+                    for d in distances_post_to_pre:
+                        measurement_rows.append({
+                            'tomogram_name': tomogram_name,
+                            'set_name': set_name,
+                            'alignment_dir': alignment_dir,
+                            'active_zone': zone_name,
+                            'direction': 'post_to_pre',
+                            'cleft_distance_nm': float(d),
+                        })
         
         # Calculate overall statistics from all individual measurements
         if all_distances:
@@ -1017,16 +1045,6 @@ def calculate_cleft_width(
             }
             
             # --- Append to global results/all_cleft_distances.csv ---
-            tomogram_name = Path(tomogram_path).name
-            # Use provided set_name or extract from tomogram path
-            if set_name is None or set_name == "unknown":
-                path_parts = Path(tomogram_path).parts
-                set_name = "unknown"
-                for i, part in enumerate(path_parts):
-                    if part.endswith("_tomograms") and i > 0:
-                        set_name = part.replace("_tomograms", "")
-                        break
-            
             # Prepare average cleft distance data for CSV (one row per tomogram)
             import pandas as pd
             
@@ -1065,6 +1083,33 @@ def calculate_cleft_width(
             else:
                 df_cleft.to_csv(global_csv, index=False)
             print(f"Saved average cleft width for {tomogram_name} to {global_csv}")
+            
+            meas_csv = Path("results/activezone/all_cleft_measurements.csv")
+            df_meas = pd.DataFrame(measurement_rows)
+            if meas_csv.exists():
+                try:
+                    df_meas_existing = pd.read_csv(meas_csv)
+                    if 'alignment_dir' not in df_meas_existing.columns:
+                        df_meas_existing['alignment_dir'] = ''
+                    df_meas_existing = df_meas_existing[
+                        ~(
+                            (df_meas_existing['tomogram_name'] == tomogram_name)
+                            & (df_meas_existing['alignment_dir'] == alignment_dir)
+                        )
+                    ]
+                    pd.concat([df_meas_existing, df_meas], ignore_index=True).to_csv(
+                        meas_csv, index=False
+                    )
+                except Exception as e:
+                    print(f"Error updating global all_cleft_measurements.csv: {e}")
+                    df_meas.to_csv(meas_csv, index=False)
+            else:
+                df_meas.to_csv(meas_csv, index=False)
+            print(
+                f"Saved {len(measurement_rows)} individual cleft measurements for "
+                f"{tomogram_name} to {meas_csv}"
+            )
+            overall_stats['cleft_measurements_csv'] = str(meas_csv)
             # --- End global results ---
         else:
             raise ValueError("No cleft width measurements found. Cannot calculate cleft width statistics. Active zones must have both presynaptic and postsynaptic points.")

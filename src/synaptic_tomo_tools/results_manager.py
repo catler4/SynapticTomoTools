@@ -112,8 +112,8 @@ class ResultsManager:
             if '_nm2' not in col_name and '_um2' not in col_name and '_nm²' not in col_name and '_um²' not in col_name:
                 return f"{col_name}_um2"
         
-        # Volume measurements (µm³)
-        if 'volume' in col_name.lower():
+        # Volume measurements (µm³) — skip dimensionless names like sphericity_volume
+        if 'volume' in col_name.lower() and 'sphericity' not in col_name.lower():
             if '_nm3' not in col_name and '_um3' not in col_name and '_nm³' not in col_name and '_um³' not in col_name:
                 return f"{col_name}_um3"
         
@@ -124,7 +124,12 @@ class ResultsManager:
         
         # Coordinates (nm)
         if any(term in col_name.lower() for term in ['coordinate', 'center', 'point', 'x', 'y', 'z']):
-            if col_name.lower() in ['x', 'y', 'z'] or any(coord in col_name.lower() for coord in ['coordinatex', 'coordinatey', 'coordinatez', 'center_x', 'center_y', 'center_z', 'point_x', 'point_y', 'point_z']):
+            if col_name.lower() in ['x', 'y', 'z'] or any(coord in col_name.lower() for coord in [
+                'coordinatex', 'coordinatey', 'coordinatez',
+                'center_x', 'center_y', 'center_z',
+                'center_x_nm', 'center_y_nm', 'center_z_nm',
+                'point_x', 'point_y', 'point_z',
+            ]):
                 if '_nm' not in col_name and '_um' not in col_name:
                     return f"{col_name}_nm"
         

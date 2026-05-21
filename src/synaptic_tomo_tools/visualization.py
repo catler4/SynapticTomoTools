@@ -9,6 +9,8 @@ and saves the figures as output files.
 
 import os
 import sys
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -24,6 +26,11 @@ from scipy.spatial import KDTree
 # Import from the same package
 from .activezone import extract_active_zonogram
 from .alignment_utils import require_alignment_dir
+
+# Tomogram slice overlays: vesicle distance-class edge colors (nm semantics in legends elsewhere)
+VESICLE_VIZ_EDGE_FUSING = "aqua"
+VESICLE_VIZ_EDGE_CLOSE = "#C8A8E0"  # light purple / lilac
+VESICLE_VIZ_EDGE_FAR = "pink"
 
 
 def unpack_tomo_csv_row(tomo_info):
@@ -192,15 +199,15 @@ def load_aunps(tomo_path, active_zone_indices=None, *, alignment_dir: str):
     
     return df
 
-def load_fusion_points(tomo_path, *, alignment_dir: str):
-    """Load fusion points for vesicles within 20nm of active zone."""
+def load_fusion_points(tomo_path, *, alignment_dir: str, vesicle_distance_threshold: float = 20.0):
+    """Load fusion points for vesicles near the presynaptic active zone (see ``compute_fusion_points``)."""
     alignment_dir = require_alignment_dir(alignment_dir)
     try:
         from scipy.spatial import KDTree
         from .aunps import compute_fusion_points
         
         fusion_points = compute_fusion_points(
-            tomo_path, vesicle_distance_threshold=20.0, alignment_dir=alignment_dir
+            tomo_path, vesicle_distance_threshold=vesicle_distance_threshold, alignment_dir=alignment_dir
         )
         return fusion_points
     except Exception as e:
@@ -377,6 +384,8 @@ def load_specific_active_zone_coords(tomo_path, active_zone_indices, aunps, *, a
     return azs_pre, azs_post, azs_pre_inner, azs_post_inner
 
 def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None, rerun=False, *, alignment_dir: str,
+                           vesicle_distance_threshold: float = 20.0,
+                           fusing_perimeter_threshold: float = 1.0,
                            sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None,
                            aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None):
     """Generate 2D overlay plot and save to file. Only processes CSV-specified active zones."""
@@ -385,7 +394,9 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
     pre_mem = load_membrane_coords(tomo_path, 'presynaptic', alignment_dir=alignment_dir)
     post_mem = load_membrane_coords(tomo_path, 'postsynaptic', alignment_dir=alignment_dir)
     aunps = load_aunps(tomo_path, aunp_active_zone_indices, alignment_dir=alignment_dir)
-    fusion_points = load_fusion_points(tomo_path, alignment_dir=alignment_dir)
+    fusion_points = load_fusion_points(
+        tomo_path, alignment_dir=alignment_dir, vesicle_distance_threshold=vesicle_distance_threshold
+    )
     
     # Process active zones - auto-detect if none specified in CSV
     if aunp_active_zone_indices is None or len(aunp_active_zone_indices) == 0:
@@ -434,7 +445,8 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
             return
         _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center, vesicles, 
                                          pre_mem, post_mem, [], [], [], [], aunps, fusion_points, 
-                                         aunp_active_zone_indices, rerun, alignment_dir, "middle")
+                                         aunp_active_zone_indices, rerun, alignment_dir,
+                                         vesicle_distance_threshold, fusing_perimeter_threshold, "middle")
     else:
         # Generate visualizations for each active zone (CSV-specified or auto-detected)
         for az_id in aunp_active_zone_indices:
@@ -456,7 +468,8 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
             _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center, vesicles, 
                                              pre_mem, post_mem, azs_pre, azs_post, azs_pre_inner, azs_post_inner,
                                              aunps, fusion_points, 
-                                             aunp_active_zone_indices, rerun, alignment_dir, f"az{az_id}")
+                                             aunp_active_zone_indices, rerun, alignment_dir,
+                                             vesicle_distance_threshold, fusing_perimeter_threshold, f"az{az_id}")
 
 def _calculate_active_zone_center_from_aunps(aunps, active_zone_id):
     """Calculate the z_center of an active zone based on the center of AuNPs within that active zone."""
@@ -548,38 +561,103 @@ def _json_bool_truthy(x) -> bool:
     return False
 
 
-def _vesicle_distance_class_edge_style(v) -> dict:
+def _vesicle_az_proximate_for_viz(vesicle: dict, vesicle_distance_threshold_nm: float) -> bool:
+    """
+    Whether a vesicle counts as AZ-proximal for 2D overlays (fusion-site association, extra ring).
+
+    Prefer ``vesicle_distance_class`` / legacy flags when present; otherwise fall back to
+    ``distance_to_az <= vesicle_distance_threshold_nm``.
+    """
+    cls = vesicle.get("vesicle_distance_class")
+    if cls is not None and str(cls).strip():
+        s = str(cls).strip().lower()
+        if s in ("fusing", "fusion", "close"):
+            return True
+        if s == "far":
+            return False
+    if _json_bool_truthy(vesicle.get("is_fusing")) or _json_bool_truthy(vesicle.get("is_close")):
+        return True
+    d = vesicle.get("distance_to_az", float("nan"))
+    try:
+        d = float(d)
+    except (TypeError, ValueError):
+        d = float("nan")
+    thresh = float(vesicle_distance_threshold_nm)
+    return bool(np.isfinite(d) and d <= thresh)
+
+
+def _vesicle_viz_proximity_role(vesicle: dict, vesicle_distance_threshold_nm: float) -> Optional[str]:
+    """
+    For AZ-proximate vesicles in slice overlays, return ``\"fusing\"`` or ``\"close\"`` for coloring;
+    ``None`` if not AZ-proximate (draw as far / pink).
+    """
+    if not _vesicle_az_proximate_for_viz(vesicle, vesicle_distance_threshold_nm):
+        return None
+    cls = vesicle.get("vesicle_distance_class")
+    if cls is not None and str(cls).strip():
+        s = str(cls).strip().lower()
+        if s in ("fusing", "fusion"):
+            return "fusing"
+        if s == "close":
+            return "close"
+    if _json_bool_truthy(vesicle.get("is_fusing")):
+        return "fusing"
+    if _json_bool_truthy(vesicle.get("is_close")):
+        return "close"
+    return "close"
+
+
+def _vesicle_fusion_ring_edgecolor(vesicle: dict, vesicle_distance_threshold_nm: float) -> str:
+    """Edge color for the 40 nm fusion-site ring on active zonograms (fusing vs close)."""
+    if _vesicle_viz_proximity_role(vesicle, vesicle_distance_threshold_nm) == "fusing":
+        return VESICLE_VIZ_EDGE_FUSING
+    return VESICLE_VIZ_EDGE_CLOSE
+
+
+def _vesicle_distance_class_edge_style(
+    v, vesicle_distance_threshold_nm: Optional[float] = None
+) -> dict:
     """
     Matplotlib Circle kwargs from vesicle_results.json ``vesicle_distance_class``:
-    fusing, close, far, unknown. Fallback: ``is_fusing`` / ``is_close``; then non-finite
-    distance -> unknown; else far.
+    fusing (aqua), close (light purple), far (pink), unknown (gray).
+    Fallback: ``is_fusing`` / ``is_close``; then non-finite distance -> unknown; else if
+    ``vesicle_distance_threshold_nm`` is set and ``distance_to_az`` is within threshold,
+    treat as close (light purple); otherwise far (pink).
     """
     cls = v.get("vesicle_distance_class")
     if cls is not None and str(cls).strip():
         s = str(cls).strip().lower()
         if s in ("fusing", "fusion"):
-            return {"edgecolor": "crimson", "linewidth": 2.5, "alpha": 0.95}
+            return {"edgecolor": VESICLE_VIZ_EDGE_FUSING, "linewidth": 2.5, "alpha": 0.95}
         if s == "close":
-            return {"edgecolor": "aqua", "linewidth": 2.0, "alpha": 0.85}
+            return {"edgecolor": VESICLE_VIZ_EDGE_CLOSE, "linewidth": 2.0, "alpha": 0.85}
         if s == "far":
-            return {"edgecolor": "pink", "linewidth": 1.5, "alpha": 0.7}
+            return {"edgecolor": VESICLE_VIZ_EDGE_FAR, "linewidth": 1.5, "alpha": 0.7}
         if s == "unknown":
             return {"edgecolor": "gray", "linewidth": 1.5, "alpha": 0.65}
         return {"edgecolor": "gray", "linewidth": 1.5, "alpha": 0.65}
     if _json_bool_truthy(v.get("is_fusing")):
-        return {"edgecolor": "crimson", "linewidth": 2.5, "alpha": 0.95}
+        return {"edgecolor": VESICLE_VIZ_EDGE_FUSING, "linewidth": 2.5, "alpha": 0.95}
     if _json_bool_truthy(v.get("is_close")):
-        return {"edgecolor": "aqua", "linewidth": 2.0, "alpha": 0.85}
+        return {"edgecolor": VESICLE_VIZ_EDGE_CLOSE, "linewidth": 2.0, "alpha": 0.85}
     d = v.get("distance_to_az", float("nan"))
+    try:
+        d = float(d)
+    except (TypeError, ValueError):
+        return {"edgecolor": "gray", "linewidth": 1.5, "alpha": 0.65}
     if not np.isfinite(d):
         return {"edgecolor": "gray", "linewidth": 1.5, "alpha": 0.65}
-    return {"edgecolor": "pink", "linewidth": 1.5, "alpha": 0.7}
+    if vesicle_distance_threshold_nm is not None and d <= float(vesicle_distance_threshold_nm):
+        return {"edgecolor": VESICLE_VIZ_EDGE_CLOSE, "linewidth": 2.0, "alpha": 0.85}
+    return {"edgecolor": VESICLE_VIZ_EDGE_FAR, "linewidth": 1.5, "alpha": 0.7}
 
 
 def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center, vesicles, 
                                      pre_mem, post_mem, azs_pre, azs_post, azs_pre_inner, azs_post_inner,
                                      aunps, fusion_points, 
                                      aunp_active_zone_indices, rerun, alignment_dir: str,
+                                     vesicle_distance_threshold: float = 20.0,
+                                     fusing_perimeter_threshold: float = 1.0,
                                      suffix: str = ""):
     """Generate all visualization types for a specific slice."""
     alignment_dir = require_alignment_dir(alignment_dir)
@@ -599,7 +677,15 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
     azs_pre_inner_in_slice = filter_coords_in_slice(azs_pre_inner, z_center, z_thresh_az, None)
     azs_post_inner_in_slice = filter_coords_in_slice(azs_post_inner, z_center, z_thresh_az, None)
     aunps_near = filter_aunps_near_slice(aunps, z_center, z_thresh_aunps_fusion)
-    
+    vdist_nm = float(vesicle_distance_threshold)
+    vfuse_nm = float(fusing_perimeter_threshold)
+    lbl_legend_fusing = f"Vesicles fusing (< {vfuse_nm:g} nm)"
+    lbl_legend_close = f"Vesicles close (< {vdist_nm:g} nm)"
+    lbl_legend_far = f"Vesicles far (> {vdist_nm:g} nm)"
+    lbl_v_fusing = lbl_legend_fusing
+    lbl_v_close = lbl_legend_close
+    lbl_v_far = lbl_legend_far
+
     # Inner AZ colors: lighter red / green than pure outer; drawn under outer scatters
     inner_pre_rgb = (1.0, 0.52, 0.52)
     inner_post_rgb = (0.52, 1.0, 0.52)
@@ -638,6 +724,12 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
             d = v.get("distance_to_az", float("nan"))
             if not np.isfinite(d):
                 return "unknown"
+            try:
+                d = float(d)
+            except (TypeError, ValueError):
+                return "unknown"
+            if d <= vdist_nm:
+                return "close"
             return "far"
 
         for bucket in draw_order:
@@ -646,7 +738,7 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
                     continue
                 c = np.array(v["center"])
                 r = v["radius"]
-                st = _vesicle_distance_class_edge_style(v)
+                st = _vesicle_distance_class_edge_style(v, vdist_nm)
                 circ = Circle(
                     (c[0], c[1]),
                     r,
@@ -676,9 +768,9 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
                     label='Postsynaptic AZ (outer)' if 'Postsynaptic AZ (outer)' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
         
         legend_elements = [
-            Line2D([0], [0], color="crimson", lw=2.5, label="Vesicles fusing"),
-            Line2D([0], [0], color="aqua", lw=2, label="Vesicles close"),
-            Line2D([0], [0], color="pink", lw=1.5, label="Vesicles far"),
+            Line2D([0], [0], color=VESICLE_VIZ_EDGE_FUSING, lw=2.5, label=lbl_legend_fusing),
+            Line2D([0], [0], color=VESICLE_VIZ_EDGE_CLOSE, lw=2, label=lbl_legend_close),
+            Line2D([0], [0], color=VESICLE_VIZ_EDGE_FAR, lw=1.5, label=lbl_legend_far),
             Line2D([0], [0], color="gray", lw=1.5, label="Vesicles unknown"),
             Line2D([0], [0], color=inner_pre_rgb, lw=1.5, label='Presynaptic AZ (inner)'),
             Line2D([0], [0], color=inner_post_rgb, lw=1.5, label='Postsynaptic AZ (inner)'),
@@ -725,6 +817,12 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
             d = v.get("distance_to_az", float("nan"))
             if not np.isfinite(d):
                 return "unknown"
+            try:
+                d = float(d)
+            except (TypeError, ValueError):
+                return "unknown"
+            if d <= vdist_nm:
+                return "close"
             return "far"
 
         for bucket in draw_order_all:
@@ -733,7 +831,7 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
                     continue
                 c = np.array(v["center"])
                 r = v["radius"]
-                st = _vesicle_distance_class_edge_style(v)
+                st = _vesicle_distance_class_edge_style(v, vdist_nm)
                 circ = Circle(
                     (c[0], c[1]),
                     r,
@@ -794,9 +892,9 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
             )
 
         legend_all = [
-            Line2D([0], [0], color="crimson", lw=2.5, label="Vesicles fusing"),
-            Line2D([0], [0], color="aqua", lw=2, label="Vesicles close"),
-            Line2D([0], [0], color="pink", lw=1.5, label="Vesicles far"),
+            Line2D([0], [0], color=VESICLE_VIZ_EDGE_FUSING, lw=2.5, label=lbl_legend_fusing),
+            Line2D([0], [0], color=VESICLE_VIZ_EDGE_CLOSE, lw=2, label=lbl_legend_close),
+            Line2D([0], [0], color=VESICLE_VIZ_EDGE_FAR, lw=1.5, label=lbl_legend_far),
             Line2D([0], [0], color="gray", lw=1.5, label="Vesicles unknown"),
             Line2D([0], [0], color=inner_pre_rgb, lw=1.5, label="Presynaptic AZ (inner)"),
             Line2D([0], [0], color=inner_post_rgb, lw=1.5, label="Postsynaptic AZ (inner)"),
@@ -822,22 +920,33 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
         fig2, ax2 = plt.subplots(figsize=(12, 12))
         ax2.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax, origin='lower')
         
-        # Overlay vesicles with transparency
+        # Vesicles in slice: far / not AZ-proximate (pink), fusing (aqua), close (light purple)
         for v in vesicles_in_slice:
-            c = np.array(v['center'])
-            r = v['radius']
-            circ = Circle((c[0], c[1]), r, color='pink', fill=False, lw=1.5, alpha=0.7, 
-                         label='Vesicle' if 'Vesicle' not in [l.get_label() for l in ax2.get_legend_handles_labels()[0]] else '')
+            c = np.array(v["center"])
+            r = v["radius"]
+            role = _vesicle_viz_proximity_role(v, vdist_nm)
+            handles = ax2.get_legend_handles_labels()[0]
+            existing = [l.get_label() for l in handles]
+            if role == "fusing":
+                ec, lw, alpha = VESICLE_VIZ_EDGE_FUSING, 2.5, 0.88
+                lab = lbl_v_fusing if lbl_v_fusing not in existing else ""
+            elif role == "close":
+                ec, lw, alpha = VESICLE_VIZ_EDGE_CLOSE, 2.0, 0.88
+                lab = lbl_v_close if lbl_v_close not in existing else ""
+            else:
+                ec, lw, alpha = VESICLE_VIZ_EDGE_FAR, 1.5, 0.7
+                lab = lbl_v_far if lbl_v_far not in existing else ""
+            circ = Circle(
+                (c[0], c[1]),
+                r,
+                edgecolor=ec,
+                facecolor="none",
+                fill=False,
+                lw=lw,
+                alpha=alpha,
+                label=lab,
+            )
             ax2.add_patch(circ)
-        
-        # Highlight vesicles within 20 nm with transparency
-        for v in vesicles_in_slice:
-            if v.get('distance_to_az', 99) <= 20:
-                c = np.array(v['center'])
-                r = v['radius']
-                circ = Circle((c[0], c[1]), r, color='aqua', fill=False, lw=2, alpha=0.8, 
-                             label='<=20nm' if '<=20nm' not in [l.get_label() for l in ax2.get_legend_handles_labels()[0]] else '')
-                ax2.add_patch(circ)
         
         # Add AuNPs with transparency
         if aunps_near is not None:
@@ -846,18 +955,20 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
         
         # Show fusion points for membrane-adjacent vesicles that are being displayed
         if fusion_points is not None and len(fusion_points) > 0 and len(vesicles_in_slice) > 0:
-            # Filter to only membrane-adjacent vesicles (≤20 nm from active zone) that are being displayed
-            membrane_adjacent_vesicles_in_slice = [v for v in vesicles_in_slice if v.get('distance_to_az', 99) <= 20]
+            # AZ-proximate vesicles in this slice (same gating as aqua highlight)
+            membrane_adjacent_vesicles_in_slice = [
+                v for v in vesicles_in_slice if _vesicle_az_proximate_for_viz(v, vdist_nm)
+            ]
             
             if len(membrane_adjacent_vesicles_in_slice) > 0:
                 from scipy.spatial.distance import cdist
                 vesicle_centers = np.array([v['center'] for v in membrane_adjacent_vesicles_in_slice])
                 
-                # Find the closest fusion point to each membrane-adjacent vesicle being displayed
+                # Find the closest fusion point to each AZ-proximate vesicle being displayed
                 distances = cdist(vesicle_centers, fusion_points)
                 closest_fusion_indices = np.argmin(distances, axis=1)
                 
-                # Plot fusion points for membrane-adjacent vesicles being displayed
+                # Plot fusion points for AZ-proximate vesicles being displayed
                 plotted_fusion_points = set()
                 fusion_points_plotted = 0
                 
@@ -873,12 +984,13 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
                         plotted_fusion_points.add(fusion_point_tuple)
                         fusion_points_plotted += 1
             
-            # Plotted fusion points for all membrane-adjacent vesicles being displayed and near the slice
+            # Plotted fusion points for all AZ-proximate vesicles being displayed and near the slice
         
         # Add note about distance filtering to legend
         legend_elements = [
-            Line2D([0], [0], color='pink', lw=1.5, label='Vesicles (intersecting slice)'),
-            Line2D([0], [0], color='aqua', lw=2, label='Vesicles <20 nm from AZ'),
+            Line2D([0], [0], color=VESICLE_VIZ_EDGE_FUSING, lw=2.5, label=lbl_v_fusing),
+            Line2D([0], [0], color=VESICLE_VIZ_EDGE_CLOSE, lw=2, label=lbl_v_close),
+            Line2D([0], [0], color=VESICLE_VIZ_EDGE_FAR, lw=1.5, label=lbl_v_far),
             plt.scatter([], [], color='gold', s=30, label='AuNPs'),
             plt.scatter([], [], color='orange', s=100, marker='*', label='Fusion Sites')
         ]
@@ -899,22 +1011,32 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
         fig3, ax3 = plt.subplots(figsize=(12, 12))
         ax3.imshow(slice2d, cmap='gray', vmin=vmin, vmax=vmax, origin='lower')
         
-        # Overlay vesicles with transparency
         for v in vesicles_in_slice:
-            c = np.array(v['center'])
-            r = v['radius']
-            circ = Circle((c[0], c[1]), r, color='pink', fill=False, lw=1.5, alpha=0.7, 
-                         label='Vesicle' if 'Vesicle' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
+            c = np.array(v["center"])
+            r = v["radius"]
+            role = _vesicle_viz_proximity_role(v, vdist_nm)
+            handles = ax3.get_legend_handles_labels()[0]
+            existing = [l.get_label() for l in handles]
+            if role == "fusing":
+                ec, lw, alpha = VESICLE_VIZ_EDGE_FUSING, 2.5, 0.88
+                lab = lbl_v_fusing if lbl_v_fusing not in existing else ""
+            elif role == "close":
+                ec, lw, alpha = VESICLE_VIZ_EDGE_CLOSE, 2.0, 0.88
+                lab = lbl_v_close if lbl_v_close not in existing else ""
+            else:
+                ec, lw, alpha = VESICLE_VIZ_EDGE_FAR, 1.5, 0.7
+                lab = lbl_v_far if lbl_v_far not in existing else ""
+            circ = Circle(
+                (c[0], c[1]),
+                r,
+                edgecolor=ec,
+                facecolor="none",
+                fill=False,
+                lw=lw,
+                alpha=alpha,
+                label=lab,
+            )
             ax3.add_patch(circ)
-        
-        # Highlight vesicles within 20 nm with transparency
-        for v in vesicles_in_slice:
-            if v.get('distance_to_az', 99) <= 20:
-                c = np.array(v['center'])
-                r = v['radius']
-                circ = Circle((c[0], c[1]), r, color='aqua', fill=False, lw=2, alpha=0.8, 
-                             label='<=20nm' if '<=20nm' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
-                ax3.add_patch(circ)
         
         # Inner active zones (faded; underneath outer)
         for coords in azs_pre_inner_in_slice:
@@ -941,18 +1063,19 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
         
         # Show fusion points for membrane-adjacent vesicles that are being displayed
         if fusion_points is not None and len(fusion_points) > 0 and len(vesicles_in_slice) > 0:
-            # Filter to only membrane-adjacent vesicles (≤20 nm from active zone) that are being displayed
-            membrane_adjacent_vesicles_in_slice = [v for v in vesicles_in_slice if v.get('distance_to_az', 99) <= 20]
+            membrane_adjacent_vesicles_in_slice = [
+                v for v in vesicles_in_slice if _vesicle_az_proximate_for_viz(v, vdist_nm)
+            ]
             
             if len(membrane_adjacent_vesicles_in_slice) > 0:
                 from scipy.spatial.distance import cdist
                 vesicle_centers = np.array([v['center'] for v in membrane_adjacent_vesicles_in_slice])
                 
-                # Find the closest fusion point to each membrane-adjacent vesicle being displayed
+                # Find the closest fusion point to each AZ-proximate vesicle being displayed
                 distances = cdist(vesicle_centers, fusion_points)
                 closest_fusion_indices = np.argmin(distances, axis=1)
                 
-                # Plot fusion points for membrane-adjacent vesicles being displayed
+                # Plot fusion points for AZ-proximate vesicles being displayed
                 plotted_fusion_points = set()
                 fusion_points_plotted = 0
                 
@@ -968,12 +1091,13 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
                         plotted_fusion_points.add(fusion_point_tuple)
                         fusion_points_plotted += 1
             
-            # Plotted fusion points for all membrane-adjacent vesicles being displayed and near the slice
+            # Plotted fusion points for all AZ-proximate vesicles being displayed and near the slice
         
         # Add note about distance filtering to legend
         legend_elements = [
-            Line2D([0], [0], color='pink', lw=1.5, label='Vesicles (intersecting slice)'),
-            Line2D([0], [0], color='aqua', lw=2, label='Vesicles <20 nm from AZ'),
+            Line2D([0], [0], color=VESICLE_VIZ_EDGE_FUSING, lw=2.5, label=lbl_v_fusing),
+            Line2D([0], [0], color=VESICLE_VIZ_EDGE_CLOSE, lw=2, label=lbl_v_close),
+            Line2D([0], [0], color=VESICLE_VIZ_EDGE_FAR, lw=1.5, label=lbl_v_far),
             Line2D([0], [0], color=inner_pre_rgb, lw=1.5, label='Presynaptic AZ (inner)'),
             Line2D([0], [0], color=inner_post_rgb, lw=1.5, label='Postsynaptic AZ (inner)'),
             Line2D([0], [0], color='red', lw=1.5, label='Presynaptic AZ (outer)'),
@@ -1282,7 +1406,9 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
 
 def run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=None, root_dir=None, rerun=False,
                                             sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None,
-                                            aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None):
+                                            aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None,
+                                            vesicle_distance_threshold: float = 20.0,
+                                            fusing_perimeter_threshold: float = 1.0):
     """Run active zonogram analysis for all tomograms and generate PDF summaries."""
     try:
         # Import the combined zonogram analysis function
@@ -1314,6 +1440,8 @@ def run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=Non
                     aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
                     aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
                     aunp_distance_cutoff_value=aunp_distance_cutoff_value,
+                    vesicle_distance_threshold=vesicle_distance_threshold,
+                    fusing_perimeter_threshold=fusing_perimeter_threshold,
                 )
                 
                 if result.get('success', False):
@@ -1681,7 +1809,9 @@ def select_aunps_by_cluster_findingampa_style(active_zone_data, cluster_data, to
 def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_active_zones=None, rerun=False,
                                                     *, alignment_dir: str,
                                                     sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None,
-                                                    aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None):
+                                                    aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None,
+                                                    vesicle_distance_threshold: float = 20.0,
+                                                    fusing_perimeter_threshold: float = 1.0):
     """Run combined active zonogram analysis for a single tomogram - EXACT SAME CODE as original script."""
     from .activezone import (
         define_active_zone, define_active_zonogram, extract_active_zonogram,
@@ -2155,74 +2285,117 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                             axxz.scatter(pos[2], pos[1], s=circle_size, c='none', alpha=1.0, edgecolors=color, linewidth=1.5)
                             axyz.scatter(pos[0], pos[2], s=circle_size, c='none', alpha=1.0, edgecolors=color, linewidth=1.5)
                         
-                        # Add fusion points if available
+                        # Add fusion points if available (rings colored by source vesicle: fusing=aqua, close=purple)
                         fusion_points = []
                         fusion_points_transformed = []
+                        fusion_sources_filtered: list = []
                         try:
-                            # Try to load cached fusion points first
-                            fusion_points_cache_path = Path(tomogram_path) / alignment_dir / "STT_results" / "vesicles" / "fusion_points.npy"
-                            
-                            if fusion_points_cache_path.exists():
-                                try:
-                                    fusion_points = np.load(fusion_points_cache_path)
-                                except Exception as e:
-                                    print(f"Could not load cached fusion points: {e}")
-                            
-                            # Compute fusion points if not cached
-                            if len(fusion_points) == 0:
-                                try:
-                                    from .aunps import compute_fusion_points
-                                    fusion_points = compute_fusion_points(
-                                        tomogram_path, vesicle_distance_threshold=20.0, alignment_dir=alignment_dir
-                                    )
-                                except Exception as e:
-                                    print(f"Could not compute fusion points: {e}")
-                                    fusion_points = []
-                            
+                            from .aunps import compute_fusion_points_with_sources
+
+                            fusion_points, fusion_sources = compute_fusion_points_with_sources(
+                                tomogram_path,
+                                vesicle_distance_threshold=vesicle_distance_threshold,
+                                alignment_dir=alignment_dir,
+                            )
+                            fusion_points = np.asarray(fusion_points)
+
                             if len(fusion_points) > 0:
                                 # Transform fusion points to the same coordinate system as AuNPs
                                 from torch_affine_utils.utils import homogenise_coordinates
                                 import einops
-                                
-                                # Convert to homogeneous coordinates
-                                fusion_points_homog = homogenise_coordinates(torch.tensor(fusion_points, dtype=torch.float32))
-                                
-                                # Apply transformation matrix
+
+                                fusion_points_homog = homogenise_coordinates(
+                                    torch.tensor(fusion_points, dtype=torch.float32)
+                                )
+
                                 M = torch.tensor(original_zone_data['transformation_matrix'], dtype=torch.float32)
-                                transformed_fusion_points = M @ einops.rearrange(fusion_points_homog, 'b xyzw -> b xyzw 1')
-                                transformed_fusion_points = einops.rearrange(transformed_fusion_points, 'b xyzw 1 -> b xyzw')[:, :3]
-                                
-                                # Add offset to center in the zonogram
-                                center = original_zone_data['center']
+                                transformed_fusion_points = M @ einops.rearrange(
+                                    fusion_points_homog, "b xyzw -> b xyzw 1"
+                                )
+                                transformed_fusion_points = einops.rearrange(
+                                    transformed_fusion_points, "b xyzw 1 -> b xyzw"
+                                )[:, :3]
+
                                 extent = original_zone_data['extent']
                                 new_center = extent // 2
                                 fusion_points_transformed = transformed_fusion_points.numpy() + new_center
-                                
-                                # Filter points within the zonogram
-                                valid_mask = np.all(fusion_points_transformed >= 0, axis=1) & np.all(fusion_points_transformed < extent.reshape(1, -1), axis=1)
+
+                                valid_mask = np.all(fusion_points_transformed >= 0, axis=1) & np.all(
+                                    fusion_points_transformed < extent.reshape(1, -1), axis=1
+                                )
+                                fusion_sources_filtered = [
+                                    fusion_sources[i]
+                                    for i in range(len(fusion_sources))
+                                    if valid_mask[i]
+                                ]
                                 fusion_points_transformed = fusion_points_transformed[valid_mask]
-                                
+
+                                vdist_ring = float(vesicle_distance_threshold)
                                 if len(fusion_points_transformed) > 0:
-                                    # Plot fusion points as orange stars with cyan circles on all three views
-                                    for fp in fusion_points_transformed:
-                                        # Plot the orange star
-                                        axxy.scatter(fp[0], fp[1], color='orange', s=100, alpha=0.9, marker='*', 
-                                                   edgecolors='darkorange', linewidth=0.5)
-                                        axxz.scatter(fp[2], fp[1], color='orange', s=100, alpha=0.9, marker='*', 
-                                                   edgecolors='darkorange', linewidth=0.5)
-                                        axyz.scatter(fp[0], fp[2], color='orange', s=100, alpha=0.9, marker='*', 
-                                                   edgecolors='darkorange', linewidth=0.5)
-                                        
-                                        # Add dotted cyan circle (40 nm diameter = 20 nm radius)
-                                        # Note: Assuming 1 pixel = 1 nm for the circle radius
-                                        circle_radius = 20  # 20 nm radius for 40 nm diameter
-                                        circle_xy = plt.Circle((fp[0], fp[1]), circle_radius, fill=False, 
-                                                             color='cyan', linestyle=':', linewidth=1.5, alpha=0.8)
-                                        circle_xz = plt.Circle((fp[2], fp[1]), circle_radius, fill=False, 
-                                                             color='cyan', linestyle=':', linewidth=1.5, alpha=0.8)
-                                        circle_yz = plt.Circle((fp[0], fp[2]), circle_radius, fill=False, 
-                                                             color='cyan', linestyle=':', linewidth=1.5, alpha=0.8)
-                                        
+                                    circle_radius = 20  # 20 nm radius for 40 nm diameter
+                                    for fp, src_ves in zip(
+                                        fusion_points_transformed, fusion_sources_filtered
+                                    ):
+                                        ring_ec = _vesicle_fusion_ring_edgecolor(src_ves, vdist_ring)
+                                        axxy.scatter(
+                                            fp[0],
+                                            fp[1],
+                                            color="orange",
+                                            s=100,
+                                            alpha=0.9,
+                                            marker="*",
+                                            edgecolors="darkorange",
+                                            linewidth=0.5,
+                                        )
+                                        axxz.scatter(
+                                            fp[2],
+                                            fp[1],
+                                            color="orange",
+                                            s=100,
+                                            alpha=0.9,
+                                            marker="*",
+                                            edgecolors="darkorange",
+                                            linewidth=0.5,
+                                        )
+                                        axyz.scatter(
+                                            fp[0],
+                                            fp[2],
+                                            color="orange",
+                                            s=100,
+                                            alpha=0.9,
+                                            marker="*",
+                                            edgecolors="darkorange",
+                                            linewidth=0.5,
+                                        )
+
+                                        circle_xy = plt.Circle(
+                                            (fp[0], fp[1]),
+                                            circle_radius,
+                                            fill=False,
+                                            edgecolor=ring_ec,
+                                            linestyle=":",
+                                            linewidth=1.5,
+                                            alpha=0.85,
+                                        )
+                                        circle_xz = plt.Circle(
+                                            (fp[2], fp[1]),
+                                            circle_radius,
+                                            fill=False,
+                                            edgecolor=ring_ec,
+                                            linestyle=":",
+                                            linewidth=1.5,
+                                            alpha=0.85,
+                                        )
+                                        circle_yz = plt.Circle(
+                                            (fp[0], fp[2]),
+                                            circle_radius,
+                                            fill=False,
+                                            edgecolor=ring_ec,
+                                            linestyle=":",
+                                            linewidth=1.5,
+                                            alpha=0.85,
+                                        )
+
                                         axxy.add_patch(circle_xy)
                                         axxz.add_patch(circle_xz)
                                         axyz.add_patch(circle_yz)
@@ -2244,16 +2417,20 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                         
                         # Add fusion points to legend if they were plotted
                         if len(fusion_points) > 0 and len(fusion_points_transformed) > 0:
-                            # Create a custom legend entry showing both star and circle
-                            from matplotlib.patches import Circle
-                            from matplotlib.lines import Line2D
-                            
-                            # Create a custom legend handle that shows both elements
-                            fusion_handle = Line2D([0], [0], marker='*', color='w', markerfacecolor='orange', 
-                                                 markeredgecolor='darkorange', markersize=10, linewidth=0.5,
-                                                 linestyle=':', markeredgewidth=1.5)
+                            fusion_handle = Line2D(
+                                [0],
+                                [0],
+                                marker="*",
+                                color="w",
+                                markerfacecolor="orange",
+                                markeredgecolor="darkorange",
+                                markersize=10,
+                                linewidth=0.5,
+                                linestyle=":",
+                                markeredgewidth=1.5,
+                            )
                             legend_handles.append(fusion_handle)
-                            legend_labels.append('Fusion Sites (40nm)')
+                            legend_labels.append("Fusion sites")
                         
                         if legend_handles:
                             fig.legend(legend_handles, legend_labels, loc='lower right', bbox_to_anchor=(1.0, 0.0),
@@ -2333,18 +2510,19 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                             if zone_name in packing_density_data:
                                 zone_packing_data = packing_density_data[zone_name]
                                 v_array = np.array(zone_packing_data['v_array'])
-                                # Convert None (JSON null) back to NaN for masked edge vertices
-                                packing_coefficient = np.array(
-                                    [np.nan if x is None else x for x in zone_packing_data['packing_coefficient']]
-                                )
-                                # Use only interior vertices (non-NaN) for interpolation to avoid edge artifacts
-                                valid_mask = ~np.isnan(packing_coefficient)
-                                v_array_valid = v_array[valid_mask]
-                                packing_valid = packing_coefficient[valid_mask]
-
+                                packing_coefficient = np.array(zone_packing_data['packing_coefficient'])
+                                if packing_coefficient.dtype == object:
+                                    packing_coefficient = np.array(
+                                        [np.nan if x is None else float(x) for x in zone_packing_data['packing_coefficient']],
+                                        dtype=np.float64,
+                                    )
+                                    _ok = np.isfinite(packing_coefficient)
+                                    v_array = v_array[_ok]
+                                    packing_coefficient = packing_coefficient[_ok]
+                                
                                 # Transform coordinates to active zonogram space
-                                transformed_v = transform_coordinates_to_active_zonogram(v_array_valid, original_zone_data)
-
+                                transformed_v = transform_coordinates_to_active_zonogram(v_array, original_zone_data)
+                                
                                 if len(transformed_v) > 0:
                                     # Create figure EXACTLY the same way as regular active zonogram
                                     fig_packing = render_active_zonograms_findingampa_style(zonogram_findingampa)
@@ -2362,14 +2540,15 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                                     # Create grid for interpolation matching the base image shape exactly
                                     grid_y, grid_x = np.mgrid[0:base_image_shape[0], 0:base_image_shape[1]]
                                     
-                                    # Interpolate packing density onto the grid (only interior vertices)
-                                    # fill_value=nan so extrapolated regions stay transparent
+                                    # Interpolate packing density onto the grid
+                                    # transformed_v[:, :2] gives (x, y) coordinates
+                                    # griddata expects (xi, yi) as the grid, which is (grid_x, grid_y)
                                     density_map = griddata(
                                         transformed_v[:, :2],  # (x, y) points
-                                        packing_valid,
+                                        packing_coefficient,
                                         (grid_x, grid_y),  # Grid points (x, y)
                                         method='linear',
-                                        fill_value=np.nan
+                                        fill_value=0,
                                     )
                                     
                                     # Verify density_map shape matches base image exactly
@@ -2380,10 +2559,10 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                                                        base_image_shape[1] / density_map.shape[1])
                                         density_map = zoom(density_map, zoom_factors, order=1)
                                     
-                                    # Overlay the heatmap (mask NaN/edge regions so they stay transparent)
-                                    density_masked = np.ma.masked_invalid(density_map)
+                                    # Overlay the heatmap on the XY view (main view)
+                                    # Use the EXACT same extent as the base image to ensure perfect alignment
                                     im = axxy_packing.imshow(
-                                        density_masked,
+                                        density_map,
                                         cmap='hot',
                                         alpha=0.6,
                                         origin='lower',

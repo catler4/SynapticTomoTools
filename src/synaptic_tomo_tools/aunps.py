@@ -1,6 +1,6 @@
 # src/synaptic_tomo_tools/aunps.py
 
-from typing import List
+from typing import Any, Dict, List, Tuple
 import pandas as pd
 import numpy as np
 from scipy.spatial import KDTree, cKDTree
@@ -89,37 +89,38 @@ def calculate_packing_density_using_sliding_cylinder(
 
     return (v_array, packing_coefficient)
 
-def compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0, fusion_point_threshold=20.0, *, alignment_dir: str):
+def compute_fusion_points_with_sources(
+    tomogram_path,
+    vesicle_distance_threshold=20.0,
+    fusion_point_threshold=20.0,
+    *,
+    alignment_dir: str,
+) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
     """
-    For each vesicle within 20 nm of the presynaptic active zone, compute the putative fusion point as the average
-    of all presynaptic active zone points within 20 nm of any vesicle point. Supports multiple active zones.
-    Returns a list of fusion points (np.ndarray shape (N, 3)).
+    Same geometry as ``compute_fusion_points``, but also returns the source vesicle dict
+    for each fusion point (same row order as the returned array).
     """
     alignment_dir = require_alignment_dir(alignment_dir)
-    # Load vesicle results
     vesicles_file = Path(tomogram_path) / alignment_dir / "STT_results" / "vesicles" / "vesicle_results.json"
     if not vesicles_file.exists():
         print(f"No vesicle results found: {vesicles_file}")
-        return []
+        return np.zeros((0, 3)), []
     with open(vesicles_file, 'r') as f:
         vesicle_data = json.load(f)
     vesicles = vesicle_data['vesicles']
-    # Load presynaptic membranes and active zones
     membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir=alignment_dir)
-    fusion_points = []
+    fusion_points: List[np.ndarray] = []
+    sources: List[Dict[str, Any]] = []
     for vesicle in vesicles:
-        # Only consider vesicles within 10 nm of the presynaptic active zone
         if vesicle.get('distance_to_az', 0.0) > vesicle_distance_threshold:
             continue
         vesicle_points = np.array(vesicle['coordinates'])
-        # Find closest presynaptic membrane and its active zone points
         membrane_name = vesicle.get('closest_membrane', None)
         if not membrane_name or membrane_name not in membrane_active_zone_pairs:
             continue
         active_zone_points = membrane_active_zone_pairs[membrane_name]['active_zone_points']
         if active_zone_points is None or len(active_zone_points) == 0:
             continue
-        # For each vesicle point, find all active zone points within fusion_point_threshold
         tree = KDTree(active_zone_points)
         close_points = []
         for pt in vesicle_points:
@@ -129,10 +130,25 @@ def compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0, fusion
         if close_points:
             fusion_point = np.mean(np.vstack(close_points), axis=0)
             fusion_points.append(fusion_point)
+            sources.append(vesicle)
     if fusion_points:
-        return np.vstack(fusion_points)
-    else:
-        return np.zeros((0, 3))
+        return np.vstack(fusion_points), sources
+    return np.zeros((0, 3)), []
+
+
+def compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0, fusion_point_threshold=20.0, *, alignment_dir: str):
+    """
+    For each vesicle within ``vesicle_distance_threshold`` nm of the presynaptic active zone, compute the putative
+    fusion point as the average of presynaptic active zone points within ``fusion_point_threshold`` nm of any
+    vesicle point. Returns an array of shape (N, 3).
+    """
+    pts, _ = compute_fusion_points_with_sources(
+        tomogram_path,
+        vesicle_distance_threshold=vesicle_distance_threshold,
+        fusion_point_threshold=fusion_point_threshold,
+        alignment_dir=alignment_dir,
+    )
+    return pts
 
 
 def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, vesicle_distance_threshold=20.0,
@@ -156,7 +172,8 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
         fusing_perimeter_threshold: Distance threshold for fusing vesicles (default 1.0 nm)
         
     Returns:
-        DataFrame with vesicle info and AuNP distance histogram bins
+        (histogram_df, pairwise_df): wide histogram per vesicle, and one row per (vesicle, AuNP)
+        with fusion_point_to_aunp_distance_nm (same distances used for the histogram).
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     # Get tomogram name
@@ -166,7 +183,7 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
     vesicles_file = Path(tomogram_path) / alignment_dir / "STT_results" / "vesicles" / "vesicle_results.json"
     if not vesicles_file.exists():
         print(f"No vesicle results found: {vesicles_file}")
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
     
     with open(vesicles_file, 'r') as f:
         vesicle_data = json.load(f)
@@ -181,6 +198,7 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
     
     # Results list
     results = []
+    long_rows: List[dict] = []
     
     for vesicle_idx, vesicle in enumerate(vesicles):
         # Only consider vesicles within vesicle_distance_threshold of the presynaptic active zone
@@ -211,7 +229,6 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
                 )
                 continue
             if not is_fusing:
-                print(f"Skipping vesicle {vesicle_idx} in {tomogram_name}: not fusing.")
                 continue
         
         # Compute fusion point for this vesicle
@@ -226,15 +243,23 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
             continue
         
         fusion_point = np.mean(np.vstack(close_points), axis=0)
+        vesicle_name = f"{tomogram_name}_vesicle_{vesicle_idx}"
         
-        # Calculate distances from all AuNPs to this fusion point
+        # Calculate distances from all AuNPs to this fusion point (same array used for histogram bins)
         aunp_distances = np.linalg.norm(aunp_coords - fusion_point, axis=1)
+        for j, dist in enumerate(aunp_distances):
+            long_rows.append({
+                'tomogram_name': tomogram_name,
+                'alignment_dir': alignment_dir,
+                'vesicle_id': vesicle_idx,
+                'vesicle_name': vesicle_name,
+                'aunp_index': j,
+                'distance_to_presynaptic_az_nm': distance_to_az,
+                'fusion_point_to_aunp_distance_nm': float(dist),
+            })
         
         # Bin the distances into histogram
         hist, _ = np.histogram(aunp_distances, bins=bin_edges)
-        
-        # Create vesicle name identifier
-        vesicle_name = f"{tomogram_name}_vesicle_{vesicle_idx}"
         
         # Create result row
         result_row = {
@@ -260,14 +285,14 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
         
         results.append(result_row)
     
-    return pd.DataFrame(results)
+    return pd.DataFrame(results), pd.DataFrame(long_rows)
 
 def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                   *,
                   alignment_dir: str,
                   vesicle_distance_threshold=20.0, dbscan_eps=16.0, dbscan_min_samples=1,
                   cylinder_radius=25.0, receptor_crosssection=122.0, aunps_per_receptor=2.0,
-                  vertex_sampling_step=1, synaptic_designation_cutoff=30.0,
+                  vertex_sampling_step=50, synaptic_designation_cutoff=30.0,
                   min_cluster_size=4, fusion_point_threshold=20.0,
                   fusing_perimeter_threshold=1.0):
     """
@@ -764,47 +789,64 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             else:
                 print(f"No {vesicle_type} vesicles found for AuNP histogram analysis (bin{int(bin_width)})")
         
-        # --- Compute AuNP distance histograms per close vesicle (bin5) ---
+        def save_fusion_point_aunp_pairwise_csv(df_long: pd.DataFrame, csv_path: Path, vesicle_set_label: str):
+            """Append per-(vesicle, AuNP) fusion distances; same merge semantics as histogram CSVs."""
+            if df_long.empty:
+                print(f"No per-AuNP fusion-point distances for {vesicle_set_label} vesicles ({csv_path.name}).")
+                return
+            d = df_long.copy()
+            d['set_name'] = set_name
+            d['alignment_dir'] = alignment_dir
+            csv_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                if csv_path.exists():
+                    df_existing = pd.read_csv(csv_path)
+                    if 'alignment_dir' not in df_existing.columns:
+                        df_existing['alignment_dir'] = ''
+                    df_existing = df_existing[
+                        ~(
+                            (df_existing['tomogram_name'] == tomogram_name)
+                            & (df_existing['alignment_dir'] == alignment_dir)
+                        )
+                    ]
+                    pd.concat([df_existing, d], ignore_index=True).to_csv(csv_path, index=False)
+                else:
+                    d.to_csv(csv_path, index=False)
+                print(
+                    f"Saved {len(d)} fusion-point–AuNP distance rows ({vesicle_set_label}) to {csv_path}"
+                )
+            except Exception as e:
+                print(f"Error updating {csv_path.name}: {e}")
+                d.to_csv(csv_path, index=False)
+        
+        # --- Per-vesicle AuNP distance histogram (bin 5 nm only) + pairwise fusion distances ---
         print("Computing AuNP distance histograms for close vesicles (bin5)...")
-        df_vesicle_aunp_hist_bin5 = compute_aunp_distance_histograms_per_vesicle(
-            tomogram_path, coords, 
+        df_vesicle_aunp_hist_bin5, df_close_fusion_aunp_long = compute_aunp_distance_histograms_per_vesicle(
+            tomogram_path, coords,
             vesicle_distance_threshold=vesicle_distance_threshold,
             fusion_point_threshold=fusion_point_threshold,
             max_distance=500.0,
             bin_width=5.0,
             alignment_dir=alignment_dir,
         )
-        save_histogram_csv(df_vesicle_aunp_hist_bin5, Path("results/aunps/close_vesicles_aunp_histograms_bin5.csv"), "close", 5.0)
-        
-        # --- Compute AuNP distance histograms per close vesicle (bin10) ---
-        print("Computing AuNP distance histograms for close vesicles (bin10)...")
-        df_vesicle_aunp_hist_bin10 = compute_aunp_distance_histograms_per_vesicle(
-            tomogram_path, coords, 
-            vesicle_distance_threshold=vesicle_distance_threshold,
-            fusion_point_threshold=fusion_point_threshold,
-            max_distance=500.0,
-            bin_width=10.0,
-            alignment_dir=alignment_dir,
+        save_histogram_csv(
+            df_vesicle_aunp_hist_bin5,
+            Path("results/aunps/close_vesicles_aunp_histograms_bin5.csv"),
+            "close",
+            5.0,
         )
-        save_histogram_csv(df_vesicle_aunp_hist_bin10, Path("results/aunps/close_vesicles_aunp_histograms_bin10.csv"), "close", 10.0)
-        
-        # --- Compute AuNP distance histograms per close vesicle (bin50) ---
-        print("Computing AuNP distance histograms for close vesicles (bin50)...")
-        df_vesicle_aunp_hist_bin50 = compute_aunp_distance_histograms_per_vesicle(
-            tomogram_path, coords, 
-            vesicle_distance_threshold=vesicle_distance_threshold,
-            fusion_point_threshold=fusion_point_threshold,
-            max_distance=500.0,
-            bin_width=50.0,
-            alignment_dir=alignment_dir,
+        save_fusion_point_aunp_pairwise_csv(
+            df_close_fusion_aunp_long,
+            Path("results/aunps/close_vesicles_fusion_point_to_aunp_distances.csv"),
+            "close",
         )
-        save_histogram_csv(df_vesicle_aunp_hist_bin50, Path("results/aunps/close_vesicles_aunp_histograms_bin50.csv"), "close", 50.0)
-        # --- End close vesicle AuNP histograms ---
         
-        # --- Compute AuNP distance histograms per FUSING vesicle (bin5) ---
-        print(f"Computing AuNP distance histograms for fusing vesicles (distance <= {fusing_perimeter_threshold} nm to AZ, bin5)...")
-        df_fusing_vesicle_aunp_hist_bin5 = compute_aunp_distance_histograms_per_vesicle(
-            tomogram_path, coords, 
+        print(
+            f"Computing AuNP distance histograms for fusing vesicles "
+            f"(distance <= {fusing_perimeter_threshold} nm to AZ, bin5)..."
+        )
+        df_fusing_vesicle_aunp_hist_bin5, df_fusing_fusion_aunp_long = compute_aunp_distance_histograms_per_vesicle(
+            tomogram_path, coords,
             vesicle_distance_threshold=vesicle_distance_threshold,
             fusion_point_threshold=fusion_point_threshold,
             max_distance=500.0,
@@ -813,36 +855,18 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             fusing_perimeter_threshold=fusing_perimeter_threshold,
             alignment_dir=alignment_dir,
         )
-        save_histogram_csv(df_fusing_vesicle_aunp_hist_bin5, Path("results/aunps/fusing_vesicles_aunp_histograms_bin5.csv"), "fusing", 5.0)
-        
-        # --- Compute AuNP distance histograms per FUSING vesicle (bin10) ---
-        print(f"Computing AuNP distance histograms for fusing vesicles (distance <= {fusing_perimeter_threshold} nm to AZ, bin10)...")
-        df_fusing_vesicle_aunp_hist_bin10 = compute_aunp_distance_histograms_per_vesicle(
-            tomogram_path, coords, 
-            vesicle_distance_threshold=vesicle_distance_threshold,
-            fusion_point_threshold=fusion_point_threshold,
-            max_distance=500.0,
-            bin_width=10.0,
-            fusing_only=True,
-            fusing_perimeter_threshold=fusing_perimeter_threshold,
-            alignment_dir=alignment_dir,
+        save_histogram_csv(
+            df_fusing_vesicle_aunp_hist_bin5,
+            Path("results/aunps/fusing_vesicles_aunp_histograms_bin5.csv"),
+            "fusing",
+            5.0,
         )
-        save_histogram_csv(df_fusing_vesicle_aunp_hist_bin10, Path("results/aunps/fusing_vesicles_aunp_histograms_bin10.csv"), "fusing", 10.0)
-        
-        # --- Compute AuNP distance histograms per FUSING vesicle (bin50) ---
-        print(f"Computing AuNP distance histograms for fusing vesicles (distance <= {fusing_perimeter_threshold} nm to AZ, bin50)...")
-        df_fusing_vesicle_aunp_hist_bin50 = compute_aunp_distance_histograms_per_vesicle(
-            tomogram_path, coords, 
-            vesicle_distance_threshold=vesicle_distance_threshold,
-            fusion_point_threshold=fusion_point_threshold,
-            max_distance=500.0,
-            bin_width=50.0,
-            fusing_only=True,
-            fusing_perimeter_threshold=fusing_perimeter_threshold,
-            alignment_dir=alignment_dir,
+        save_fusion_point_aunp_pairwise_csv(
+            df_fusing_fusion_aunp_long,
+            Path("results/aunps/fusing_vesicles_fusion_point_to_aunp_distances.csv"),
+            "fusing",
         )
-        save_histogram_csv(df_fusing_vesicle_aunp_hist_bin50, Path("results/aunps/fusing_vesicles_aunp_histograms_bin50.csv"), "fusing", 50.0)
-        # --- End fusing vesicle AuNP histograms ---
+        # --- End per-vesicle AuNP outputs ---
         
         # --- Calculate packing density for each active zone ---
         packing_density_results = {}

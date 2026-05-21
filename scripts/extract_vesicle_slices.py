@@ -2,7 +2,7 @@
 """
 Vesicle Slice Extraction Script
 
-This script extracts slices from vesicles that are within 10nm of the presynaptic active zone membrane.
+This script extracts slices from vesicles that are within 20nm of the presynaptic active zone membrane.
 It saves PNG images of each vesicle slice with proper orientation and contrast adjustment.
 
 Usage:
@@ -639,12 +639,12 @@ def process_tomogram(tomogram_path, output_dir, alignment_dir: str):
     tomogram_output_dir = output_dir / tomogram_name
     tomogram_output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Process vesicles within 10nm of active zone
+    # Process vesicles within 20nm of active zone
     extracted_count = 0
     for i, vesicle in enumerate(vesicles):
-        # Check if vesicle is within 10nm of active zone
+        # Check if vesicle is within 20nm of active zone
         distance_to_az = vesicle.get('distance_to_az', float('inf'))
-        if distance_to_az > 10.0:
+        if distance_to_az > 20.0:
             continue
         
         # Get vesicle center and size information
@@ -1095,8 +1095,8 @@ def calculate_fusion_point_for_vesicle(vesicle, membrane_active_zone_pairs, fusi
     Returns:
         Fusion point coordinates (np.ndarray) or None if not found
     """
-    # Only consider vesicles within 10 nm of the presynaptic active zone
-    if vesicle.get('distance_to_az', 0.0) > 10.0:
+    # Only consider vesicles within 20 nm of the presynaptic active zone
+    if vesicle.get('distance_to_az', 0.0) > 20.0:
         return None
     
     vesicle_points = np.array(vesicle['coordinates'])

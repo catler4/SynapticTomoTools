@@ -66,7 +66,7 @@ class AnalysisPipelineGUI(tk.Tk):
         self.az_distance_min = tk.StringVar(value="10.0")
         self.az_distance_max = tk.StringVar(value="40.0")
         # Vesicle analysis parameters
-        self.vesicle_distance_threshold = tk.StringVar(value="10.0")
+        self.vesicle_distance_threshold = tk.StringVar(value="20.0")
         # AuNP analysis parameters
         self.dbscan_eps = tk.StringVar(value="16.0")
         self.dbscan_min_samples = tk.StringVar(value="1")
@@ -255,7 +255,7 @@ class AnalysisPipelineGUI(tk.Tk):
         ttk.Label(vesicle_frame, text="Close vesicle membrane distance cutoff (nm):").grid(row=0, column=0, sticky=tk.W, padx=5)
         vesicle_threshold_entry = ttk.Entry(vesicle_frame, textvariable=self.vesicle_distance_threshold, width=8)
         vesicle_threshold_entry.grid(row=0, column=1, padx=5)
-        ttk.Label(vesicle_frame, text="(default: 10.0)").grid(row=0, column=2, padx=5, sticky=tk.W)
+        ttk.Label(vesicle_frame, text="(default: 20.0)").grid(row=0, column=2, padx=5, sticky=tk.W)
         ttk.Label(vesicle_frame, text="Fusing vesicle membrane distance cutoff (nm):").grid(row=1, column=0, sticky=tk.W, padx=5)
         fusing_perimeter_threshold_entry = ttk.Entry(vesicle_frame, textvariable=self.fusing_perimeter_threshold, width=8)
         fusing_perimeter_threshold_entry.grid(row=1, column=1, padx=5)
@@ -338,7 +338,7 @@ class AnalysisPipelineGUI(tk.Tk):
         # Tooltips for custom parameters
         ToolTip(az_min_entry, "Active-zone minimum pre/post membrane distance in nm (default 10.0).")
         ToolTip(az_max_entry, "Active-zone maximum pre/post membrane distance in nm (default 40.0).")
-        ToolTip(vesicle_threshold_entry, "Close vesicle membrane distance cutoff in nm (default 10.0).")
+        ToolTip(vesicle_threshold_entry, "Close vesicle membrane distance cutoff in nm (default 20.0).")
         ToolTip(dbscan_eps_entry, "DBSCAN epsilon in nm for AuNP clustering neighborhood radius (default 16.0).")
         ToolTip(dbscan_min_samples_entry, "DBSCAN min_samples core-point threshold (default 1).")
         ToolTip(synaptic_cutoff_entry, "AuNP is labeled synaptic if distance to postsynaptic active outer membrane is <= this cutoff in nm (default 30.0).")
@@ -1306,7 +1306,7 @@ Do you want to continue?"""
         vesicle_frame.pack(fill=tk.X, pady=(0, 10))
         
         # Description
-        desc_label = ttk.Label(vesicle_frame, text="Extract 120x120 pixel slices from vesicles within 10nm of active zone membrane.\nGenerates three slice types: regular slice, thick slice (20nm), and MinIP (20nm).\nSlices are oriented with the closest active zone point pointing down.\nCreates both individual PNG files and a comprehensive PDF summary.")
+        desc_label = ttk.Label(vesicle_frame, text="Extract 120x120 pixel slices from vesicles within 20nm of active zone membrane.\nGenerates three slice types: regular slice, thick slice (20nm), and MinIP (20nm).\nSlices are oriented with the closest active zone point pointing down.\nCreates both individual PNG files and a comprehensive PDF summary.")
         desc_label.pack(pady=(0, 10))
         
         # Output directory

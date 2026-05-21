@@ -510,7 +510,7 @@ def save_vesicle_results(vesicles: List[Dict[str, Any]], tomogram_path, alignmen
 def detect_vesicles(
     tomogram_path,
     set_name=None,
-    vesicle_distance_threshold=10.0,
+    vesicle_distance_threshold=20.0,
     *,
     alignment_dir: str,
     fusing_perimeter_threshold: float = 1.0,
@@ -521,7 +521,7 @@ def detect_vesicles(
     Args:
         tomogram_path (str or Path): Path to the tomogram file.
         set_name (str, optional): Name of the experimental set.
-        vesicle_distance_threshold (float): Distance threshold for "close" vesicles (nm). Default: 10.0.
+        vesicle_distance_threshold (float): Distance threshold for "close" vesicles (nm). Default: 20.0.
     
     Returns:
         Dictionary containing vesicle detection results.
@@ -616,18 +616,18 @@ def detect_vesicles(
                     'set_name': set_name,
                     'alignment_dir': alignment_dir,
                     'vesicle_id': i,
-                    'center_x': vesicle['center'][0],
-                    'center_y': vesicle['center'][1],
-                    'center_z': vesicle['center'][2],
-                    'radius': vesicle['radius'],
-                    'diameter': vesicle['diameter'],
-                    'volume': vesicle['volume'],
-                    'distance_to_az': vesicle.get('distance_to_az', np.nan),
+                    'center_x_nm': vesicle['center'][0],
+                    'center_y_nm': vesicle['center'][1],
+                    'center_z_nm': vesicle['center'][2],
+                    'radius_nm': vesicle['radius'],
+                    'diameter_nm': vesicle['diameter'],
+                    'volume_nm3': vesicle['volume'],
+                    'distance_to_presynaptic_az_nm': vesicle.get('distance_to_az', np.nan),
                     'closest_membrane': vesicle.get('closest_membrane', 'unknown'),
                     'vesicle_distance_class': vesicle.get('vesicle_distance_class', 'unknown'),
                     'is_fusing': bool(vesicle.get('is_fusing', False)),
                     'is_close': bool(vesicle.get('is_close', False)),
-                    'sphericity_volume': sphericities[i]['sphericity_volume']
+                    'sphericity_volume': sphericities[i]['sphericity_volume'],
                 }
                 vesicle_rows.append(row)
             
@@ -727,7 +727,8 @@ def measure_distances_to_az(tomogram_path, alignment_dir: str) -> Dict[str, Any]
         tomogram_path (str or Path): Path to the tomogram file.
     
     Returns:
-        Dictionary containing distance measurement results.
+        Dictionary with distance stats and ``nearby_vesicle_count``: count of vesicles whose
+        ``vesicle_distance_class`` is ``fusing`` or ``close`` (same rule as ``detect_vesicles``; no distance fallback).
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     print(f"Loading vesicle distance measurements for {Path(tomogram_path).name}")
@@ -745,6 +746,7 @@ def measure_distances_to_az(tomogram_path, alignment_dir: str) -> Dict[str, Any]
                 'max_distance_to_az': 0.0,
                 'distance_std': 0.0,
                 'vesicle_az_distances': [],
+                'nearby_vesicle_count': 0,
                 'status': 'error',
                 'error': 'No vesicle results found'
             }
@@ -761,6 +763,7 @@ def measure_distances_to_az(tomogram_path, alignment_dir: str) -> Dict[str, Any]
                 'max_distance_to_az': 0.0,
                 'distance_std': 0.0,
                 'vesicle_az_distances': [],
+                'nearby_vesicle_count': 0,
                 'status': 'completed'
             }
         
@@ -788,17 +791,10 @@ def measure_distances_to_az(tomogram_path, alignment_dir: str) -> Dict[str, Any]
                 'status': 'completed'
             }
         
-        # Calculate nearby vesicle count using the same logic as detect_vesicles
-        nearby_vesicles = []
-        for vesicle in vesicles:
-            distance_class = vesicle.get('vesicle_distance_class')
-            if distance_class in ('fusing', 'close'):
-                nearby_vesicles.append(vesicle)
-                continue
-            distance_to_az = vesicle.get('distance_to_az', np.nan)
-            if np.isfinite(distance_to_az) and distance_to_az <= 10.0:
-                nearby_vesicles.append(vesicle)
+        # Nearby count: same definition as detect_vesicles (vesicle_distance_class only; no numeric fallback)
+        nearby_vesicles = [v for v in vesicles if v.get('vesicle_distance_class') in ('fusing', 'close')]
         nearby_vesicle_count = len(nearby_vesicles)
+        results['nearby_vesicle_count'] = nearby_vesicle_count
         
         return results
         
@@ -810,6 +806,7 @@ def measure_distances_to_az(tomogram_path, alignment_dir: str) -> Dict[str, Any]
             'max_distance_to_az': 0.0,
             'distance_std': 0.0,
             'vesicle_az_distances': [],
+            'nearby_vesicle_count': 0,
             'status': 'error',
             'error': str(e)
         }
