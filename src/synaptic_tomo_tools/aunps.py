@@ -113,6 +113,39 @@ def load_aunp_pick_star_dataframes(
     return star_dfs
 
 
+def load_active_zone_max_distance_nm_from_results(
+    tomogram_path,
+    alignment_dir: str,
+    results_dir: str = "results",
+) -> Optional[float]:
+    """
+    Load tomogram-level active_zone_max_distance (nm) from a prior activezone analysis run.
+
+    Returns None if results are missing or the field is absent/invalid.
+    """
+    alignment_dir = require_alignment_dir(alignment_dir)
+    from .results_manager import ResultsManager
+
+    tomogram_name = Path(tomogram_path).name
+    analysis_name = f"{tomogram_name}__{alignment_dir}"
+    stored = ResultsManager(results_dir).get_tomogram_results(analysis_name, "activezone")
+    if not stored or "results" not in stored:
+        return None
+    az_data = stored["results"].get("active_zone", {})
+    if not isinstance(az_data, dict):
+        return None
+    val = az_data.get("active_zone_max_distance")
+    if val is None:
+        return None
+    try:
+        fval = float(val)
+    except (TypeError, ValueError):
+        return None
+    if np.isfinite(fval) and fval > 0:
+        return fval
+    return None
+
+
 def calculate_packing_density_using_sliding_cylinder(
     active_zone: dict,
     active_zonogram: dict,
@@ -574,6 +607,22 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             df_valid['distance_to_postsynaptic_active_outer_inner_mean'] = np.full(coords.shape[0], np.nan)
             df_valid['synaptic_designation'] = "extrasynaptic"
         df_valid['distance_to_active_zone_center'] = distances_to_center
+
+        # Scaled center distance uses active_zone_max_distance from prior activezone analysis only.
+        active_zone_max_distance_nm = load_active_zone_max_distance_nm_from_results(
+            tomogram_path, alignment_dir
+        )
+        if active_zone_max_distance_nm is None:
+            print(
+                f"Error: active_zone_max_distance not found in prior active zone analysis for "
+                f"{Path(tomogram_path).name} ({alignment_dir}). "
+                "Skipping scaled_distance_to_active_zone_center (run activezone analysis first)."
+            )
+            df_valid['scaled_distance_to_active_zone_center'] = np.full(coords.shape[0], np.nan)
+        else:
+            df_valid['scaled_distance_to_active_zone_center'] = (
+                df_valid['distance_to_active_zone_center'] / active_zone_max_distance_nm
+            )
         # --- End active zone center calculation ---
 
         # --- KDTree nearest neighbor analysis (on filtered AuNPs) ---
@@ -737,6 +786,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             'active_zone', 'faCoordinateX_nm', 'faCoordinateY_nm', 'faCoordinateZ_nm',
             'nearest_neighbor_distance_nm', 'distance_to_presynaptic_nm', 'distance_to_postsynaptic_nm',
             'distance_to_fusion_point_nm', 'distance_to_active_zone_center_nm',
+            'scaled_distance_to_active_zone_center_nm',
             'distance_to_presynaptic_active_outer_nm', 'distance_to_postsynaptic_active_outer_nm',
             'distance_to_presynaptic_active_inner_nm', 'distance_to_postsynaptic_active_inner_nm',
             'distance_to_presynaptic_active_outer_inner_mean_nm', 'distance_to_postsynaptic_active_outer_inner_mean_nm',
@@ -746,6 +796,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         df_output = df_valid[['active_zone', 'faCoordinateX', 'faCoordinateY', 'faCoordinateZ',
                               'nearest_neighbor_distance', 'distance_to_presynaptic', 'distance_to_postsynaptic',
                               'distance_to_fusion_point', 'distance_to_active_zone_center',
+                              'scaled_distance_to_active_zone_center',
                               'distance_to_presynaptic_active_outer', 'distance_to_postsynaptic_active_outer',
                               'distance_to_presynaptic_active_inner', 'distance_to_postsynaptic_active_inner',
                               'distance_to_presynaptic_active_outer_inner_mean', 'distance_to_postsynaptic_active_outer_inner_mean',
@@ -781,6 +832,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             'distance_to_postsynaptic': 'distance_to_postsynaptic_nm',
             'distance_to_fusion_point': 'distance_to_fusion_point_nm',
             'distance_to_active_zone_center': 'distance_to_active_zone_center_nm',
+            'scaled_distance_to_active_zone_center': 'scaled_distance_to_active_zone_center_nm',
             'distance_to_presynaptic_active_outer': 'distance_to_presynaptic_active_outer_nm',
             'distance_to_postsynaptic_active_outer': 'distance_to_postsynaptic_active_outer_nm',
             'distance_to_presynaptic_active_inner': 'distance_to_presynaptic_active_inner_nm',

@@ -1654,10 +1654,22 @@ def select_aunps_findingampa_style(active_zone_data, aunp_data, tomogram_path, a
         return []
 
 
+def _postsynaptic_center_distance_column(aunp_df: "pd.DataFrame") -> Optional[str]:
+    """Column for mean of active-zone postsynaptic inner/outer distances (from analyze_aunps)."""
+    for col in (
+        "distance_to_postsynaptic_active_outer_inner_mean_nm",
+        "distance_to_postsynaptic_active_outer_inner_mean",
+    ):
+        if col in aunp_df.columns:
+            return col
+    return None
+
+
 def select_aunps_with_distances_findingampa_style(active_zone_data, aunp_data, tomogram_path, active_zone_id=0, original_zone_data=None,
                                                    *, alignment_dir: str):
     """
-    Select AuNPs for visualization with their distances to postsynaptic membrane.
+    Select AuNPs for visualization with distance to postsynaptic active-zone center
+    (mean of inner/outer active membrane distances from analyze_aunps).
     Only includes AuNPs that belong to the specified active zone.
     Returns a dict with 'positions' and 'distances' arrays.
     """
@@ -1701,14 +1713,14 @@ def select_aunps_with_distances_findingampa_style(active_zone_data, aunp_data, t
         # Get positions and distances
         aunp_positions = aunp_df[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values
         
-        # Get distance to postsynaptic membrane (try both column name variations)
-        if 'distance_to_postsynaptic_nm' in aunp_df.columns:
-            post_distances = aunp_df['distance_to_postsynaptic_nm'].values
-        elif 'distance_to_postsynaptic' in aunp_df.columns:
-            post_distances = aunp_df['distance_to_postsynaptic'].values
-        else:
-            print(f"Warning: distance_to_postsynaptic column not found in aunp_clusters.star")
+        dist_col = _postsynaptic_center_distance_column(aunp_df)
+        if dist_col is None:
+            print(
+                "Warning: distance_to_postsynaptic_active_outer_inner_mean not found in "
+                "aunp_clusters.star (re-run AuNP analysis to compute active-zone center distances)"
+            )
             return {'positions': np.array([]), 'distances': np.array([])}
+        post_distances = aunp_df[dist_col].values
 
     except Exception as e:
         print(f"Error loading AuNPs with distances in select_aunps_with_distances_findingampa_style: {e}")
@@ -2105,7 +2117,7 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                             print(f"    ✓ Saved PNG: {aunp_filename}")
                             files_created.append(aunp_filename)
                     
-                    # Generate distance-colored AuNP visualization (colored by distance to postsynaptic membrane)
+                    # Generate distance-colored AuNP visualization (postsynaptic active-zone center distance)
                     selected_aunps_with_distances = select_aunps_with_distances_findingampa_style(
                         zonogram_findingampa, None, tomogram_path, active_zone_id, original_zone_data,
                         alignment_dir=alignment_dir,
@@ -2167,7 +2179,10 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                                     sm.set_array([])
                                     cbar = fig.colorbar(sm, ax=[axxy, axxz, axyz], orientation='vertical', 
                                                        pad=0.02, aspect=30, shrink=0.8)
-                                    cbar.set_label('Distance to Postsynaptic Membrane (nm)', rotation=270, labelpad=20, fontsize=9)
+                                    cbar.set_label(
+                                        'Distance to Postsynaptic Active-Zone Center (nm)',
+                                        rotation=270, labelpad=20, fontsize=9,
+                                    )
                                 else:
                                     # All distances are NaN, plot with default color
                                     default_color = sphere_color if sphere_color is not None else 'gold'
@@ -2247,7 +2262,10 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                                         sm.set_array([])
                                         cbar = fig.colorbar(sm, ax=[axxy, axxz, axyz], orientation='vertical', 
                                                            pad=0.02, aspect=30, shrink=0.8)
-                                        cbar.set_label('Distance to Postsynaptic Membrane (nm)', rotation=270, labelpad=20, fontsize=9)
+                                        cbar.set_label(
+                                            'Distance to Postsynaptic Active-Zone Center (nm)',
+                                            rotation=270, labelpad=20, fontsize=9,
+                                        )
                                     
                                     fig.savefig(cutoff_path_results_organized, bbox_inches='tight')
                                     fig.savefig(cutoff_path_tomogram, bbox_inches='tight')

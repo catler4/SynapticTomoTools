@@ -5,10 +5,56 @@ from typing import Dict, Any, List, Tuple
 import numpy as np
 
 from .alignment_utils import require_alignment_dir
-from scipy.spatial.distance import cdist
-from scipy.spatial import KDTree
+from scipy.spatial.distance import cdist, pdist
+from scipy.spatial import ConvexHull, KDTree
 
 
+def _collect_active_zone_surface_points(zone_data: Dict[str, Any]) -> np.ndarray:
+    """All designated active-zone surface points (pre/post synaptic, inner and outer)."""
+    point_keys = (
+        'active_presynaptic_points',
+        'active_presynaptic_outer_points',
+        'active_presynaptic_inner_points',
+        'active_postsynaptic_points',
+        'active_postsynaptic_outer_points',
+        'active_postsynaptic_inner_points',
+    )
+    chunks: List[np.ndarray] = []
+    for key in point_keys:
+        pts = zone_data.get(key)
+        if pts is not None and len(pts) > 0:
+            chunks.append(np.asarray(pts, dtype=float))
+    if not chunks:
+        return np.zeros((0, 3))
+    return np.vstack(chunks)
+
+
+def compute_active_zone_max_distance_nm(zone_data: Dict[str, Any]) -> float:
+    """
+    Farthest distance between any two active-zone surface points (nm).
+
+    Includes all pre- and postsynaptic active-zone designated points (inner and outer).
+    Uses the 3D convex hull: the maximum pairwise distance in the full point set is always
+    attained by two hull vertices, so ``pdist`` is evaluated only on hull vertices.
+    Falls back to all points if the hull cannot be built (degenerate geometry).
+    """
+    points = _collect_active_zone_surface_points(zone_data)
+    n = len(points)
+    if n < 2:
+        return 0.0
+    if n == 2:
+        return float(np.linalg.norm(points[1] - points[0]))
+
+    try:
+        hull = ConvexHull(points, qhull_options="QJ")
+        hull_vertices = points[hull.vertices]
+        if len(hull_vertices) < 2:
+            return 0.0
+        if len(hull_vertices) == 2:
+            return float(np.linalg.norm(hull_vertices[1] - hull_vertices[0]))
+        return float(np.max(pdist(hull_vertices)))
+    except Exception:
+        return float(np.max(pdist(points)))
 
 
 def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]], tomogram_path, alignment_dir: str):
@@ -725,10 +771,16 @@ def define_active_zone(
         total_active_pre_points = sum(len(zone['active_presynaptic_points']) for zone in active_zones['active_zones'].values())
         total_active_post_points = sum(len(zone['active_postsynaptic_points']) for zone in active_zones['active_zones'].values())
         
-        # Calculate active zone areas using mesh surface area from GLB
+        # Calculate active zone areas and max point-to-point span per zone
         active_zone_pre_areas = []
         active_zone_post_areas = []
+        active_zone_max_distances_nm: List[float] = []
         for zone_name, zone_data in active_zones['active_zones'].items():
+            max_dist_nm = compute_active_zone_max_distance_nm(zone_data)
+            zone_data['active_zone_max_distance_nm'] = max_dist_nm
+            active_zone_max_distances_nm.append(max_dist_nm)
+            print(f"Active zone max distance {zone_name}: {max_dist_nm:.2f} nm")
+
             # Require presynaptic area data - raise error if missing
             if 'active_presynaptic_area' not in zone_data:
                 raise ValueError(f"No presynaptic mesh area data available for {zone_name}. All active zones must have area data.")
@@ -755,6 +807,9 @@ def define_active_zone(
         avg_active_zone_post_area = np.mean(active_zone_post_areas)
         total_active_zone_pre_area = np.sum(active_zone_pre_areas)
         total_active_zone_post_area = np.sum(active_zone_post_areas)
+        active_zone_max_distance = (
+            float(np.max(active_zone_max_distances_nm)) if active_zone_max_distances_nm else 0.0
+        )
         
         # Load membrane volumes
         volumes_data = load_membrane_volumes(tomogram_path, alignment_dir=alignment_dir)
@@ -768,6 +823,7 @@ def define_active_zone(
             'avg_active_zone_post_area': avg_active_zone_post_area,  # Postsynaptic area
             'total_active_zone_pre_area': total_active_zone_pre_area,  # Sum of all presynaptic areas
             'total_active_zone_post_area': total_active_zone_post_area,  # Sum of all postsynaptic areas (use this for AuNP density)
+            'active_zone_max_distance': active_zone_max_distance,  # Max span (nm) across zones; exported as *_nm in CSV
             'distance_range': active_zones['distance_range'],
             'active_zone_names': list(active_zones['active_zones'].keys()),
             'membrane_volumes': volumes_data,
@@ -785,6 +841,7 @@ def define_active_zone(
             'avg_active_zone_post_area': 0.0,
             'total_active_zone_pre_area': 0.0,
             'total_active_zone_post_area': 0.0,
+            'active_zone_max_distance': 0.0,
             'distance_range': (10.0, 40.0),
             'active_zone_names': [],
             'membrane_volumes': {},
