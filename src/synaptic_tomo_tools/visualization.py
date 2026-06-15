@@ -1654,6 +1654,20 @@ def select_aunps_findingampa_style(active_zone_data, aunp_data, tomogram_path, a
         return []
 
 
+def transform_positions_to_zonogram_coords(
+    positions: np.ndarray,
+    zonogram_findingampa,
+    original_zone_data: dict,
+) -> np.ndarray:
+    """Map world-space coordinates (nm) to active zonogram panel coordinates."""
+    center = np.asarray(original_zone_data["center"], dtype=float)
+    coordinate_system = np.asarray(original_zone_data["transformation_matrix"][:3, :3], dtype=float)
+    pts = np.atleast_2d(np.asarray(positions, dtype=float))
+    transformed = (pts - center) @ coordinate_system.T
+    transformed += np.floor(np.array(zonogram_findingampa[2].shape)[[2, 1, 0]] / 2)
+    return transformed
+
+
 def _postsynaptic_center_distance_column(aunp_df: "pd.DataFrame") -> Optional[str]:
     """Column for mean of active-zone postsynaptic inner/outer distances (from analyze_aunps)."""
     for col in (
@@ -2068,6 +2082,49 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                         plt.close(fig)
                         print(f"    ✓ Saved PNG: {png_filename}")
                         files_created.append(png_filename)
+
+                    # Active zonogram with active-zone center marked (mean pre/post membrane center)
+                    center_png_filename = (
+                        f"{tomogram_name}_active_zonogram_{zone_name}{suffix}_center.png"
+                    )
+                    center_path_results_organized = (
+                        results_active_zonograms_dir_full / center_png_filename
+                    )
+                    center_path_tomogram = tomogram_active_zonograms_dir / center_png_filename
+
+                    if (
+                        center_path_results_organized.exists()
+                        and center_path_tomogram.exists()
+                        and not rerun
+                    ):
+                        print(f"    Skipping {center_png_filename}, already exists.")
+                        files_created.append(center_png_filename)
+                    else:
+                        fig_center = render_active_zonograms_findingampa_style(
+                            zonogram_findingampa
+                        )
+                        axxy_c, axxz_c, axyz_c = fig_center.get_axes()
+                        az_center = np.asarray(original_zone_data["center"], dtype=float)
+                        center_pos = transform_positions_to_zonogram_coords(
+                            az_center.reshape(1, 3),
+                            zonogram_findingampa,
+                            original_zone_data,
+                        )[0]
+                        center_marker = dict(
+                            marker="x",
+                            c="red",
+                            s=120,
+                            linewidths=2.5,
+                            zorder=20,
+                        )
+                        axxy_c.scatter(center_pos[0], center_pos[1], **center_marker)
+                        axxz_c.scatter(center_pos[2], center_pos[1], **center_marker)
+                        axyz_c.scatter(center_pos[0], center_pos[2], **center_marker)
+                        fig_center.savefig(center_path_results_organized)
+                        fig_center.savefig(center_path_tomogram)
+                        plt.close(fig_center)
+                        print(f"    ✓ Saved PNG: {center_png_filename}")
+                        files_created.append(center_png_filename)
                     
                     # Extract active zone ID from the az_mapping
                     active_zone_id = None
