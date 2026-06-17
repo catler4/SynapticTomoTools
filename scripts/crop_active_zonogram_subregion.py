@@ -15,16 +15,16 @@ Non-interactive mode: pass --crop x0,y0,x1,y1 and optional --z-min / --z-max.
 Use --drag for rectangle drag selection instead of click-corners (less reliable on macOS).
 
 Example (interactive crop region):
-    python scripts/crop_active_zonogram_subregion.py \\
-        --set 15F1 \\
-        --tomogram 20240111_WaffleHipp_116 \\
-        --alignment-dir best_alignment \\
+    python scripts/crop_active_zonogram_subregion.py \
+        --set 15F1 \
+        --tomogram 20240111_WaffleHipp_116 \
+        --alignment-dir best_alignment \
         --zone-suffix active_zone_pre1_post1_az0
 
 Example (manual crop region)
-    python scripts/crop_active_zonogram_subregion.py \\
-        --mrc /path/to/{tomogram}_active_zonogram_{zone}.mrc \\
-        --crop 180,90,380,210 \\
+    python scripts/crop_active_zonogram_subregion.py \
+        --mrc /path/to/{tomogram}_active_zonogram_{zone}.mrc \
+        --crop 180,90,380,210 \
         --output-dir results/visualizations/20240111_WaffleHipp_116/best_alignment/active_zonograms/full
 
 Tomogram MRC discovery uses the same layout as the main pipeline:
