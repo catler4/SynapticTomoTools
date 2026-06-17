@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Crop a subregion from an existing active zonogram MRC and save a smaller zonogram
-PNG (three-panel XY / YZ / XZ layout) matching the full-pipeline format, plus a
-side-by-side stereo min-projection pair for cross-eyed / parallel viewing.
+PNG (three-panel XY / YZ / XZ layout) matching the full-pipeline format at
+1 pixel per voxel, plus a side-by-side stereo min-projection pair.
 
 Run after the main pipeline when you want a zoomed-in active zonogram for a
 subset of the synapse.
@@ -116,9 +116,6 @@ def crop_volume(
     return vol[z0:z1, y0:y1, x0:x1].contiguous()
 
 
-def zonogram_findingampa_tuple(vol: torch.Tensor):
-    return (np.eye(3), np.zeros(3), vol, ())
-
 
 def _rotate_volume_around_y(vol: np.ndarray, angle_deg: float) -> np.ndarray:
     """Rotate (Z, Y, X) volume around the Y axis."""
@@ -132,30 +129,45 @@ def _rotate_volume_around_y(vol: np.ndarray, angle_deg: float) -> np.ndarray:
     return affine_transform(vol, rot, offset=offset, order=1, mode="nearest")
 
 
-def render_stereo_view(vol: torch.Tensor, angle_deg: float = 6.0):
-    """Side-by-side stereo min projection pair (±angle around Y)."""
-    import matplotlib
+def _normalize_to_uint8(img: np.ndarray, vmin: float, vmax: float) -> np.ndarray:
+    scaled = (img.astype(np.float32) - vmin) / (vmax - vmin)
+    scaled = np.clip(scaled, 0.0, 1.0)
+    return (scaled * 255).astype(np.uint8)
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
+def composite_native_zonogram(vol: torch.Tensor) -> np.ndarray:
+    """
+    Build the 3-panel zonogram layout at 1 pixel per voxel (no matplotlib resampling).
+    Volume shape is (Z, Y, X). Output shape is (Y + Z, X + Z).
+    """
+    z_size, y_size, x_size = vol.shape
+    vmin, vmax = _imshow_limits(vol)
+
+    xy = torch.min(vol, dim=0).values.numpy()
+    yz = torch.min(vol, dim=2).values.T.numpy()
+    xz = torch.min(vol, dim=1).values.numpy()
+
+    canvas = np.full((y_size + z_size, x_size + z_size), vmin, dtype=np.float32)
+    canvas[0:y_size, 0:x_size] = xy
+    canvas[0:y_size, x_size : x_size + z_size] = yz
+    canvas[y_size : y_size + z_size, 0:x_size] = xz
+
+    # Match matplotlib origin='lower' when viewed in a normal image viewer.
+    return np.flipud(_normalize_to_uint8(canvas, vmin, vmax))
+
+
+def composite_native_stereo(vol: torch.Tensor, angle_deg: float) -> np.ndarray:
+    """Side-by-side stereo min-projection at 1 pixel per voxel. Output shape (Y, 2*X)."""
     vmin, vmax = _imshow_limits(vol)
     vol_np = vol.numpy()
     left = np.min(_rotate_volume_around_y(vol_np, -angle_deg), axis=0)
     right = np.min(_rotate_volume_around_y(vol_np, angle_deg), axis=0)
+    y_size, x_size = left.shape
 
-    fig_w = (vol.shape[2] * 2) / 50
-    fig_h = vol.shape[1] / 50
-    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(max(fig_w, 4), max(fig_h, 3)))
-    for ax, img, label in (
-        (ax_left, left, f"Left (-{angle_deg:g}°)"),
-        (ax_right, right, f"Right (+{angle_deg:g}°)"),
-    ):
-        ax.imshow(img, cmap="gray", interpolation="mitchell", vmin=vmin, vmax=vmax, origin="lower")
-        ax.axis("off")
-        ax.set_title(label, fontsize=8)
-    plt.tight_layout()
-    return fig
+    canvas = np.full((y_size, x_size * 2), vmin, dtype=np.float32)
+    canvas[:, :x_size] = left
+    canvas[:, x_size:] = right
+    return np.flipud(_normalize_to_uint8(canvas, vmin, vmax))
 
 
 def save_subregion(
@@ -165,25 +177,25 @@ def save_subregion(
     output_mrc: Path | None = None,
     output_stereo_png: Path | None = None,
     stereo_angle_deg: float = 6.0,
-    dpi: int = 100,
-) -> None:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    from synaptic_tomo_tools.visualization import render_active_zonograms_findingampa_style
+) -> tuple[tuple[int, int], tuple[int, int] | None]:
+    from PIL import Image
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
-    fig = render_active_zonograms_findingampa_style(zonogram_findingampa_tuple(cropped))
-    fig.savefig(output_png, dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
+
+    zonogram = composite_native_zonogram(cropped)
+    Image.fromarray(zonogram).save(output_png)
+    png_shape = (zonogram.shape[0], zonogram.shape[1])
+
+    stereo_shape = None
     if output_stereo_png is not None:
-        fig_stereo = render_stereo_view(cropped, angle_deg=stereo_angle_deg)
-        fig_stereo.savefig(output_stereo_png, dpi=dpi, bbox_inches="tight")
-        plt.close(fig_stereo)
+        stereo = composite_native_stereo(cropped, stereo_angle_deg)
+        Image.fromarray(stereo).save(output_stereo_png)
+        stereo_shape = (stereo.shape[0], stereo.shape[1])
+
     if output_mrc is not None:
         mrcfile.write(output_mrc, cropped.numpy(), overwrite=True)
+
+    return png_shape, stereo_shape
 
 
 def _parse_crop(s: str) -> tuple[float, float, float, float]:
@@ -659,9 +671,10 @@ def main() -> None:
         output_stereo_png=stereo_out,
         stereo_angle_deg=args.stereo_angle,
     )
-    print(f"Saved {png_path}")
+    z_size, y_size, x_size = cropped.shape
+    print(f"Saved {png_path} ({y_size + z_size} x {x_size + z_size} px, 1 px/voxel per panel)")
     if stereo_out is not None:
-        print(f"Saved {stereo_out}")
+        print(f"Saved {stereo_out} ({y_size} x {x_size * 2} px, 1 px/voxel)")
     if mrc_out is not None:
         print(f"Saved {mrc_out}")
 
