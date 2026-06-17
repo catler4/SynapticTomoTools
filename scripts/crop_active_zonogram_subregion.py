@@ -79,6 +79,8 @@ AUNP_COLORS = {
     "monomer": (161, 113, 177),  # #A171B1
     "dimer": (60, 84, 164),  # #3C54A4
 }
+AUNP_PHYSICAL_DIAMETER_NM = 2.0
+AUNP_POINT_MARKER_SIZE = 12
 
 
 def _imshow_limits(vol: torch.Tensor) -> tuple[float, float]:
@@ -425,9 +427,14 @@ def _overlay_aunps_on_stereo_axes(
     angle_deg: float,
     x_size: int,
     z_size: int,
+    aunp_diameter_nm: float | None = None,
 ) -> None:
+    from matplotlib.collections import PatchCollection
+    from matplotlib.patches import Circle
+
     center_x = (x_size - 1) / 2.0
     center_z = (z_size - 1) / 2.0
+    radius_nm = (aunp_diameter_nm / 2.0) if aunp_diameter_nm is not None else None
     for pts, label in ((monomer_xyz, "monomer"), (dimer_xyz, "dimer")):
         if pts.size == 0:
             continue
@@ -435,7 +442,23 @@ def _overlay_aunps_on_stereo_axes(
         color = _aunp_hex(label)
         for ax, angle in ((ax_left, -angle_deg), (ax_right, angle_deg)):
             xr, yr, _ = _rotate_points_y(x, y, z, angle, center_x, center_z)
-            ax.scatter(xr, yr, color=color, s=12, linewidths=0, zorder=5)
+            if radius_nm is None:
+                ax.scatter(xr, yr, color=color, s=AUNP_POINT_MARKER_SIZE, linewidths=0, zorder=5)
+            else:
+                circles = [
+                    Circle((float(xi), float(yi)), radius=radius_nm)
+                    for xi, yi in zip(xr, yr)
+                ]
+                ax.add_collection(
+                    PatchCollection(
+                        circles,
+                        facecolor=color,
+                        edgecolor="none",
+                        linewidths=0,
+                        zorder=5,
+                        match_original=True,
+                    )
+                )
 
 
 def render_stereo_figure(
@@ -444,6 +467,7 @@ def render_stereo_figure(
     *,
     monomer_xyz: np.ndarray | None = None,
     dimer_xyz: np.ndarray | None = None,
+    aunp_diameter_nm: float | None = None,
 ):
     import matplotlib.pyplot as plt
 
@@ -472,6 +496,7 @@ def render_stereo_figure(
             angle_deg=angle_deg,
             x_size=x_size,
             z_size=vol.shape[0],
+            aunp_diameter_nm=aunp_diameter_nm,
         )
     plt.tight_layout()
     return fig
@@ -510,6 +535,7 @@ def save_subregion(
     output_mrc: Path | None = None,
     output_stereo_png: Path | None = None,
     output_stereo_aunps_png: Path | None = None,
+    output_stereo_aunps_2nm_png: Path | None = None,
     output_membrane_png: Path | None = None,
     output_aunps_membranes_png: Path | None = None,
     full_vol: torch.Tensor | None = None,
@@ -571,6 +597,21 @@ def save_subregion(
                 dimer_xyz=dimer_xyz,
             ),
             output_stereo_aunps_png,
+            dpi=dpi,
+        )
+
+    if output_stereo_aunps_2nm_png is not None:
+        if monomer_xyz is None or dimer_xyz is None:
+            raise ValueError("Stereo AuNP 2nm PNG requires monomer_xyz and dimer_xyz")
+        _save_matplotlib_figure(
+            render_stereo_figure(
+                cropped,
+                stereo_angle_deg,
+                monomer_xyz=monomer_xyz,
+                dimer_xyz=dimer_xyz,
+                aunp_diameter_nm=AUNP_PHYSICAL_DIAMETER_NM,
+            ),
+            output_stereo_aunps_2nm_png,
             dpi=dpi,
         )
 
@@ -987,6 +1028,11 @@ def parse_args() -> argparse.Namespace:
         help="Skip stereo PNG with monomer (purple) and dimer (blue) AuNP picks",
     )
     parser.add_argument(
+        "--no-stereo-aunps-2nm",
+        action="store_true",
+        help="Skip stereo PNG with ~2 nm diameter AuNP markers",
+    )
+    parser.add_argument(
         "--no-aunps-membranes",
         action="store_true",
         help="Skip 3-panel PNG with membranes and AuNP picks overlaid",
@@ -1060,6 +1106,11 @@ def main() -> None:
     stereo_out = None if args.no_stereo else out_dir / f"{stem}_stereo.png"
     membrane_out = None if args.no_membranes else out_dir / f"{stem}_membranes.png"
     stereo_aunps_out = None if args.no_stereo or args.no_stereo_aunps else out_dir / f"{stem}_stereo_aunps.png"
+    stereo_aunps_2nm_out = (
+        None
+        if args.no_stereo or args.no_stereo_aunps or args.no_stereo_aunps_2nm
+        else out_dir / f"{stem}_stereo_aunps_2nm.png"
+    )
     aunps_membranes_out = (
         None
         if args.no_aunps_membranes or args.no_membranes
@@ -1076,13 +1127,18 @@ def main() -> None:
     active_zone = _parse_az_index(zone_suffix) if zone_suffix else None
 
     needs_membranes = membrane_out is not None or aunps_membranes_out is not None
-    needs_aunps = stereo_aunps_out is not None or aunps_membranes_out is not None
+    needs_aunps = (
+        stereo_aunps_out is not None
+        or stereo_aunps_2nm_out is not None
+        or aunps_membranes_out is not None
+    )
 
     if needs_membranes or needs_aunps:
         if not zone_suffix or active_zone is None:
             print("Warning: could not determine active zone from zone suffix; skipping overlay PNGs.")
             membrane_out = None
             stereo_aunps_out = None
+            stereo_aunps_2nm_out = None
             aunps_membranes_out = None
         else:
             zone_name = _parse_zone_suffix(zone_suffix)
@@ -1111,6 +1167,7 @@ def main() -> None:
                 except Exception as exc:
                     print(f"Warning: could not load AuNP picks ({exc}); skipping AuNP overlay PNGs.")
                     stereo_aunps_out = None
+                    stereo_aunps_2nm_out = None
                     aunps_membranes_out = None
 
     save_subregion(
@@ -1119,6 +1176,7 @@ def main() -> None:
         output_mrc=mrc_out,
         output_stereo_png=stereo_out,
         output_stereo_aunps_png=stereo_aunps_out,
+        output_stereo_aunps_2nm_png=stereo_aunps_2nm_out,
         output_membrane_png=membrane_out,
         output_aunps_membranes_png=aunps_membranes_out,
         full_vol=vol,
@@ -1144,6 +1202,11 @@ def main() -> None:
         n_mono = len(monomer_xyz) if monomer_xyz is not None else 0
         n_dimer = len(dimer_xyz) if dimer_xyz is not None else 0
         print(f"Saved {stereo_aunps_out} (stereo with {n_mono} monomer + {n_dimer} dimer picks)")
+    if stereo_aunps_2nm_out is not None:
+        print(
+            f"Saved {stereo_aunps_2nm_out} "
+            f"(stereo with {AUNP_PHYSICAL_DIAMETER_NM:g} nm diameter AuNP markers)"
+        )
     if stereo_out is not None:
         print(f"Saved {stereo_out} (stereo min-projection pair)")
     if mrc_out is not None:
