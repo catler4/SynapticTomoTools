@@ -40,23 +40,14 @@ def render_active_zonograms_findingampa_style(active_zone_data):
     # Draw arrows for coordinate system in xy plane
     axxy.quiver(0, 0, 0, 50, color='g', angles='xy', scale_units='xy', units="xy", width=1, scale=1, clip_on=False)
     axxy.quiver(0, 0, 50, 0, color='r', angles='xy', scale_units='xy', units="xy", width=1, scale=1, clip_on=False)
-    # Add scale bar text for xy plane
-    axxy.text(25, 5, '50 nm', color='white', fontsize=8, ha='center', va='bottom', 
-              bbox=dict(boxstyle='round,pad=0.2', facecolor='black', alpha=0.7))
     
     axyz.imshow(torch.min(res_ddw, axis=2).values.T, cmap='gray', interpolation='mitchell', vmax=-0., vmin=-20*res_ddw.std(), origin='lower')
     axyz.quiver(0, 0, 0, 50, color='g', angles='xy', scale_units='xy', units="xy", width=1, scale=1, clip_on=False)
     axyz.quiver(0, 0, 50, 0, color='b', angles='xy', scale_units='xy', units="xy", width=1, scale=1, clip_on=False)
-    # Add scale bar text for yz plane
-    axyz.text(25, 5, '50 nm', color='white', fontsize=8, ha='center', va='bottom', 
-              bbox=dict(boxstyle='round,pad=0.2', facecolor='black', alpha=0.7))
     
     axxz.imshow(torch.min(res_ddw, axis=1).values, cmap='gray', interpolation='mitchell', vmax=-0., vmin=-20*res_ddw.std(), origin='lower')
     axxz.quiver(0, 0, 0, 50, color='b', angles='xy', scale_units='xy', units="xy", width=1, scale=1, clip_on=False)
     axxz.quiver(0, 0, 50, 0, color='r', angles='xy', scale_units='xy', units="xy", width=1, scale=1, clip_on=False)
-    # Add scale bar text for xz plane
-    axxz.text(25, 5, '50 nm', color='white', fontsize=8, ha='center', va='bottom', 
-              bbox=dict(boxstyle='round,pad=0.2', facecolor='black', alpha=0.7))
     # Hide axes 
     axxy.axis('off')
     axxz.axis('off')
