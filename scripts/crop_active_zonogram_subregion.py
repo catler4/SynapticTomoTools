@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Crop a subregion from an existing active zonogram MRC and save a smaller zonogram
-PNG (three-panel XY / YZ / XZ layout) matching the full-pipeline format at
-1 pixel per voxel, plus optional stereo and membrane-overlay PNGs (pre/post
-inner/outer on YZ and XZ panels, same colors as slice overlays).
+PNG (three-panel XY / YZ / XZ layout) using the same findingampa/matplotlib
+style as the full pipeline, plus optional stereo and overlay PNGs (membranes
+on YZ/XZ; monomer/dimer AuNP picks on stereo and/or 3-panel views).
 
 Run after the main pipeline when you want a zoomed-in active zonogram for a
 subset of the synapse.
@@ -147,53 +147,17 @@ def _rotate_volume_around_y(vol: np.ndarray, angle_deg: float) -> np.ndarray:
     return affine_transform(vol, rot, offset=offset, order=1, mode="nearest")
 
 
-def _normalize_to_uint8(img: np.ndarray, vmin: float, vmax: float) -> np.ndarray:
-    scaled = (img.astype(np.float32) - vmin) / (vmax - vmin)
-    scaled = np.clip(scaled, 0.0, 1.0)
-    return (scaled * 255).astype(np.uint8)
+def zonogram_findingampa_tuple(vol: torch.Tensor):
+    return (np.eye(3), np.zeros(3), vol, ())
 
 
-def _float_zonogram_canvas(vol: torch.Tensor) -> tuple[np.ndarray, float, float, int, int, int]:
-    z_size, y_size, x_size = vol.shape
-    vmin, vmax = _imshow_limits(vol)
-    xy = torch.min(vol, dim=0).values.numpy()
-    yz = torch.min(vol, dim=2).values.T.numpy()
-    xz = torch.min(vol, dim=1).values.numpy()
-    canvas = np.full((y_size + z_size, x_size + z_size), vmin, dtype=np.float32)
-    canvas[0:y_size, 0:x_size] = xy
-    canvas[0:y_size, x_size : x_size + z_size] = yz
-    canvas[y_size : y_size + z_size, 0:x_size] = xz
-    return canvas, vmin, vmax, y_size, z_size, x_size
+def _mpl_rgb(color: tuple[int, int, int]) -> tuple[float, float, float]:
+    return (color[0] / 255.0, color[1] / 255.0, color[2] / 255.0)
 
 
-def composite_native_zonogram(vol: torch.Tensor) -> np.ndarray:
-    """
-    Build the 3-panel zonogram layout at 1 pixel per voxel (no matplotlib resampling).
-    Volume shape is (Z, Y, X). Output shape is (Y + Z, X + Z).
-    """
-    canvas, vmin, vmax, _, _, _ = _float_zonogram_canvas(vol)
-    return np.flipud(_normalize_to_uint8(canvas, vmin, vmax))
-
-
-def _gray_to_rgb(gray: np.ndarray) -> np.ndarray:
-    return np.stack([gray, gray, gray], axis=-1)
-
-
-def _blend_points(
-    rgb: np.ndarray,
-    rows: np.ndarray,
-    cols: np.ndarray,
-    color: tuple[int, int, int],
-    alpha: float,
-) -> None:
-    if rows.size == 0:
-        return
-    h, w = rgb.shape[:2]
-    rows = np.clip(np.round(rows).astype(int), 0, h - 1)
-    cols = np.clip(np.round(cols).astype(int), 0, w - 1)
-    underlying = rgb[rows, cols].astype(np.float32)
-    tint = np.array(color, dtype=np.float32)
-    rgb[rows, cols] = np.clip(underlying * (1.0 - alpha) + tint * alpha, 0, 255).astype(np.uint8)
+def _aunp_hex(label: str) -> str:
+    r, g, b = AUNP_COLORS[label]
+    return f"#{r:02x}{g:02x}{b:02x}"
 
 
 def _parse_az_index(zone_suffix: str) -> int | None:
@@ -371,13 +335,94 @@ def _rotate_points_y(
     return xr, y, zr
 
 
-def _stamp_stereo_aunps(
-    rgb: np.ndarray,
+def _overlay_membranes_on_zonogram_axes(
+    axyz,
+    axxz,
+    *,
+    membrane_surfaces: dict[str, np.ndarray],
+    full_vol: torch.Tensor,
+    zone_data: dict,
+    bounds: tuple[int, int, int, int, int, int],
+) -> None:
+    for layer in ("pre_inner", "post_inner", "pre_outer", "post_outer"):
+        x_c, y_c, z_c = _transform_membrane_to_crop(
+            membrane_surfaces[layer],
+            full_vol=full_vol,
+            zone_data=zone_data,
+            bounds=bounds,
+        )
+        if x_c.size == 0:
+            continue
+        style = MEMBRANE_STYLE[layer]
+        color = _mpl_rgb(style["color"])
+        axyz.scatter(z_c, y_c, color=color, s=3, alpha=style["alpha"], linewidths=0, zorder=4)
+        axxz.scatter(x_c, z_c, color=color, s=3, alpha=style["alpha"], linewidths=0, zorder=4)
+
+
+def _overlay_aunps_on_zonogram_axes(
+    axxy,
+    axyz,
+    axxz,
+    *,
+    monomer_xyz: np.ndarray,
+    dimer_xyz: np.ndarray,
+) -> None:
+    for pts, label in ((monomer_xyz, "monomer"), (dimer_xyz, "dimer")):
+        if pts.size == 0:
+            continue
+        x, y, z = pts[:, 0], pts[:, 1], pts[:, 2]
+        color = _aunp_hex(label)
+        axxy.scatter(x, y, color=color, s=12, linewidths=0, zorder=5)
+        axyz.scatter(z, y, color=color, s=12, linewidths=0, zorder=5)
+        axxz.scatter(x, z, color=color, s=12, linewidths=0, zorder=5)
+
+
+def render_cropped_zonogram_figure(
+    cropped: torch.Tensor,
+    *,
+    full_vol: torch.Tensor | None = None,
+    zone_data: dict | None = None,
+    membrane_surfaces: dict[str, np.ndarray] | None = None,
+    bounds: tuple[int, int, int, int, int, int] | None = None,
+    monomer_xyz: np.ndarray | None = None,
+    dimer_xyz: np.ndarray | None = None,
+    show_membranes: bool = False,
+    show_aunps: bool = False,
+):
+    from synaptic_tomo_tools.visualization import render_active_zonograms_findingampa_style
+
+    fig = render_active_zonograms_findingampa_style(zonogram_findingampa_tuple(cropped))
+    axes = fig.get_axes()
+    if len(axes) < 3:
+        return fig
+    axxy, axyz, axxz = axes[0], axes[1], axes[2]
+    if show_membranes:
+        if full_vol is None or zone_data is None or membrane_surfaces is None or bounds is None:
+            raise ValueError("Membrane overlay requires full_vol, zone_data, membrane_surfaces, and bounds")
+        _overlay_membranes_on_zonogram_axes(
+            axyz,
+            axxz,
+            membrane_surfaces=membrane_surfaces,
+            full_vol=full_vol,
+            zone_data=zone_data,
+            bounds=bounds,
+        )
+    if show_aunps:
+        if monomer_xyz is None or dimer_xyz is None:
+            raise ValueError("AuNP overlay requires monomer_xyz and dimer_xyz")
+        _overlay_aunps_on_zonogram_axes(
+            axxy, axyz, axxz, monomer_xyz=monomer_xyz, dimer_xyz=dimer_xyz
+        )
+    return fig
+
+
+def _overlay_aunps_on_stereo_axes(
+    ax_left,
+    ax_right,
     *,
     monomer_xyz: np.ndarray,
     dimer_xyz: np.ndarray,
     angle_deg: float,
-    y_size: int,
     x_size: int,
     z_size: int,
 ) -> None:
@@ -387,159 +432,75 @@ def _stamp_stereo_aunps(
         if pts.size == 0:
             continue
         x, y, z = pts[:, 0], pts[:, 1], pts[:, 2]
-        color = AUNP_COLORS[label]
-        for angle, col_offset in ((-angle_deg, 0), (angle_deg, x_size)):
+        color = _aunp_hex(label)
+        for ax, angle in ((ax_left, -angle_deg), (ax_right, angle_deg)):
             xr, yr, _ = _rotate_points_y(x, y, z, angle, center_x, center_z)
-            cols = np.round(xr).astype(int) + col_offset
-            rows = np.round(yr).astype(int)
-            valid = (
-                (rows >= 0)
-                & (rows < y_size)
-                & (cols >= col_offset)
-                & (cols < col_offset + x_size)
-            )
-            _blend_points(rgb, rows[valid], cols[valid], color, alpha=1.0)
+            ax.scatter(xr, yr, color=color, s=12, linewidths=0, zorder=5)
 
 
-def composite_native_stereo_with_aunps(
+def render_stereo_figure(
     vol: torch.Tensor,
     angle_deg: float,
     *,
-    monomer_xyz: np.ndarray,
-    dimer_xyz: np.ndarray,
-) -> np.ndarray:
-    """Stereo min-projection pair with monomer (purple) and dimer (blue) pick centers."""
+    monomer_xyz: np.ndarray | None = None,
+    dimer_xyz: np.ndarray | None = None,
+):
+    import matplotlib.pyplot as plt
+
     vmin, vmax = _imshow_limits(vol)
     vol_np = vol.numpy()
     left = np.min(_rotate_volume_around_y(vol_np, -angle_deg), axis=0)
     right = np.min(_rotate_volume_around_y(vol_np, angle_deg), axis=0)
-    z_size, y_size, x_size = vol.shape
+    _, y_size, x_size = vol.shape
 
-    canvas = np.full((y_size, x_size * 2), vmin, dtype=np.float32)
-    canvas[:, :x_size] = left
-    canvas[:, x_size:] = right
-    gray = _normalize_to_uint8(canvas, vmin, vmax)
-    rgb = _gray_to_rgb(gray)
-    _stamp_stereo_aunps(
-        rgb,
-        monomer_xyz=monomer_xyz,
-        dimer_xyz=dimer_xyz,
-        angle_deg=angle_deg,
-        y_size=y_size,
-        x_size=x_size,
-        z_size=z_size,
-    )
-    return np.flipud(rgb)
-
-
-def _stamp_membrane_on_side_panels(
-    rgb: np.ndarray,
-    *,
-    x_c: np.ndarray,
-    y_c: np.ndarray,
-    z_c: np.ndarray,
-    y_size: int,
-    x_size: int,
-    layer: str,
-) -> None:
-    style = MEMBRANE_STYLE[layer]
-    # YZ panel (top right): rows=Y, cols=Z
-    _blend_points(rgb, y_c, x_size + z_c, style["color"], style["alpha"])
-    # XZ panel (bottom left): rows=Z, cols=X
-    _blend_points(rgb, y_size + z_c, x_c, style["color"], style["alpha"])
-
-
-def composite_native_zonogram_with_membranes(
-    cropped: torch.Tensor,
-    *,
-    full_vol: torch.Tensor,
-    zone_data: dict,
-    membrane_surfaces: dict[str, np.ndarray],
-    bounds: tuple[int, int, int, int, int, int],
-) -> np.ndarray:
-    canvas, vmin, vmax, y_size, z_size, x_size = _float_zonogram_canvas(cropped)
-    gray = _normalize_to_uint8(canvas, vmin, vmax)
-    rgb = _gray_to_rgb(gray)
-
-    for layer in ("pre_inner", "post_inner", "pre_outer", "post_outer"):
-        x_c, y_c, z_c = _transform_membrane_to_crop(
-            membrane_surfaces[layer],
-            full_vol=full_vol,
-            zone_data=zone_data,
-            bounds=bounds,
+    fig_w = (x_size * 2) / 50
+    fig_h = y_size / 50
+    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(max(fig_w, 4), max(fig_h, 3)))
+    for ax, img, label in (
+        (ax_left, left, f"Left (-{angle_deg:g}°)"),
+        (ax_right, right, f"Right (+{angle_deg:g}°)"),
+    ):
+        ax.imshow(img, cmap="gray", interpolation="mitchell", vmin=vmin, vmax=vmax, origin="lower")
+        ax.axis("off")
+        ax.set_title(label, fontsize=8)
+    if monomer_xyz is not None and dimer_xyz is not None:
+        _overlay_aunps_on_stereo_axes(
+            ax_left,
+            ax_right,
+            monomer_xyz=monomer_xyz,
+            dimer_xyz=dimer_xyz,
+            angle_deg=angle_deg,
+            x_size=x_size,
+            z_size=vol.shape[0],
         )
-        _stamp_membrane_on_side_panels(
-            rgb, x_c=x_c, y_c=y_c, z_c=z_c, y_size=y_size, x_size=x_size, layer=layer
-        )
-
-    return np.flipud(rgb)
+    plt.tight_layout()
+    return fig
 
 
-def _stamp_aunps_on_zonogram_panels(
-    rgb: np.ndarray,
+def _save_matplotlib_figure(fig, path: Path, *, dpi: int = 100) -> None:
+    import matplotlib.pyplot as plt
+
+    fig.savefig(path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _zonogram_overlay_kwargs(
     *,
-    monomer_xyz: np.ndarray,
-    dimer_xyz: np.ndarray,
-    y_size: int,
-    x_size: int,
-) -> None:
-    for pts, label in ((monomer_xyz, "monomer"), (dimer_xyz, "dimer")):
-        if pts.size == 0:
-            continue
-        x, y, z = pts[:, 0], pts[:, 1], pts[:, 2]
-        color = AUNP_COLORS[label]
-        _blend_points(rgb, y, x, color, alpha=1.0)
-        _blend_points(rgb, y, x_size + z, color, alpha=1.0)
-        _blend_points(rgb, y_size + z, x, color, alpha=1.0)
-
-
-def composite_native_zonogram_with_membranes_and_aunps(
-    cropped: torch.Tensor,
-    *,
-    full_vol: torch.Tensor,
-    zone_data: dict,
-    membrane_surfaces: dict[str, np.ndarray],
-    bounds: tuple[int, int, int, int, int, int],
-    monomer_xyz: np.ndarray,
-    dimer_xyz: np.ndarray,
-) -> np.ndarray:
-    canvas, vmin, vmax, y_size, z_size, x_size = _float_zonogram_canvas(cropped)
-    gray = _normalize_to_uint8(canvas, vmin, vmax)
-    rgb = _gray_to_rgb(gray)
-
-    for layer in ("pre_inner", "post_inner", "pre_outer", "post_outer"):
-        x_c, y_c, z_c = _transform_membrane_to_crop(
-            membrane_surfaces[layer],
-            full_vol=full_vol,
-            zone_data=zone_data,
-            bounds=bounds,
-        )
-        _stamp_membrane_on_side_panels(
-            rgb, x_c=x_c, y_c=y_c, z_c=z_c, y_size=y_size, x_size=x_size, layer=layer
-        )
-
-    _stamp_aunps_on_zonogram_panels(
-        rgb,
-        monomer_xyz=monomer_xyz,
-        dimer_xyz=dimer_xyz,
-        y_size=y_size,
-        x_size=x_size,
-    )
-    return np.flipud(rgb)
-
-
-def composite_native_stereo(vol: torch.Tensor, angle_deg: float) -> np.ndarray:
-    """Side-by-side stereo min-projection at 1 pixel per voxel. Output shape (Y, 2*X)."""
-    vmin, vmax = _imshow_limits(vol)
-    vol_np = vol.numpy()
-    left = np.min(_rotate_volume_around_y(vol_np, -angle_deg), axis=0)
-    right = np.min(_rotate_volume_around_y(vol_np, angle_deg), axis=0)
-    y_size, x_size = left.shape
-
-    canvas = np.full((y_size, x_size * 2), vmin, dtype=np.float32)
-    canvas[:, :x_size] = left
-    canvas[:, x_size:] = right
-    return np.flipud(_normalize_to_uint8(canvas, vmin, vmax))
+    full_vol: torch.Tensor | None,
+    zone_data: dict | None,
+    membrane_surfaces: dict[str, np.ndarray] | None,
+    bounds: tuple[int, int, int, int, int, int] | None,
+    monomer_xyz: np.ndarray | None,
+    dimer_xyz: np.ndarray | None,
+) -> dict:
+    return {
+        "full_vol": full_vol,
+        "zone_data": zone_data,
+        "membrane_surfaces": membrane_surfaces,
+        "bounds": bounds,
+        "monomer_xyz": monomer_xyz,
+        "dimer_xyz": dimer_xyz,
+    }
 
 
 def save_subregion(
@@ -558,72 +519,63 @@ def save_subregion(
     dimer_xyz: np.ndarray | None = None,
     bounds: tuple[int, int, int, int, int, int] | None = None,
     stereo_angle_deg: float = 6.0,
-) -> tuple[tuple[int, int], tuple[int, int] | None]:
-    from PIL import Image
+    dpi: int = 100,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
+    overlay_kwargs = _zonogram_overlay_kwargs(
+        full_vol=full_vol,
+        zone_data=zone_data,
+        membrane_surfaces=membrane_surfaces,
+        bounds=bounds,
+        monomer_xyz=monomer_xyz,
+        dimer_xyz=dimer_xyz,
+    )
 
-    zonogram = composite_native_zonogram(cropped)
-    Image.fromarray(zonogram).save(output_png)
-    png_shape = (zonogram.shape[0], zonogram.shape[1])
+    _save_matplotlib_figure(render_cropped_zonogram_figure(cropped), output_png, dpi=dpi)
 
     if output_membrane_png is not None:
-        if full_vol is None or zone_data is None or membrane_surfaces is None or bounds is None:
-            raise ValueError("Membrane PNG requires full_vol, zone_data, membrane_surfaces, and bounds")
-        membrane_rgb = composite_native_zonogram_with_membranes(
-            cropped,
-            full_vol=full_vol,
-            zone_data=zone_data,
-            membrane_surfaces=membrane_surfaces,
-            bounds=bounds,
+        _save_matplotlib_figure(
+            render_cropped_zonogram_figure(cropped, show_membranes=True, **overlay_kwargs),
+            output_membrane_png,
+            dpi=dpi,
         )
-        Image.fromarray(membrane_rgb).save(output_membrane_png)
 
     if output_aunps_membranes_png is not None:
-        if (
-            full_vol is None
-            or zone_data is None
-            or membrane_surfaces is None
-            or bounds is None
-            or monomer_xyz is None
-            or dimer_xyz is None
-        ):
-            raise ValueError(
-                "AuNP+membrane PNG requires full_vol, zone_data, membrane_surfaces, "
-                "bounds, monomer_xyz, and dimer_xyz"
-            )
-        combined_rgb = composite_native_zonogram_with_membranes_and_aunps(
-            cropped,
-            full_vol=full_vol,
-            zone_data=zone_data,
-            membrane_surfaces=membrane_surfaces,
-            bounds=bounds,
-            monomer_xyz=monomer_xyz,
-            dimer_xyz=dimer_xyz,
+        _save_matplotlib_figure(
+            render_cropped_zonogram_figure(
+                cropped, show_membranes=True, show_aunps=True, **overlay_kwargs
+            ),
+            output_aunps_membranes_png,
+            dpi=dpi,
         )
-        Image.fromarray(combined_rgb).save(output_aunps_membranes_png)
 
-    stereo_shape = None
     if output_stereo_png is not None:
-        stereo = composite_native_stereo(cropped, stereo_angle_deg)
-        Image.fromarray(stereo).save(output_stereo_png)
-        stereo_shape = (stereo.shape[0], stereo.shape[1])
+        _save_matplotlib_figure(
+            render_stereo_figure(cropped, stereo_angle_deg),
+            output_stereo_png,
+            dpi=dpi,
+        )
 
     if output_stereo_aunps_png is not None:
         if monomer_xyz is None or dimer_xyz is None:
             raise ValueError("Stereo AuNP PNG requires monomer_xyz and dimer_xyz")
-        stereo_aunps = composite_native_stereo_with_aunps(
-            cropped,
-            stereo_angle_deg,
-            monomer_xyz=monomer_xyz,
-            dimer_xyz=dimer_xyz,
+        _save_matplotlib_figure(
+            render_stereo_figure(
+                cropped,
+                stereo_angle_deg,
+                monomer_xyz=monomer_xyz,
+                dimer_xyz=dimer_xyz,
+            ),
+            output_stereo_aunps_png,
+            dpi=dpi,
         )
-        Image.fromarray(stereo_aunps).save(output_stereo_aunps_png)
 
     if output_mrc is not None:
         mrcfile.write(output_mrc, cropped.numpy(), overwrite=True)
-
-    return png_shape, stereo_shape
 
 
 def _parse_crop(s: str) -> tuple[float, float, float, float]:
@@ -1178,7 +1130,7 @@ def main() -> None:
         stereo_angle_deg=args.stereo_angle,
     )
     cz, cy, cx = cropped.shape
-    print(f"Saved {png_path} ({cy + cz} x {cx + cz} px, 1 px/voxel per panel)")
+    print(f"Saved {png_path} (findingampa-style 3-panel, crop Z×Y×X = {cz}×{cy}×{cx})")
     if membrane_out is not None:
         print(f"Saved {membrane_out} (membrane overlay on YZ/XZ panels)")
     if aunps_membranes_out is not None:
@@ -1193,7 +1145,7 @@ def main() -> None:
         n_dimer = len(dimer_xyz) if dimer_xyz is not None else 0
         print(f"Saved {stereo_aunps_out} (stereo with {n_mono} monomer + {n_dimer} dimer picks)")
     if stereo_out is not None:
-        print(f"Saved {stereo_out} ({cy} x {cx * 2} px, 1 px/voxel)")
+        print(f"Saved {stereo_out} (stereo min-projection pair)")
     if mrc_out is not None:
         print(f"Saved {mrc_out}")
 
