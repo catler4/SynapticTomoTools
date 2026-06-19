@@ -3472,9 +3472,9 @@ def main() -> None:
         help="Random tangent directions per (vesicle, d, probe radius)",
     )
     parser.add_argument(
-        "--fusing-only",
+        "--include-close",
         action="store_true",
-        help="Include only vesicles classified as fusing (exclude close)",
+        help="Include close vesicles as well as fusing (default: fusing only)",
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -3547,16 +3547,13 @@ def main() -> None:
         alignment_dir=args.alignment_dir,
         vesicle_distance_threshold=args.vesicle_distance_threshold,
         fusion_point_threshold=args.fusion_point_threshold,
+        fusing_only=not args.include_close,
     )
-    if args.fusing_only:
-        fusion_rows = [
-            r
-            for r in fusion_rows
-            if r.get("is_fusing") or r.get("vesicle_distance_class") == "fusing"
-        ]
-    print(f"Close/fusing vesicles with fusion points: {len(fusion_rows)}", end="")
-    if args.fusing_only:
+    print(f"Fusion-point vesicles: {len(fusion_rows)}", end="")
+    if not args.include_close:
         print(" (fusing only)", end="")
+    else:
+        print(" (fusing + close)", end="")
     print()
     if not fusion_rows:
         raise SystemExit("No fusion points found.")

@@ -238,10 +238,15 @@ def enumerate_close_vesicle_fusion_points(
     alignment_dir: str,
     vesicle_distance_threshold: float = 20.0,
     fusion_point_threshold: float = 20.0,
+    fusing_only: bool = True,
 ) -> list[dict]:
     """
-    Fusion points for vesicles within ``vesicle_distance_threshold`` of the presynaptic AZ
-    (fusing + close), using the same fusion-point definition as AuNP distance histograms.
+    Fusion points for vesicles near the presynaptic AZ, using the same fusion-point
+    definition as AuNP distance histograms.
+
+    By default only vesicles classified as fusing are included (``fusing_only=True``).
+    Set ``fusing_only=False`` to also include close vesicles within
+    ``vesicle_distance_threshold``.
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_name = Path(tomogram_path).name
@@ -258,11 +263,6 @@ def enumerate_close_vesicle_fusion_points(
         distance_to_az = vesicle.get("distance_to_az", np.nan)
         if not np.isfinite(distance_to_az) or distance_to_az > vesicle_distance_threshold:
             continue
-        fusion_point = _compute_fusion_point_from_vesicle(
-            vesicle, membrane_active_zone_pairs, fusion_point_threshold
-        )
-        if fusion_point is None:
-            continue
         vesicle_class = vesicle.get("vesicle_distance_class")
         if not vesicle_class or vesicle_class == "unknown":
             if vesicle.get("is_fusing"):
@@ -271,6 +271,14 @@ def enumerate_close_vesicle_fusion_points(
                 vesicle_class = "close"
             else:
                 vesicle_class = "close"
+        is_fusing = bool(vesicle.get("is_fusing", vesicle_class == "fusing"))
+        if fusing_only and not is_fusing:
+            continue
+        fusion_point = _compute_fusion_point_from_vesicle(
+            vesicle, membrane_active_zone_pairs, fusion_point_threshold
+        )
+        if fusion_point is None:
+            continue
         rows.append(
             {
                 "tomogram_name": tomogram_name,
@@ -278,7 +286,7 @@ def enumerate_close_vesicle_fusion_points(
                 "vesicle_id": vesicle_idx,
                 "vesicle_name": f"{tomogram_name}_vesicle_{vesicle_idx}",
                 "vesicle_distance_class": vesicle_class,
-                "is_fusing": bool(vesicle.get("is_fusing", vesicle_class == "fusing")),
+                "is_fusing": is_fusing,
                 "is_close": bool(vesicle.get("is_close", vesicle_class == "close")),
                 "distance_to_presynaptic_az_nm": float(distance_to_az),
                 "closest_membrane": vesicle.get("closest_membrane"),
@@ -1157,6 +1165,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                         alignment_dir=alignment_dir,
                         vesicle_distance_threshold=vesicle_distance_threshold,
                         fusion_point_threshold=fusion_point_threshold,
+                        fusing_only=True,
                     )
 
                     packing_scan_rows: list[dict] = []
@@ -1269,7 +1278,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                             vertex_sampling_step=vertex_sampling_step,
                         )
                         if df_packing_at_fusion.empty:
-                            print("No close/fusing vesicle fusion points with valid packing lookup")
+                            print("No fusing vesicle fusion points with valid packing lookup")
                         else:
                             fusion_local_csv = (
                                 aunps_results_dir / "packing_density_at_vesicle_fusion_points.csv"
