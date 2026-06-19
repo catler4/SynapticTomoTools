@@ -12,7 +12,9 @@ and geodesic Ripley's O via membrain-stats (same two analysis modes).
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -603,6 +605,13 @@ def ripley_h12_from_points(
     return ripley_h12(cross_k12(x, y, r_vals, window_area_nm2), r_vals)
 
 
+@contextlib.contextmanager
+def _suppress_membrain_mesh_stdout():
+    """Silence membrain-stats debug print in split_mesh_into_connected_components."""
+    with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
+        yield
+
+
 def _import_membrain_ripley():
     try:
         from membrain_stats.utils.ripley_utils import (
@@ -717,12 +726,13 @@ def _membrain_ripley_o_on_r_grid(
         "positions_start": _snap_points_to_mesh_vertices(start_xyz, mesh_verts),
         "positions_target": _snap_points_to_mesh_vertices(target_xyz, mesh_verts),
     }
-    ripley_stat = compute_ripleys_stats(mesh_dict, method=geodesic_method)
-    x_vals, o_vals = _membrain_aggregate_ripley_o(
-        [ripley_stat],
-        bin_size_nm=bin_size_nm,
-        num_bins=max(10, len(r_vals)),
-    )
+    with _suppress_membrain_mesh_stdout():
+        ripley_stat = compute_ripleys_stats(mesh_dict, method=geodesic_method)
+        x_vals, o_vals = _membrain_aggregate_ripley_o(
+            [ripley_stat],
+            bin_size_nm=bin_size_nm,
+            num_bins=max(10, len(r_vals)),
+        )
     r_max = float(r_vals[-1])
     valid = x_vals <= r_max + 0.5 * bin_size_nm
     x_vals = np.asarray(x_vals, dtype=float)[valid]
