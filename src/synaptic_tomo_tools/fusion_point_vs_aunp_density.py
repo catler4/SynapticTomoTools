@@ -2930,12 +2930,12 @@ def _load_ripley_vesicle_artifact(path: Path) -> dict[str, np.ndarray | str]:
     return out
 
 
-def _collect_ripley_vesicle_artifacts_by_zone(
+def _collect_ripley_vesicle_artifacts(
     tomo_paths: Iterable[tuple[Any, Any, Any, str]],
     artifact_name: str,
-) -> dict[str, list[dict[str, np.ndarray | str]]]:
-    """Load saved per-vesicle Ripley artifacts grouped by active zone name."""
-    by_zone: dict[str, list[dict[str, np.ndarray | str]]] = {}
+) -> list[dict[str, np.ndarray | str]]:
+    """Load all saved per-vesicle Ripley artifacts across tomograms and active zones."""
+    artifacts: list[dict[str, np.ndarray | str]] = []
     for tomo, _set_name, _aunp_active_zones, alignment_dir in tomo_paths:
         base = (
             Path(tomo)
@@ -2951,10 +2951,8 @@ def _collect_ripley_vesicle_artifacts_by_zone(
             artifact_path = zone_dir / artifact_name
             if not artifact_path.is_file():
                 continue
-            artifact = _load_ripley_vesicle_artifact(artifact_path)
-            zone_name = str(artifact.get("zone_name", zone_dir.name))
-            by_zone.setdefault(zone_name, []).append(artifact)
-    return by_zone
+            artifacts.append(_load_ripley_vesicle_artifact(artifact_path))
+    return artifacts
 
 
 def _stack_nonempty_curves(parts: list[np.ndarray]) -> np.ndarray:
@@ -2962,6 +2960,17 @@ def _stack_nonempty_curves(parts: list[np.ndarray]) -> np.ndarray:
     if not valid:
         return np.empty((0, 0))
     return np.vstack(valid)
+
+
+def _ripley_artifact_pool_summary(
+    artifacts: Sequence[dict[str, np.ndarray | str]],
+) -> tuple[int, int, int]:
+    """Return (n_fusion_vesicle_curves, n_tomograms, n_active_zones) for pooled Ripley plots."""
+    n_tomograms = len({str(a.get("tomogram_name", "")) for a in artifacts if a.get("tomogram_name")})
+    n_zones = len({str(a.get("zone_name", "")) for a in artifacts if a.get("zone_name")})
+    fusion_parts = [_stack_nonempty_curves([np.asarray(a["fusion_vesicle_curves"])]) for a in artifacts]
+    fusion_vesicle_curves = _stack_nonempty_curves(fusion_parts)
+    return len(fusion_vesicle_curves), n_tomograms, n_zones
 
 
 def _offset_keys_from_artifact(artifact: dict[str, np.ndarray | str]) -> list[float]:
@@ -2972,6 +2981,13 @@ def _offset_keys_from_artifact(artifact: dict[str, np.ndarray | str]) -> list[fl
         tag = key.removeprefix("fusion_")
         nm = tag.removeprefix("offset_").removesuffix("nm")
         offsets.append(float(nm))
+    return sorted(offsets)
+
+
+def _offset_keys_from_artifacts(artifacts: Sequence[dict[str, np.ndarray | str]]) -> list[float]:
+    offsets: set[float] = set()
+    for artifact in artifacts:
+        offsets.update(_offset_keys_from_artifact(artifact))
     return sorted(offsets)
 
 
@@ -3001,219 +3017,222 @@ def plot_pooled_ripley_h12_from_vesicle_artifacts(
     *,
     file_tag: str = "pooled",
 ) -> pd.DataFrame | None:
-    """Combine saved per-vesicle H₁₂ curves across tomograms (no Ripley recomputation)."""
-    by_zone = _collect_ripley_vesicle_artifacts_by_zone(tomo_paths, RIPLEY_H12_VESICLE_CURVES_NPZ)
-    if not by_zone:
+    """Stack saved per-vesicle H₁₂ curves from all tomograms and active zones."""
+    artifacts = _collect_ripley_vesicle_artifacts(tomo_paths, RIPLEY_H12_VESICLE_CURVES_NPZ)
+    if not artifacts:
         print("Skipping pooled Ripley H₁₂: no saved vesicle-curve artifacts found.")
         return None
 
     figures_dir = output_dir / "figures" / "pooled_ripley"
     figures_dir.mkdir(parents=True, exist_ok=True)
     all_result_rows: list[dict] = []
+    zone_name = "all"
 
-    for zone_name, artifacts in sorted(by_zone.items()):
-        r_vals = np.asarray(artifacts[0]["r_vals"], dtype=float)
-        fusion_parts = [_stack_nonempty_curves([np.asarray(a["fusion_vesicle_curves"])]) for a in artifacts]
-        null_parts = [_stack_nonempty_curves([np.asarray(a["label_perm_null_curves"])]) for a in artifacts]
-        obs_parts = [np.asarray(a["h12_obs"], dtype=float) for a in artifacts]
+    r_vals = np.asarray(artifacts[0]["r_vals"], dtype=float)
+    fusion_parts = [_stack_nonempty_curves([np.asarray(a["fusion_vesicle_curves"])]) for a in artifacts]
+    null_parts = [_stack_nonempty_curves([np.asarray(a["label_perm_null_curves"])]) for a in artifacts]
+    obs_parts = [np.asarray(a["h12_obs"], dtype=float) for a in artifacts]
 
-        fusion_vesicle_curves = _stack_nonempty_curves(fusion_parts)
-        perm_curves = _stack_nonempty_curves(null_parts)
-        if fusion_vesicle_curves.size == 0 or perm_curves.size == 0:
-            print(f"Skipping pooled Ripley H₁₂ for {zone_name}: empty vesicle curves.")
+    fusion_vesicle_curves = _stack_nonempty_curves(fusion_parts)
+    perm_curves = _stack_nonempty_curves(null_parts)
+    if fusion_vesicle_curves.size == 0 or perm_curves.size == 0:
+        print("Skipping pooled Ripley H₁₂: empty vesicle curves.")
+        return None
+
+    n_fusion_vesicles, n_tomograms, n_active_zones = _ripley_artifact_pool_summary(artifacts)
+    pool_note = (
+        f"n_fusion_vesicles={n_fusion_vesicles}, n_tomograms={n_tomograms}, "
+        f"n_active_zones={n_active_zones}"
+    )
+
+    h12_obs = np.mean(np.vstack(obs_parts), axis=0)
+    h12_fusion_lo, h12_fusion_med, h12_fusion_hi = _replicate_percentile_band(fusion_vesicle_curves)
+    h12_null_lo, h12_null_med, h12_null_hi = _replicate_percentile_band(perm_curves)
+    p_label_two = _monte_carlo_p_two_sided(h12_obs, perm_curves)
+    n_null = perm_curves.shape[0]
+    p_label_greater = (np.sum(perm_curves >= h12_obs, axis=0) + 1) / (n_null + 1)
+    p_label_less = (np.sum(perm_curves <= h12_obs, axis=0) + 1) / (n_null + 1)
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    _plot_label_permutation_envelope_panel(
+        ax,
+        r_vals,
+        null_lo=h12_null_lo,
+        null_med=h12_null_med,
+        null_hi=h12_null_hi,
+        n_perm=n_null,
+        obs_lo=h12_fusion_lo,
+        obs_med=h12_fusion_med,
+        obs_hi=h12_fusion_hi,
+        n_obs_replicates=len(fusion_vesicle_curves),
+        ylabel="Ripley H₁₂(r) = √(K₁₂/π) − r",
+        title=(
+            "Pooled label-permutation null: fusion vs AuNP on postsynaptic AZ\n"
+            f"all fusing vesicles | {pool_note}"
+        ),
+        refline=0.0,
+        refline_label="H₁₂ = 0",
+    )
+    fig.tight_layout()
+    fig.savefig(figures_dir / f"ripley_h12_label_permutation_{file_tag}.png", dpi=150)
+    plt.close(fig)
+
+    _plot_significance_single(
+        r_vals,
+        p_label_two,
+        title=(
+            "Pooled label-permutation significance (fusion vs AuNP)\n"
+            f"all fusing vesicles | two-sided Monte Carlo p, n_null={n_null}"
+        ),
+        output_path=figures_dir / f"ripley_h12_pvalues_label_permutation_{file_tag}.png",
+        panel_note=pool_note,
+    )
+
+    for r, obs, n_lo, n_med, n_hi, o_lo, o_med, o_hi, p2, pg, pl in zip(
+        r_vals,
+        h12_obs,
+        h12_null_lo,
+        h12_null_med,
+        h12_null_hi,
+        h12_fusion_lo,
+        h12_fusion_med,
+        h12_fusion_hi,
+        p_label_two,
+        p_label_greater,
+        p_label_less,
+    ):
+        all_result_rows.append(
+            {
+                "scope": file_tag,
+                "zone_name": zone_name,
+                "analysis": "label_permutation",
+                "uncertainty_method": UNCERTAINTY_METHOD_PERCENTILE,
+                "control_offset_nm": np.nan,
+                "r_nm": float(r),
+                "h12_observed": float(obs),
+                "h12_null_lo": float(n_lo),
+                "h12_null_hi": float(n_hi),
+                "h12_null_median": float(n_med),
+                "h12_obs_lo": float(o_lo),
+                "h12_obs_hi": float(o_hi),
+                "h12_obs_median": float(o_med),
+                "p_value_two_sided": float(p2),
+                "p_value_enrichment": float(pg),
+                "p_value_depletion": float(pl),
+                "n_fusion_vesicles": n_fusion_vesicles,
+                "n_tomograms": n_tomograms,
+                "n_active_zones": n_active_zones,
+            }
+        )
+
+    offsets = _offset_keys_from_artifacts(artifacts)
+    n_panels = len(offsets)
+    ncols = min(3, n_panels)
+    nrows = int(np.ceil(n_panels / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 4 * nrows), squeeze=False)
+    axes_flat = axes.flatten()
+    p_by_d: dict[str, np.ndarray] = {}
+    panel_notes: dict[str, str] = {}
+
+    for ax, offset_nm in zip(axes_flat, offsets):
+        tag = _offset_artifact_key(offset_nm)
+        fusion_parts_d: list[np.ndarray] = []
+        ctrl_parts_d: list[np.ndarray] = []
+        for artifact in artifacts:
+            f_key, c_key = f"fusion_{tag}", f"control_{tag}"
+            if f_key in artifact and c_key in artifact:
+                fusion_parts_d.append(np.asarray(artifact[f_key]))
+                ctrl_parts_d.append(np.asarray(artifact[c_key]))
+        fusion_curves = _stack_nonempty_curves(fusion_parts_d)
+        ctrl_curves = _stack_nonempty_curves(ctrl_parts_d)
+        if fusion_curves.size == 0 or ctrl_curves.size == 0:
+            ax.set_title(f"d={int(offset_nm)} nm (no controls)")
             continue
 
-        h12_obs = np.mean(np.vstack(obs_parts), axis=0)
-        h12_fusion_lo, h12_fusion_med, h12_fusion_hi = _replicate_percentile_band(fusion_vesicle_curves)
-        h12_null_lo, h12_null_med, h12_null_hi = _replicate_percentile_band(perm_curves)
-        p_label_two = _monte_carlo_p_two_sided(h12_obs, perm_curves)
-        n_null = perm_curves.shape[0]
-        p_label_greater = (np.sum(perm_curves >= h12_obs, axis=0) + 1) / (n_null + 1)
-        p_label_less = (np.sum(perm_curves <= h12_obs, axis=0) + 1) / (n_null + 1)
+        h12_ctrl_lo, h12_ctrl_med, h12_ctrl_hi = _replicate_percentile_band(ctrl_curves)
+        p_fusion_vs_ctrl = _unpaired_curve_pvalues(fusion_curves, ctrl_curves)
+        p_by_d[f"d={int(offset_nm)} nm"] = p_fusion_vs_ctrl
+        panel_notes[f"d={int(offset_nm)} nm"] = (
+            f"n_fusion_vesicles={len(fusion_curves)}, n_control_vesicles={len(ctrl_curves)}, "
+            f"{pool_note}"
+        )
 
-        fig, ax = plt.subplots(figsize=(7, 5))
-        _plot_label_permutation_envelope_panel(
+        _plot_fusion_vs_control_ripley_panel(
             ax,
             r_vals,
-            null_lo=h12_null_lo,
-            null_med=h12_null_med,
-            null_hi=h12_null_hi,
-            n_perm=n_null,
-            obs_lo=h12_fusion_lo,
-            obs_med=h12_fusion_med,
-            obs_hi=h12_fusion_hi,
-            n_obs_replicates=len(fusion_vesicle_curves),
-            ylabel="Ripley H₁₂(r) = √(K₁₂/π) − r",
-            title=(
-                f"Pooled label-permutation null: fusion vs AuNP on postsynaptic AZ\n"
-                f"{zone_name} | n_tomograms={len(artifacts)}, n_fusion_vesicles={len(fusion_vesicle_curves)}"
-            ),
+            ctrl_lo=h12_ctrl_lo,
+            ctrl_med=h12_ctrl_med,
+            ctrl_hi=h12_ctrl_hi,
+            n_control_vesicles=len(ctrl_curves),
+            offset_nm=float(offset_nm),
+            fusion_lo=h12_fusion_lo,
+            fusion_med=h12_fusion_med,
+            fusion_hi=h12_fusion_hi,
+            n_fusion_vesicles=len(fusion_curves),
+            ylabel="H₁₂(r)",
             refline=0.0,
             refline_label="H₁₂ = 0",
         )
-        fig.tight_layout()
-        fig.savefig(figures_dir / f"ripley_h12_label_permutation_{file_tag}_{zone_name}.png", dpi=150)
-        plt.close(fig)
 
-        _plot_significance_single(
+        for r, f_lo, f_med, f_hi, c_lo, c_med, c_hi, p_val in zip(
             r_vals,
-            p_label_two,
-            title=(
-                f"Pooled label-permutation significance (fusion vs AuNP)\n"
-                f"{zone_name} | two-sided Monte Carlo p, n_null={n_null}"
-            ),
-            output_path=figures_dir / f"ripley_h12_pvalues_label_permutation_{file_tag}_{zone_name}.png",
-            panel_note=(
-                f"n_fusion_vesicles={len(fusion_vesicle_curves)}, n_tomograms={len(artifacts)}"
-            ),
-        )
-
-        for r, obs, n_lo, n_med, n_hi, o_lo, o_med, o_hi, p2, pg, pl in zip(
-            r_vals,
-            h12_obs,
-            h12_null_lo,
-            h12_null_med,
-            h12_null_hi,
             h12_fusion_lo,
             h12_fusion_med,
             h12_fusion_hi,
-            p_label_two,
-            p_label_greater,
-            p_label_less,
+            h12_ctrl_lo,
+            h12_ctrl_med,
+            h12_ctrl_hi,
+            p_fusion_vs_ctrl,
         ):
             all_result_rows.append(
                 {
                     "scope": file_tag,
                     "zone_name": zone_name,
-                    "analysis": "label_permutation",
+                    "analysis": "fusion_vs_control",
                     "uncertainty_method": UNCERTAINTY_METHOD_PERCENTILE,
-                    "control_offset_nm": np.nan,
+                    "control_offset_nm": float(offset_nm),
                     "r_nm": float(r),
-                    "h12_observed": float(obs),
-                    "h12_null_lo": float(n_lo),
-                    "h12_null_hi": float(n_hi),
-                    "h12_null_median": float(n_med),
-                    "h12_obs_lo": float(o_lo),
-                    "h12_obs_hi": float(o_hi),
-                    "h12_obs_median": float(o_med),
-                    "p_value_two_sided": float(p2),
-                    "p_value_enrichment": float(pg),
-                    "p_value_depletion": float(pl),
-                    "n_fusion_vesicles": len(fusion_vesicle_curves),
-                    "n_tomograms": len(artifacts),
+                    "h12_fusion_lo": float(f_lo),
+                    "h12_fusion_median": float(f_med),
+                    "h12_fusion_hi": float(f_hi),
+                    "h12_control_lo": float(c_lo),
+                    "h12_control_median": float(c_med),
+                    "h12_control_hi": float(c_hi),
+                    "p_value_two_sided": float(p_val),
+                    "n_fusion_vesicles": len(fusion_curves),
+                    "n_control_vesicles": len(ctrl_curves),
+                    "n_tomograms": n_tomograms,
+                    "n_active_zones": n_active_zones,
                 }
             )
 
-        offsets = _offset_keys_from_artifact(artifacts[0])
-        n_panels = len(offsets)
-        ncols = min(3, n_panels)
-        nrows = int(np.ceil(n_panels / ncols))
-        fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 4 * nrows), squeeze=False)
-        axes_flat = axes.flatten()
-        p_by_d: dict[str, np.ndarray] = {}
-        panel_notes: dict[str, str] = {}
+    for ax in axes_flat[n_panels:]:
+        ax.set_visible(False)
+    fig.suptitle(
+        "Pooled Ripley H₁₂: fusion vs controls across all fusing vesicles",
+        y=1.02,
+    )
+    fig.tight_layout()
+    fig.savefig(
+        figures_dir / f"ripley_h12_fusion_vs_controls_by_d_{file_tag}.png",
+        dpi=150,
+        bbox_inches="tight",
+    )
+    plt.close(fig)
 
-        for ax, offset_nm in zip(axes_flat, offsets):
-            tag = _offset_artifact_key(offset_nm)
-            fusion_parts_d: list[np.ndarray] = []
-            ctrl_parts_d: list[np.ndarray] = []
-            for artifact in artifacts:
-                f_key, c_key = f"fusion_{tag}", f"control_{tag}"
-                if f_key in artifact and c_key in artifact:
-                    fusion_parts_d.append(np.asarray(artifact[f_key]))
-                    ctrl_parts_d.append(np.asarray(artifact[c_key]))
-            fusion_curves = _stack_nonempty_curves(fusion_parts_d)
-            ctrl_curves = _stack_nonempty_curves(ctrl_parts_d)
-            if fusion_curves.size == 0 or ctrl_curves.size == 0:
-                ax.set_title(f"d={int(offset_nm)} nm (no controls)")
-                continue
-
-            h12_ctrl_lo, h12_ctrl_med, h12_ctrl_hi = _replicate_percentile_band(ctrl_curves)
-            p_fusion_vs_ctrl = _unpaired_curve_pvalues(fusion_curves, ctrl_curves)
-            p_by_d[f"d={int(offset_nm)} nm"] = p_fusion_vs_ctrl
-            panel_notes[f"d={int(offset_nm)} nm"] = (
-                f"n_fusion_vesicles={len(fusion_curves)}, n_control_vesicles={len(ctrl_curves)}, "
-                f"n_tomograms={len(artifacts)}"
-            )
-
-            _plot_fusion_vs_control_ripley_panel(
-                ax,
-                r_vals,
-                ctrl_lo=h12_ctrl_lo,
-                ctrl_med=h12_ctrl_med,
-                ctrl_hi=h12_ctrl_hi,
-                n_control_vesicles=len(ctrl_curves),
-                offset_nm=float(offset_nm),
-                fusion_lo=h12_fusion_lo,
-                fusion_med=h12_fusion_med,
-                fusion_hi=h12_fusion_hi,
-                n_fusion_vesicles=len(fusion_curves),
-                ylabel="H₁₂(r)",
-                refline=0.0,
-                refline_label="H₁₂ = 0",
-            )
-
-            for r, f_lo, f_med, f_hi, c_lo, c_med, c_hi, p_val in zip(
-                r_vals,
-                h12_fusion_lo,
-                h12_fusion_med,
-                h12_fusion_hi,
-                h12_ctrl_lo,
-                h12_ctrl_med,
-                h12_ctrl_hi,
-                p_fusion_vs_ctrl,
-            ):
-                all_result_rows.append(
-                    {
-                        "scope": file_tag,
-                        "zone_name": zone_name,
-                        "analysis": "fusion_vs_control",
-                        "uncertainty_method": UNCERTAINTY_METHOD_PERCENTILE,
-                        "control_offset_nm": float(offset_nm),
-                        "r_nm": float(r),
-                        "h12_fusion_lo": float(f_lo),
-                        "h12_fusion_median": float(f_med),
-                        "h12_fusion_hi": float(f_hi),
-                        "h12_control_lo": float(c_lo),
-                        "h12_control_median": float(c_med),
-                        "h12_control_hi": float(c_hi),
-                        "p_value_two_sided": float(p_val),
-                        "n_fusion_vesicles": len(fusion_curves),
-                        "n_control_vesicles": len(ctrl_curves),
-                        "n_tomograms": len(artifacts),
-                    }
-                )
-
-        for ax in axes_flat[n_panels:]:
-            ax.set_visible(False)
-        fig.suptitle(
-            f"Pooled Ripley H₁₂: fusion vs controls across all tomograms\n{zone_name}",
-            y=1.02,
+    if p_by_d:
+        _plot_significance_panels(
+            r_vals,
+            p_by_d,
+            title=(
+                "Pooled fusion vs controls significance (Mann–Whitney on per-vesicle H₁₂)\n"
+                "all fusing vesicles combined"
+            ),
+            output_path=figures_dir / f"ripley_h12_pvalues_fusion_vs_control_{file_tag}.png",
+            panel_notes=panel_notes,
         )
-        fig.tight_layout()
-        fig.savefig(
-            figures_dir / f"ripley_h12_fusion_vs_controls_by_d_{file_tag}_{zone_name}.png",
-            dpi=150,
-            bbox_inches="tight",
-        )
-        plt.close(fig)
 
-        if p_by_d:
-            _plot_significance_panels(
-                r_vals,
-                p_by_d,
-                title=(
-                    f"Pooled fusion vs controls significance (Mann–Whitney on per-vesicle H₁₂)\n"
-                    f"{zone_name} | all tomograms combined"
-                ),
-                output_path=figures_dir / f"ripley_h12_pvalues_fusion_vs_control_{file_tag}_{zone_name}.png",
-                panel_notes=panel_notes,
-            )
-
-        print(
-            f"  Pooled Ripley H₁₂ ({zone_name}): {len(fusion_vesicle_curves)} fusion vesicles from "
-            f"{len(artifacts)} tomograms"
-        )
+    print(f"  Pooled Ripley H₁₂ (all fusing vesicles): {pool_note}")
 
     if not all_result_rows:
         return None
@@ -3228,205 +3247,210 @@ def plot_pooled_ripley_o_from_vesicle_artifacts(
     *,
     file_tag: str = "pooled",
 ) -> pd.DataFrame | None:
-    """Combine saved per-vesicle Ripley's O curves across tomograms (no Ripley recomputation)."""
-    by_zone = _collect_ripley_vesicle_artifacts_by_zone(tomo_paths, RIPLEY_O_VESICLE_CURVES_NPZ)
-    if not by_zone:
+    """Stack saved per-vesicle Ripley's O curves from all tomograms and active zones."""
+    artifacts = _collect_ripley_vesicle_artifacts(tomo_paths, RIPLEY_O_VESICLE_CURVES_NPZ)
+    if not artifacts:
         print("Skipping pooled Ripley's O: no saved vesicle-curve artifacts found.")
         return None
 
     figures_dir = output_dir / "figures" / "pooled_ripley"
     figures_dir.mkdir(parents=True, exist_ok=True)
     all_result_rows: list[dict] = []
+    zone_name = "all"
 
-    for zone_name, artifacts in sorted(by_zone.items()):
-        r_vals = np.asarray(artifacts[0]["r_vals"], dtype=float)
-        fusion_parts = [_stack_nonempty_curves([np.asarray(a["fusion_vesicle_curves"])]) for a in artifacts]
-        null_parts = [_stack_nonempty_curves([np.asarray(a["label_perm_null_curves"])]) for a in artifacts]
-        obs_parts = [np.asarray(a["o_obs"], dtype=float) for a in artifacts]
+    r_vals = np.asarray(artifacts[0]["r_vals"], dtype=float)
+    fusion_parts = [_stack_nonempty_curves([np.asarray(a["fusion_vesicle_curves"])]) for a in artifacts]
+    null_parts = [_stack_nonempty_curves([np.asarray(a["label_perm_null_curves"])]) for a in artifacts]
+    obs_parts = [np.asarray(a["o_obs"], dtype=float) for a in artifacts]
 
-        fusion_vesicle_curves = _stack_nonempty_curves(fusion_parts)
-        perm_curves = _stack_nonempty_curves(null_parts)
-        if fusion_vesicle_curves.size == 0 or perm_curves.size == 0:
-            print(f"Skipping pooled Ripley's O for {zone_name}: empty vesicle curves.")
+    fusion_vesicle_curves = _stack_nonempty_curves(fusion_parts)
+    perm_curves = _stack_nonempty_curves(null_parts)
+    if fusion_vesicle_curves.size == 0 or perm_curves.size == 0:
+        print("Skipping pooled Ripley's O: empty vesicle curves.")
+        return None
+
+    n_fusion_vesicles, n_tomograms, n_active_zones = _ripley_artifact_pool_summary(artifacts)
+    pool_note = (
+        f"n_fusion_vesicles={n_fusion_vesicles}, n_tomograms={n_tomograms}, "
+        f"n_active_zones={n_active_zones}"
+    )
+
+    o_obs = np.mean(np.vstack(obs_parts), axis=0)
+    o_fusion_lo, o_fusion_med, o_fusion_hi = _replicate_percentile_band(fusion_vesicle_curves)
+    o_null_lo, o_null_med, o_null_hi = _replicate_percentile_band(perm_curves)
+    p_label_two = _monte_carlo_p_two_sided(o_obs, perm_curves)
+    n_null = perm_curves.shape[0]
+    p_label_greater = (np.sum(perm_curves >= o_obs, axis=0) + 1) / (n_null + 1)
+    p_label_less = (np.sum(perm_curves <= o_obs, axis=0) + 1) / (n_null + 1)
+
+    for r, obs, n_lo, n_med, n_hi, o_lo, o_med, o_hi, p2, pg, pl in zip(
+        r_vals,
+        o_obs,
+        o_null_lo,
+        o_null_med,
+        o_null_hi,
+        o_fusion_lo,
+        o_fusion_med,
+        o_fusion_hi,
+        p_label_two,
+        p_label_greater,
+        p_label_less,
+    ):
+        all_result_rows.append(
+            {
+                "scope": file_tag,
+                "zone_name": zone_name,
+                "analysis": "label_permutation",
+                "uncertainty_method": UNCERTAINTY_METHOD_PERCENTILE,
+                "control_offset_nm": np.nan,
+                "r_nm": float(r),
+                "o_observed": float(obs),
+                "o_null_lo": float(n_lo),
+                "o_null_hi": float(n_hi),
+                "o_null_median": float(n_med),
+                "o_obs_lo": float(o_lo),
+                "o_obs_hi": float(o_hi),
+                "o_obs_median": float(o_med),
+                "p_value_two_sided": float(p2),
+                "p_value_enrichment": float(pg),
+                "p_value_depletion": float(pl),
+                "n_fusion_vesicles": n_fusion_vesicles,
+                "n_tomograms": n_tomograms,
+                "n_active_zones": n_active_zones,
+            }
+        )
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    _plot_label_permutation_envelope_panel(
+        ax,
+        r_vals,
+        null_lo=o_null_lo,
+        null_med=o_null_med,
+        null_hi=o_null_hi,
+        n_perm=n_null,
+        obs_lo=o_fusion_lo,
+        obs_med=o_fusion_med,
+        obs_hi=o_fusion_hi,
+        n_obs_replicates=len(fusion_vesicle_curves),
+        ylabel="Ripley's O(r) [membrain-stats geodesic]",
+        title=(
+            "Pooled label-permutation null: Ripley's O fusion vs AuNP\n"
+            f"all fusing vesicles | {pool_note}"
+        ),
+        refline=1.0,
+        refline_label="CSR (O=1)",
+    )
+    fig.tight_layout()
+    fig.savefig(figures_dir / f"ripley_o_label_permutation_{file_tag}.png", dpi=150)
+    plt.close(fig)
+
+    _plot_significance_single(
+        r_vals,
+        p_label_two,
+        title="Pooled Ripley's O label-permutation significance\nall fusing vesicles",
+        output_path=figures_dir / f"ripley_o_pvalues_label_permutation_{file_tag}.png",
+        panel_note=f"{pool_note}, n_null={n_null}",
+    )
+
+    offsets = _offset_keys_from_artifacts(artifacts)
+    n_panels = len(offsets)
+    ncols = min(3, n_panels)
+    nrows = int(np.ceil(n_panels / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 4 * nrows), squeeze=False)
+    axes_flat = axes.flatten()
+    p_by_d: dict[str, np.ndarray] = {}
+
+    for ax, offset_nm in zip(axes_flat, offsets):
+        tag = _offset_artifact_key(offset_nm)
+        fusion_parts_d: list[np.ndarray] = []
+        ctrl_parts_d: list[np.ndarray] = []
+        for artifact in artifacts:
+            f_key, c_key = f"fusion_{tag}", f"control_{tag}"
+            if f_key in artifact and c_key in artifact:
+                fusion_parts_d.append(np.asarray(artifact[f_key]))
+                ctrl_parts_d.append(np.asarray(artifact[c_key]))
+        fusion_curves = _stack_nonempty_curves(fusion_parts_d)
+        ctrl_curves = _stack_nonempty_curves(ctrl_parts_d)
+        if fusion_curves.size == 0 or ctrl_curves.size == 0:
+            ax.set_title(f"d={int(offset_nm)} nm (no controls)")
             continue
 
-        o_obs = np.mean(np.vstack(obs_parts), axis=0)
-        o_fusion_lo, o_fusion_med, o_fusion_hi = _replicate_percentile_band(fusion_vesicle_curves)
-        o_null_lo, o_null_med, o_null_hi = _replicate_percentile_band(perm_curves)
-        p_label_two = _monte_carlo_p_two_sided(o_obs, perm_curves)
-        n_null = perm_curves.shape[0]
-        p_label_greater = (np.sum(perm_curves >= o_obs, axis=0) + 1) / (n_null + 1)
-        p_label_less = (np.sum(perm_curves <= o_obs, axis=0) + 1) / (n_null + 1)
+        o_ctrl_lo, o_ctrl_med, o_ctrl_hi = _replicate_percentile_band(ctrl_curves)
+        p_fusion_vs_ctrl = _unpaired_curve_pvalues(fusion_curves, ctrl_curves)
+        p_by_d[f"d={int(offset_nm)} nm"] = p_fusion_vs_ctrl
 
-        for r, obs, n_lo, n_med, n_hi, o_lo, o_med, o_hi, p2, pg, pl in zip(
+        _plot_fusion_vs_control_ripley_panel(
+            ax,
             r_vals,
-            o_obs,
-            o_null_lo,
-            o_null_med,
-            o_null_hi,
+            ctrl_lo=o_ctrl_lo,
+            ctrl_med=o_ctrl_med,
+            ctrl_hi=o_ctrl_hi,
+            n_control_vesicles=len(ctrl_curves),
+            offset_nm=float(offset_nm),
+            fusion_lo=o_fusion_lo,
+            fusion_med=o_fusion_med,
+            fusion_hi=o_fusion_hi,
+            n_fusion_vesicles=len(fusion_curves),
+            ylabel="Ripley's O(r)",
+            refline=1.0,
+            refline_label="CSR (O=1)",
+        )
+
+        for r, f_lo, f_med, f_hi, c_lo, c_med, c_hi, p_val in zip(
+            r_vals,
             o_fusion_lo,
             o_fusion_med,
             o_fusion_hi,
-            p_label_two,
-            p_label_greater,
-            p_label_less,
+            o_ctrl_lo,
+            o_ctrl_med,
+            o_ctrl_hi,
+            p_fusion_vs_ctrl,
         ):
             all_result_rows.append(
                 {
                     "scope": file_tag,
                     "zone_name": zone_name,
-                    "analysis": "label_permutation",
+                    "analysis": "fusion_vs_control",
                     "uncertainty_method": UNCERTAINTY_METHOD_PERCENTILE,
-                    "control_offset_nm": np.nan,
+                    "control_offset_nm": float(offset_nm),
                     "r_nm": float(r),
-                    "o_observed": float(obs),
-                    "o_null_lo": float(n_lo),
-                    "o_null_hi": float(n_hi),
-                    "o_null_median": float(n_med),
-                    "o_obs_lo": float(o_lo),
-                    "o_obs_hi": float(o_hi),
-                    "o_obs_median": float(o_med),
-                    "p_value_two_sided": float(p2),
-                    "p_value_enrichment": float(pg),
-                    "p_value_depletion": float(pl),
-                    "n_fusion_vesicles": len(fusion_vesicle_curves),
-                    "n_tomograms": len(artifacts),
+                    "o_fusion_lo": float(f_lo),
+                    "o_fusion_median": float(f_med),
+                    "o_fusion_hi": float(f_hi),
+                    "o_control_lo": float(c_lo),
+                    "o_control_median": float(c_med),
+                    "o_control_hi": float(c_hi),
+                    "p_value_two_sided": float(p_val),
+                    "n_fusion_vesicles": len(fusion_curves),
+                    "n_control_vesicles": len(ctrl_curves),
+                    "n_tomograms": n_tomograms,
+                    "n_active_zones": n_active_zones,
                 }
             )
 
-        fig, ax = plt.subplots(figsize=(7, 5))
-        _plot_label_permutation_envelope_panel(
-            ax,
+    for ax in axes_flat[n_panels:]:
+        ax.set_visible(False)
+    fig.suptitle(
+        "Pooled Ripley's O: fusion vs controls across all fusing vesicles",
+        y=1.02,
+    )
+    fig.tight_layout()
+    fig.savefig(
+        figures_dir / f"ripley_o_fusion_vs_controls_by_d_{file_tag}.png",
+        dpi=150,
+        bbox_inches="tight",
+    )
+    plt.close(fig)
+
+    if p_by_d:
+        _plot_significance_panels(
             r_vals,
-            null_lo=o_null_lo,
-            null_med=o_null_med,
-            null_hi=o_null_hi,
-            n_perm=n_null,
-            obs_lo=o_fusion_lo,
-            obs_med=o_fusion_med,
-            obs_hi=o_fusion_hi,
-            n_obs_replicates=len(fusion_vesicle_curves),
-            ylabel="Ripley's O(r) [membrain-stats geodesic]",
-            title=(
-                f"Pooled label-permutation null: Ripley's O fusion vs AuNP\n"
-                f"{zone_name} | n_tomograms={len(artifacts)}"
-            ),
-            refline=1.0,
-            refline_label="CSR (O=1)",
-        )
-        fig.tight_layout()
-        fig.savefig(figures_dir / f"ripley_o_label_permutation_{file_tag}_{zone_name}.png", dpi=150)
-        plt.close(fig)
-
-        _plot_significance_single(
-            r_vals,
-            p_label_two,
-            title=f"Pooled Ripley's O label-permutation significance\n{zone_name}",
-            output_path=figures_dir / f"ripley_o_pvalues_label_permutation_{file_tag}_{zone_name}.png",
-            panel_note=f"n_tomograms={len(artifacts)}, n_null={n_null}",
+            p_by_d,
+            title="Pooled Ripley's O fusion vs controls significance\nall fusing vesicles combined",
+            output_path=figures_dir / f"ripley_o_pvalues_fusion_vs_control_{file_tag}.png",
         )
 
-        offsets = _offset_keys_from_artifact(artifacts[0])
-        n_panels = len(offsets)
-        ncols = min(3, n_panels)
-        nrows = int(np.ceil(n_panels / ncols))
-        fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 4 * nrows), squeeze=False)
-        axes_flat = axes.flatten()
-        p_by_d: dict[str, np.ndarray] = {}
-
-        for ax, offset_nm in zip(axes_flat, offsets):
-            tag = _offset_artifact_key(offset_nm)
-            fusion_parts_d: list[np.ndarray] = []
-            ctrl_parts_d: list[np.ndarray] = []
-            for artifact in artifacts:
-                f_key, c_key = f"fusion_{tag}", f"control_{tag}"
-                if f_key in artifact and c_key in artifact:
-                    fusion_parts_d.append(np.asarray(artifact[f_key]))
-                    ctrl_parts_d.append(np.asarray(artifact[c_key]))
-            fusion_curves = _stack_nonempty_curves(fusion_parts_d)
-            ctrl_curves = _stack_nonempty_curves(ctrl_parts_d)
-            if fusion_curves.size == 0 or ctrl_curves.size == 0:
-                ax.set_title(f"d={int(offset_nm)} nm (no controls)")
-                continue
-
-            o_ctrl_lo, o_ctrl_med, o_ctrl_hi = _replicate_percentile_band(ctrl_curves)
-            p_fusion_vs_ctrl = _unpaired_curve_pvalues(fusion_curves, ctrl_curves)
-            p_by_d[f"d={int(offset_nm)} nm"] = p_fusion_vs_ctrl
-
-            _plot_fusion_vs_control_ripley_panel(
-                ax,
-                r_vals,
-                ctrl_lo=o_ctrl_lo,
-                ctrl_med=o_ctrl_med,
-                ctrl_hi=o_ctrl_hi,
-                n_control_vesicles=len(ctrl_curves),
-                offset_nm=float(offset_nm),
-                fusion_lo=o_fusion_lo,
-                fusion_med=o_fusion_med,
-                fusion_hi=o_fusion_hi,
-                n_fusion_vesicles=len(fusion_curves),
-                ylabel="Ripley's O(r)",
-                refline=1.0,
-                refline_label="CSR (O=1)",
-            )
-
-            for r, f_lo, f_med, f_hi, c_lo, c_med, c_hi, p_val in zip(
-                r_vals,
-                o_fusion_lo,
-                o_fusion_med,
-                o_fusion_hi,
-                o_ctrl_lo,
-                o_ctrl_med,
-                o_ctrl_hi,
-                p_fusion_vs_ctrl,
-            ):
-                all_result_rows.append(
-                    {
-                        "scope": file_tag,
-                        "zone_name": zone_name,
-                        "analysis": "fusion_vs_control",
-                        "uncertainty_method": UNCERTAINTY_METHOD_PERCENTILE,
-                        "control_offset_nm": float(offset_nm),
-                        "r_nm": float(r),
-                        "o_fusion_lo": float(f_lo),
-                        "o_fusion_median": float(f_med),
-                        "o_fusion_hi": float(f_hi),
-                        "o_control_lo": float(c_lo),
-                        "o_control_median": float(c_med),
-                        "o_control_hi": float(c_hi),
-                        "p_value_two_sided": float(p_val),
-                        "n_fusion_vesicles": len(fusion_curves),
-                        "n_control_vesicles": len(ctrl_curves),
-                        "n_tomograms": len(artifacts),
-                    }
-                )
-
-        for ax in axes_flat[n_panels:]:
-            ax.set_visible(False)
-        fig.suptitle(
-            f"Pooled Ripley's O: fusion vs controls across all tomograms\n{zone_name}",
-            y=1.02,
-        )
-        fig.tight_layout()
-        fig.savefig(
-            figures_dir / f"ripley_o_fusion_vs_controls_by_d_{file_tag}_{zone_name}.png",
-            dpi=150,
-            bbox_inches="tight",
-        )
-        plt.close(fig)
-
-        if p_by_d:
-            _plot_significance_panels(
-                r_vals,
-                p_by_d,
-                title=f"Pooled Ripley's O fusion vs controls significance\n{zone_name}",
-                output_path=figures_dir / f"ripley_o_pvalues_fusion_vs_control_{file_tag}_{zone_name}.png",
-            )
-
-        print(
-            f"  Pooled Ripley's O ({zone_name}): {len(fusion_vesicle_curves)} fusion vesicles from "
-            f"{len(artifacts)} tomograms"
-        )
+    print(f"  Pooled Ripley's O (all fusing vesicles): {pool_note}")
 
     if not all_result_rows:
         return None
@@ -3443,8 +3467,8 @@ def aggregate_fusion_point_vs_aunp_density_visualizations(
     """
     Combine per-tomogram fusion-point vs AuNP density outputs and regenerate summary plots.
 
-    Per-tomogram Ripley CSVs are concatenated only (not recomputed). Dataset-level pooled
-    Ripley figures stack saved per-vesicle curves from each tomogram (no Ripley recomputation).
+    Per-tomogram Ripley CSVs are concatenated only (not recomputed). Pooled Ripley figures
+    stack saved per-vesicle curves from all tomograms and active zones together.
     Packing summary plots are written per tomogram and as pooled figures across all tomograms.
 
     Called from the visualization pipeline after active zonograms exist (for zonogram overlays).
