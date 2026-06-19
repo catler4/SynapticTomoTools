@@ -35,6 +35,8 @@ psutil>=5.8
 # Optional dependencies for analysis scripts
 seaborn>=0.11       # Used in analysis scripts for enhanced plotting
 streamlit>=1.28     # For zonogram viewer: streamlit run scripts/zonogram_viewer.py
+membrain-stats>=0.0.3  # Geodesic Ripley's O in fusion packing controls test
+potpourri3d            # Heat-method geodesics (membrain-stats dependency)
 reportlab
 pillow
 PyPDF2

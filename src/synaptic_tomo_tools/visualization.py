@@ -1499,6 +1499,155 @@ def run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=Non
     except Exception as e:
         print(f"Error in active zonogram analysis: {e}")
 
+
+def _transform_packing_samples_to_zonogram_xy(
+    vertices: np.ndarray,
+    values: np.ndarray,
+    zonogram_data: dict,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Project packing-density sample vertices into zonogram XY coordinates, keeping
+    values aligned with any in-bounds filtering (unlike transform_coordinates_to_active_zonogram
+    alone, which can drop rows without updating the value array).
+    """
+    import torch
+    from torch_affine_utils.transforms_3d import T
+    from torch_affine_utils.utils import homogenise_coordinates
+    import einops
+
+    coords = torch.tensor(vertices, dtype=torch.float32)
+    M = torch.tensor(zonogram_data["transformation_matrix"], dtype=torch.float32)
+    new_center = zonogram_data["extent"] // 2
+    M = T(new_center) @ M
+    coords = homogenise_coordinates(coords)
+    transformed = M @ einops.rearrange(coords, "b xyzw -> b xyzw 1")
+    transformed = einops.rearrange(transformed, "b xyzw 1 -> b xyzw")[:, :3]
+    extent = zonogram_data["extent"]
+    in_bounds = (
+        (transformed[:, 0] >= 0)
+        & (transformed[:, 0] < extent[0])
+        & (transformed[:, 1] >= 0)
+        & (transformed[:, 1] < extent[1])
+        & (transformed[:, 2] >= 0)
+        & (transformed[:, 2] < extent[2])
+    )
+    mask = in_bounds.numpy()
+    xy = transformed[mask, :2].numpy()
+    vals = np.asarray(values, dtype=float)[mask]
+    return xy, vals
+
+
+def _interpolate_packing_density_on_zonogram_xy(
+    xy_points: np.ndarray,
+    packing_values: np.ndarray,
+    image_shape: tuple[int, int],
+) -> np.ndarray:
+    """Linear griddata onto the full zonogram XY slice (original Johannes packing overlay)."""
+    from scipy.interpolate import griddata
+    from scipy.ndimage import zoom
+
+    height, width = image_shape
+    grid_y, grid_x = np.mgrid[0:height, 0:width]
+    density_map = griddata(
+        xy_points,
+        packing_values,
+        (grid_x, grid_y),
+        method="linear",
+        fill_value=0.0,
+    )
+    if density_map.shape != image_shape:
+        zoom_factors = (
+            height / density_map.shape[0],
+            width / density_map.shape[1],
+        )
+        density_map = zoom(density_map, zoom_factors, order=1)
+    return density_map
+
+
+def save_packing_density_zonogram_overlay(
+    zone_packing_data: dict,
+    *,
+    zonogram_findingampa,
+    original_zone_data: dict,
+    probe_radius_nm: float,
+    packing_path_results_organized: Path,
+    packing_path_tomogram: Path,
+    rerun: bool,
+) -> bool:
+    """
+    Render and save one packing-density heatmap PNG for a given probe radius.
+    Returns True if a new file was written.
+    """
+    import torch
+    import matplotlib.pyplot as plt
+
+    v_array = np.array(zone_packing_data["v_array"])
+    packing_coefficient = np.array(zone_packing_data["packing_coefficient"])
+    if packing_coefficient.dtype == object:
+        packing_coefficient = np.array(
+            [np.nan if x is None else float(x) for x in zone_packing_data["packing_coefficient"]],
+            dtype=np.float64,
+        )
+    valid = np.isfinite(packing_coefficient)
+    v_array = v_array[valid]
+    packing_coefficient = packing_coefficient[valid]
+
+    xy_points, packing_values = _transform_packing_samples_to_zonogram_xy(
+        v_array,
+        packing_coefficient,
+        original_zone_data,
+    )
+    if len(xy_points) < 3:
+        return False
+
+    fig_packing = render_active_zonograms_findingampa_style(zonogram_findingampa)
+    axxy_packing, _, _ = fig_packing.get_axes()
+
+    res_ddw = zonogram_findingampa[2]
+    base_image = torch.min(res_ddw, axis=0).values
+    base_image_shape = base_image.shape
+    base_extent = [0, base_image_shape[1], 0, base_image_shape[0]]
+
+    density_map = _interpolate_packing_density_on_zonogram_xy(
+        xy_points,
+        packing_values,
+        base_image_shape,
+    )
+
+    im = axxy_packing.imshow(
+        density_map,
+        cmap="hot",
+        alpha=0.6,
+        origin="lower",
+        vmin=0.0,
+        vmax=1.0,
+        extent=base_extent,
+        interpolation="mitchell",
+        zorder=10,
+    )
+
+    cbar = fig_packing.colorbar(im, ax=axxy_packing, fraction=0.046, pad=0.04)
+    cbar.set_label(
+        f"AMPA packing coeff. (probe r={int(round(probe_radius_nm))} nm)",
+        rotation=270,
+        labelpad=15,
+    )
+
+    packing_filename = packing_path_results_organized.name
+    if packing_path_results_organized.exists() and packing_path_tomogram.exists() and not rerun:
+        print(f"    Skipping {packing_filename}, already exists.")
+        plt.close(fig_packing)
+        return False
+
+    packing_path_results_organized.parent.mkdir(parents=True, exist_ok=True)
+    packing_path_tomogram.parent.mkdir(parents=True, exist_ok=True)
+    fig_packing.savefig(packing_path_results_organized)
+    fig_packing.savefig(packing_path_tomogram)
+    plt.close(fig_packing)
+    print(f"    ✓ Saved PNG: {packing_filename}")
+    return True
+
+
 def render_active_zonograms_findingampa_style(active_zone_data):
     """
     Render active zonogram using the exact same approach as findingampa.
@@ -2560,101 +2709,57 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                         plt.close(fig_no_fusion)
                     
                     # Generate packing density visualization
-                    packing_density_file = Path(tomogram_path) / alignment_dir / "STT_results" / "aunps" / "packing_density_results.json"
+                    packing_density_file = (
+                        Path(tomogram_path) / alignment_dir / "STT_results" / "aunps"
+                        / "packing_density_results.json"
+                    )
                     if packing_density_file.exists() and zone_name in zonogram_results['zonogram_data']:
                         try:
-                            import json
-                            from scipy.interpolate import griddata
-                            from .activezone import transform_coordinates_to_active_zonogram
-                            
                             with open(packing_density_file, 'r') as f:
                                 packing_density_data = json.load(f)
-                            
+
                             if zone_name in packing_density_data:
                                 zone_packing_data = packing_density_data[zone_name]
-                                v_array = np.array(zone_packing_data['v_array'])
-                                packing_coefficient = np.array(zone_packing_data['packing_coefficient'])
-                                if packing_coefficient.dtype == object:
-                                    packing_coefficient = np.array(
-                                        [np.nan if x is None else float(x) for x in zone_packing_data['packing_coefficient']],
-                                        dtype=np.float64,
+                                probe_radius_nm = float(
+                                    zone_packing_data.get(
+                                        "cylinder_radius_nm",
+                                        zone_packing_data.get("probe_radius_nm", 25.0),
                                     )
-                                    _ok = np.isfinite(packing_coefficient)
-                                    v_array = v_array[_ok]
-                                    packing_coefficient = packing_coefficient[_ok]
-                                
-                                # Transform coordinates to active zonogram space
-                                transformed_v = transform_coordinates_to_active_zonogram(v_array, original_zone_data)
-                                
-                                if len(transformed_v) > 0:
-                                    # Create figure EXACTLY the same way as regular active zonogram
-                                    fig_packing = render_active_zonograms_findingampa_style(zonogram_findingampa)
-                                    (axxy_packing, axxz_packing, axyz_packing) = fig_packing.get_axes()
-                                    
-                                    # Get the base image to determine its extent
-                                    res_ddw = zonogram_findingampa[2]
-                                    base_image = torch.min(res_ddw, axis=0).values
-                                    base_image_shape = base_image.shape  # (y, x) = (shape[1], shape[2] from res_ddw)
-                                    
-                                    # Get the extent of the base image (imshow default is [left, right, bottom, top])
-                                    # For a (y, x) array with origin='lower', extent is [0, x_size, 0, y_size]
-                                    base_extent = [0, base_image_shape[1], 0, base_image_shape[0]]
-                                    
-                                    # Create grid for interpolation matching the base image shape exactly
-                                    grid_y, grid_x = np.mgrid[0:base_image_shape[0], 0:base_image_shape[1]]
-                                    
-                                    # Interpolate packing density onto the grid
-                                    # transformed_v[:, :2] gives (x, y) coordinates
-                                    # griddata expects (xi, yi) as the grid, which is (grid_x, grid_y)
-                                    density_map = griddata(
-                                        transformed_v[:, :2],  # (x, y) points
-                                        packing_coefficient,
-                                        (grid_x, grid_y),  # Grid points (x, y)
-                                        method='linear',
-                                        fill_value=0,
+                                )
+                                packing_filename = (
+                                    f"{tomogram_name}_active_zonogram_{zone_name}_packing_density{suffix}.png"
+                                )
+                                packing_path_results_organized = (
+                                    results_active_zonograms_dir_full / packing_filename
+                                )
+                                packing_path_tomogram = (
+                                    tomogram_active_zonograms_dir / packing_filename
+                                )
+
+                                if (
+                                    packing_path_results_organized.exists()
+                                    and packing_path_tomogram.exists()
+                                    and not rerun
+                                ):
+                                    print(f"    Skipping {packing_filename}, already exists.")
+                                    files_created.append(packing_filename)
+                                else:
+                                    saved = save_packing_density_zonogram_overlay(
+                                        zone_packing_data,
+                                        zonogram_findingampa=zonogram_findingampa,
+                                        original_zone_data=original_zone_data,
+                                        probe_radius_nm=probe_radius_nm,
+                                        packing_path_results_organized=packing_path_results_organized,
+                                        packing_path_tomogram=packing_path_tomogram,
+                                        rerun=rerun,
                                     )
-                                    
-                                    # Verify density_map shape matches base image exactly
-                                    if density_map.shape != base_image_shape:
-                                        # If shape doesn't match, we need to fix it
-                                        from scipy.ndimage import zoom
-                                        zoom_factors = (base_image_shape[0] / density_map.shape[0], 
-                                                       base_image_shape[1] / density_map.shape[1])
-                                        density_map = zoom(density_map, zoom_factors, order=1)
-                                    
-                                    # Overlay the heatmap on the XY view (main view)
-                                    # Use the EXACT same extent as the base image to ensure perfect alignment
-                                    im = axxy_packing.imshow(
-                                        density_map,
-                                        cmap='hot',
-                                        alpha=0.6,
-                                        origin='lower',
-                                        vmin=0.0,
-                                        vmax=1.0,
-                                        extent=base_extent,  # Use same extent as base image
-                                        zorder=10  # Ensure it's on top
-                                    )
-                                    
-                                    # Add colorbar
-                                    cbar = fig_packing.colorbar(im, ax=axxy_packing, fraction=0.046, pad=0.04)
-                                    cbar.set_label('Estimated AMPA Receptor Packing Coefficient', rotation=270, labelpad=15)
-                                    
-                                    # Save packing density visualization
-                                    packing_filename = f"{tomogram_name}_active_zonogram_{zone_name}_packing_density{suffix}.png"
-                                    packing_path_results_organized = results_active_zonograms_dir_full / packing_filename
-                                    packing_path_tomogram = tomogram_active_zonograms_dir / packing_filename
-                                    
-                                    if packing_path_results_organized.exists() and packing_path_tomogram.exists() and not rerun:
-                                        print(f"    Skipping {packing_filename}, already exists.")
-                                        files_created.append(packing_filename)
-                                    else:
-                                        fig_packing.savefig(packing_path_results_organized)
-                                        fig_packing.savefig(packing_path_tomogram)
-                                        plt.close(fig_packing)
-                                        print(f"    ✓ Saved PNG: {packing_filename}")
+                                    if saved or packing_path_results_organized.exists():
                                         files_created.append(packing_filename)
                         except Exception as e:
-                            print(f"    Warning: Could not create packing density visualization for {zone_name}: {e}")
+                            print(
+                                f"    Warning: Could not create packing density visualization "
+                                f"for {zone_name}: {e}"
+                            )
                             import traceback
                             traceback.print_exc()
             else:

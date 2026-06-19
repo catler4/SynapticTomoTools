@@ -154,7 +154,7 @@ def calculate_packing_density_using_sliding_cylinder(
     receptor_crosssection_nm_squared: float = 122.0,
     aunps_per_receptor: float = 2.0,
     vertex_sampling_step: int = 50,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Calculate packing density of AuNPs (receptors) on postsynaptic membrane using sliding cylinder method.
     
@@ -168,12 +168,15 @@ def calculate_packing_density_using_sliding_cylinder(
         vertex_sampling_step: Sample every Nth mesh vertex (1=all, 50=every 50th) (default: 50)
     
     Returns:
-        Tuple of (v_array, packing_coefficient) where:
+        Tuple of (v_array, num_aunps_in_cylinder, aunp_density_per_nm2, packing_coefficient) where:
         - v_array: Subset of postsynaptic mesh vertices used (every vertex_sampling_step-th)
-        - packing_coefficient: Calculated packing density values for each vertex
+        - num_aunps_in_cylinder: Unique AuNP count within the cylinder at each vertex
+        - aunp_density_per_nm2: num_aunps_in_cylinder / (π × cylinder_radius²)
+        - packing_coefficient: Estimated receptor packing coefficient at each vertex
     """
     ps_mesh = active_zone['active_postsynaptic_mesh']
-    subset_vertices = ps_mesh.vertices[::vertex_sampling_step]
+    step = max(1, int(vertex_sampling_step))
+    subset_vertices = ps_mesh.vertices[::step]
     
     tree = cKDTree(ps_mesh.vertices)
     # Generate a cKDTree of aunps
@@ -195,28 +198,179 @@ def calculate_packing_density_using_sliding_cylinder(
         num_aunps_at_vertex.append(len(unique_idxs_aunps))
 
     v_array = np.array(subset_vertices)
+    num_aunps_in_cylinder = np.array(num_aunps_at_vertex, dtype=int)
     area_of_circle = np.pi * (cylinder_radius ** 2)  # Area = πr²
-    packing_coefficient = ((np.array(num_aunps_at_vertex) / aunps_per_receptor) * receptor_crosssection_nm_squared) / area_of_circle
+    aunp_density_per_nm2 = num_aunps_in_cylinder.astype(float) / area_of_circle
+    packing_coefficient = (
+        (num_aunps_in_cylinder.astype(float) / aunps_per_receptor) * receptor_crosssection_nm_squared
+    ) / area_of_circle
 
-    # Mask vertices near mesh boundary to avoid edge artifacts (cylinder extends past boundary)
+    return (v_array, num_aunps_in_cylinder, aunp_density_per_nm2, packing_coefficient)
+
+
+def _compute_fusion_point_from_vesicle(
+    vesicle: dict,
+    membrane_active_zone_pairs: dict[str, dict],
+    fusion_point_threshold: float,
+) -> np.ndarray | None:
+    """Putative fusion point (nm) — same geometry as per-vesicle AuNP distance histograms."""
+    vesicle_points = np.array(vesicle["coordinates"])
+    membrane_name = vesicle.get("closest_membrane")
+    if not membrane_name or membrane_name not in membrane_active_zone_pairs:
+        return None
+    active_zone_points = membrane_active_zone_pairs[membrane_name]["active_zone_points"]
+    if active_zone_points is None or len(active_zone_points) == 0:
+        return None
+    tree = KDTree(active_zone_points)
+    close_points = []
+    for pt in vesicle_points:
+        idxs = tree.query_ball_point(pt, r=fusion_point_threshold)
+        if idxs:
+            close_points.extend(active_zone_points[idxs])
+    if not close_points:
+        return None
+    return np.mean(np.vstack(close_points), axis=0)
+
+
+def enumerate_close_vesicle_fusion_points(
+    tomogram_path,
+    *,
+    alignment_dir: str,
+    vesicle_distance_threshold: float = 20.0,
+    fusion_point_threshold: float = 20.0,
+) -> list[dict]:
+    """
+    Fusion points for vesicles within ``vesicle_distance_threshold`` of the presynaptic AZ
+    (fusing + close), using the same fusion-point definition as AuNP distance histograms.
+    """
+    alignment_dir = require_alignment_dir(alignment_dir)
+    tomogram_name = Path(tomogram_path).name
+    vesicles_file = Path(tomogram_path) / alignment_dir / "STT_results" / "vesicles" / "vesicle_results.json"
+    if not vesicles_file.is_file():
+        return []
+    with open(vesicles_file, "r") as f:
+        vesicles = json.load(f)["vesicles"]
+    membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(
+        tomogram_path, alignment_dir=alignment_dir
+    )
+    rows: list[dict] = []
+    for vesicle_idx, vesicle in enumerate(vesicles):
+        distance_to_az = vesicle.get("distance_to_az", np.nan)
+        if not np.isfinite(distance_to_az) or distance_to_az > vesicle_distance_threshold:
+            continue
+        fusion_point = _compute_fusion_point_from_vesicle(
+            vesicle, membrane_active_zone_pairs, fusion_point_threshold
+        )
+        if fusion_point is None:
+            continue
+        vesicle_class = vesicle.get("vesicle_distance_class")
+        if not vesicle_class or vesicle_class == "unknown":
+            if vesicle.get("is_fusing"):
+                vesicle_class = "fusing"
+            elif vesicle.get("is_close"):
+                vesicle_class = "close"
+            else:
+                vesicle_class = "close"
+        rows.append(
+            {
+                "tomogram_name": tomogram_name,
+                "alignment_dir": alignment_dir,
+                "vesicle_id": vesicle_idx,
+                "vesicle_name": f"{tomogram_name}_vesicle_{vesicle_idx}",
+                "vesicle_distance_class": vesicle_class,
+                "is_fusing": bool(vesicle.get("is_fusing", vesicle_class == "fusing")),
+                "is_close": bool(vesicle.get("is_close", vesicle_class == "close")),
+                "distance_to_presynaptic_az_nm": float(distance_to_az),
+                "closest_membrane": vesicle.get("closest_membrane"),
+                "vesicle_center_x_nm": float(vesicle["center"][0]),
+                "vesicle_center_y_nm": float(vesicle["center"][1]),
+                "vesicle_center_z_nm": float(vesicle["center"][2]),
+                "vesicle_diameter_nm": float(vesicle["diameter"]),
+                "vesicle_volume_nm3": float(vesicle["volume"]),
+                "fusion_point_x_nm": float(fusion_point[0]),
+                "fusion_point_y_nm": float(fusion_point[1]),
+                "fusion_point_z_nm": float(fusion_point[2]),
+            }
+        )
+    return rows
+
+
+def _append_tomogram_results_csv(
+    df: pd.DataFrame,
+    csv_path: Path,
+    *,
+    tomogram_name: str,
+    alignment_dir: str,
+    set_name: str,
+) -> None:
+    """Append/replace rows for one tomogram+alignment in a combined results CSV."""
+    if df.empty:
+        return
+    d = df.copy()
+    d["set_name"] = set_name
+    d["alignment_dir"] = alignment_dir
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        import trimesh
-        boundary_edge_indices = trimesh.grouping.group_rows(ps_mesh.edges_sorted, require_count=1)
-        if len(boundary_edge_indices) > 0:
-            boundary_edges = ps_mesh.edges_sorted[boundary_edge_indices]
-            boundary_vertex_indices = np.unique(boundary_edges.flatten())
-            boundary_vertex_coords = ps_mesh.vertices[boundary_vertex_indices]
-            boundary_tree = cKDTree(boundary_vertex_coords)
-            dist_to_boundary, _ = boundary_tree.query(subset_vertices, k=1)
-            # Set packing to NaN where cylinder would extend past mesh boundary
-            edge_mask = dist_to_boundary < cylinder_radius
-            packing_coefficient = np.asarray(packing_coefficient, dtype=float)
-            packing_coefficient[edge_mask] = np.nan
-    except Exception:
-        # If boundary detection fails (e.g. watertight mesh), skip masking
-        pass
+        if csv_path.exists():
+            df_existing = pd.read_csv(csv_path)
+            if "alignment_dir" not in df_existing.columns:
+                df_existing["alignment_dir"] = ""
+            df_existing = df_existing[
+                ~(
+                    (df_existing["tomogram_name"] == tomogram_name)
+                    & (df_existing["alignment_dir"] == alignment_dir)
+                )
+            ]
+            pd.concat([df_existing, d], ignore_index=True).to_csv(csv_path, index=False)
+        else:
+            d.to_csv(csv_path, index=False)
+    except Exception as exc:
+        print(f"Error updating {csv_path.name}: {exc}")
+        d.to_csv(csv_path, index=False)
 
-    return (v_array, packing_coefficient)
+
+def build_packing_density_at_fusion_points_dataframe(
+    scan_df: pd.DataFrame,
+    fusion_point_rows: list[dict],
+    *,
+    cylinder_radius: float,
+    receptor_crosssection: float,
+    aunps_per_receptor: float,
+    vertex_sampling_step: int,
+) -> pd.DataFrame:
+    """Assign each fusion point the packing coefficient of the nearest scan vertex."""
+    if not fusion_point_rows or scan_df.empty:
+        return pd.DataFrame()
+    scan_xyz = scan_df[["vertex_x_nm", "vertex_y_nm", "vertex_z_nm"]].to_numpy(dtype=float)
+    tree = cKDTree(scan_xyz)
+    out_rows: list[dict] = []
+    for fp in fusion_point_rows:
+        fusion_xyz = np.array(
+            [fp["fusion_point_x_nm"], fp["fusion_point_y_nm"], fp["fusion_point_z_nm"]],
+            dtype=float,
+        )
+        dist_nm, idx = tree.query(fusion_xyz, k=1)
+        nearest = scan_df.iloc[int(idx)]
+        out_rows.append(
+            {
+                **fp,
+                "packing_coefficient": float(nearest["packing_coefficient"]),
+                "aunp_count_in_cylinder": int(nearest["aunp_count_in_cylinder"]),
+                "aunp_density_per_nm2": float(nearest["aunp_density_per_nm2"]),
+                "nearest_scan_active_zone_name": nearest["active_zone_name"],
+                "nearest_scan_vertex_index": int(nearest["scan_vertex_index"]),
+                "nearest_scan_vertex_x_nm": float(nearest["vertex_x_nm"]),
+                "nearest_scan_vertex_y_nm": float(nearest["vertex_y_nm"]),
+                "nearest_scan_vertex_z_nm": float(nearest["vertex_z_nm"]),
+                "nearest_scan_vertex_distance_nm": float(dist_nm),
+                "cylinder_radius_nm": float(cylinder_radius),
+                "receptor_crosssection_nm2": float(receptor_crosssection),
+                "aunps_per_receptor": float(aunps_per_receptor),
+                "vertex_sampling_step": int(vertex_sampling_step),
+            }
+        )
+    return pd.DataFrame(out_rows)
+
 
 def compute_fusion_points_with_sources(
     tomogram_path,
@@ -980,67 +1134,64 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         # --- End per-vesicle AuNP outputs ---
         
         # --- Calculate packing density for each active zone ---
-        packing_density_results = {}
+        packing_density_results: dict = {}
         try:
             from .activezone import import_membrane_segmentations_from_glb, find_active_zones_from_glb, define_active_zonogram
             
-            print("Calculating packing density for active zones...")
-            # Load active zones from GLB
+            print(f"Calculating packing density for active zones (cylinder radius {cylinder_radius} nm)...")
             membrane_data = import_membrane_segmentations_from_glb(tomogram_path, alignment_dir=alignment_dir)
             active_zones_glb = find_active_zones_from_glb(membrane_data, distance_range=(10.0, 40.0))
             
             if active_zones_glb and 'active_zones' in active_zones_glb and len(active_zones_glb['active_zones']) > 0:
-                # Define active zonograms
                 zonogram_results = define_active_zonogram(active_zones_glb)
                 
                 if zonogram_results['status'] == 'completed' and 'zonogram_data' in zonogram_results:
-                    # Group AuNPs by active zone
                     aunps_by_az = {}
                     for az_idx in df_valid['active_zone'].unique():
                         if az_idx != -1:
                             az_df = df_valid[df_valid['active_zone'] == az_idx]
                             aunps_by_az[az_idx] = az_df[coord_cols].values
-                    
-                    # Calculate packing density for each active zone
-                    all_packing_coefficients = []
+
+                    fusion_point_rows = enumerate_close_vesicle_fusion_points(
+                        tomogram_path,
+                        alignment_dir=alignment_dir,
+                        vesicle_distance_threshold=vesicle_distance_threshold,
+                        fusion_point_threshold=fusion_point_threshold,
+                    )
+
+                    packing_scan_rows: list[dict] = []
                     for zone_name, zone_data in active_zones_glb['active_zones'].items():
-                        # Check if this zone has the required mesh
                         if 'active_postsynaptic_mesh' not in zone_data:
                             continue
-                        
-                        # Find matching AuNP data for this zone
-                        # Try to match by zone name pattern (e.g., "active_zone_pre1_post1")
+
                         zone_aunps = None
                         for az_idx, aunp_coords in aunps_by_az.items():
-                            # For now, use the first available AuNP set
-                            # In the future, could match more precisely using zone centers
                             if zone_aunps is None:
                                 zone_aunps = aunp_coords
-                        
+
                         if zone_aunps is None or len(zone_aunps) == 0:
                             print(f"  No AuNPs found for {zone_name}, skipping packing density calculation")
                             continue
-                        
-                        # Get zonogram data for this zone
+
                         if zone_name not in zonogram_results['zonogram_data']:
                             print(f"  No zonogram data found for {zone_name}, skipping packing density calculation")
                             continue
-                        
+
                         zonogram_data = zonogram_results['zonogram_data'][zone_name]
-                        
+
                         try:
-                            # Calculate packing density
-                            v_array, packing_coefficient = calculate_packing_density_using_sliding_cylinder(
-                                zone_data,
-                                zonogram_data,
-                                zone_aunps,
-                                cylinder_radius=cylinder_radius,
-                                receptor_crosssection_nm_squared=receptor_crosssection,
-                                aunps_per_receptor=aunps_per_receptor,
-                                vertex_sampling_step=vertex_sampling_step
+                            v_array, num_aunps_in_cylinder, aunp_density_per_nm2, packing_coefficient = (
+                                calculate_packing_density_using_sliding_cylinder(
+                                    zone_data,
+                                    zonogram_data,
+                                    zone_aunps,
+                                    cylinder_radius=cylinder_radius,
+                                    receptor_crosssection_nm_squared=receptor_crosssection,
+                                    aunps_per_receptor=aunps_per_receptor,
+                                    vertex_sampling_step=vertex_sampling_step,
+                                )
                             )
-                            
-                            # Store results (NaN -> None for JSON compatibility)
+
                             packing_list = [None if np.isnan(x) else float(x) for x in packing_coefficient]
                             valid = packing_coefficient[~np.isnan(packing_coefficient)]
                             if len(valid) > 0:
@@ -1048,31 +1199,125 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                                 pavg, pstd = float(np.nanmean(packing_coefficient)), float(np.nanstd(packing_coefficient))
                             else:
                                 pmax = pmin = pavg = pstd = None
+
                             packing_density_results[zone_name] = {
-                                'v_array': v_array.tolist(),  # Convert to list for JSON serialization
+                                'cylinder_radius_nm': float(cylinder_radius),
+                                'v_array': v_array.tolist(),
+                                'num_aunps_in_cylinder': num_aunps_in_cylinder.tolist(),
+                                'aunp_density_per_nm2': aunp_density_per_nm2.tolist(),
                                 'packing_coefficient': packing_list,
                                 'max_packing_coefficient': pmax,
                                 'avg_packing_coefficient': pavg,
                                 'min_packing_coefficient': pmin,
                                 'std_packing_coefficient': pstd,
                             }
-                            all_packing_coefficients.extend([x for x in packing_coefficient if not np.isnan(x)])
-                            
-                            m = packing_density_results[zone_name]
-                            max_s = f"{m['max_packing_coefficient']:.4f}" if m['max_packing_coefficient'] is not None else "N/A"
-                            avg_s = f"{m['avg_packing_coefficient']:.4f}" if m['avg_packing_coefficient'] is not None else "N/A"
+
+                            for scan_idx, (vertex, n_aunps, aunp_dens, coeff) in enumerate(
+                                zip(v_array, num_aunps_in_cylinder, aunp_density_per_nm2, packing_coefficient)
+                            ):
+                                packing_scan_rows.append(
+                                    {
+                                        "tomogram_name": tomogram_name,
+                                        "alignment_dir": alignment_dir,
+                                        "active_zone_name": zone_name,
+                                        "scan_vertex_index": scan_idx,
+                                        "vertex_x_nm": float(vertex[0]),
+                                        "vertex_y_nm": float(vertex[1]),
+                                        "vertex_z_nm": float(vertex[2]),
+                                        "aunp_count_in_cylinder": int(n_aunps),
+                                        "aunp_density_per_nm2": float(aunp_dens),
+                                        "packing_coefficient": float(coeff),
+                                        "cylinder_radius_nm": float(cylinder_radius),
+                                        "receptor_crosssection_nm2": float(receptor_crosssection),
+                                        "aunps_per_receptor": float(aunps_per_receptor),
+                                        "vertex_sampling_step": int(vertex_sampling_step),
+                                    }
+                                )
+
+                            max_s = f"{pmax:.4f}" if pmax is not None else "N/A"
+                            avg_s = f"{pavg:.4f}" if pavg is not None else "N/A"
                             print(f"  ✓ Calculated packing density for {zone_name}: max={max_s}, avg={avg_s}")
                         except Exception as e:
                             print(f"  Error calculating packing density for {zone_name}: {e}")
                             continue
-                    
-                    # Save packing density results to file
+
                     if packing_density_results:
                         packing_density_file = aunps_results_dir / "packing_density_results.json"
-                        import json
                         with open(packing_density_file, 'w') as f:
                             json.dump(packing_density_results, f, indent=2)
                         print(f"Saved packing density results to {packing_density_file}")
+
+                    df_packing_scan = pd.DataFrame(packing_scan_rows)
+                    if not df_packing_scan.empty:
+                        scan_local_csv = aunps_results_dir / "packing_density_scan_vertices.csv"
+                        df_packing_scan.to_csv(scan_local_csv, index=False)
+                        print(f"Saved {len(df_packing_scan)} scan vertices to {scan_local_csv}")
+                        _append_tomogram_results_csv(
+                            df_packing_scan,
+                            Path("results/aunps/packing_density_scan_vertices.csv"),
+                            tomogram_name=tomogram_name,
+                            alignment_dir=alignment_dir,
+                            set_name=set_name,
+                        )
+
+                        df_packing_at_fusion = build_packing_density_at_fusion_points_dataframe(
+                            df_packing_scan,
+                            fusion_point_rows,
+                            cylinder_radius=cylinder_radius,
+                            receptor_crosssection=receptor_crosssection,
+                            aunps_per_receptor=aunps_per_receptor,
+                            vertex_sampling_step=vertex_sampling_step,
+                        )
+                        if df_packing_at_fusion.empty:
+                            print("No close/fusing vesicle fusion points with valid packing lookup")
+                        else:
+                            fusion_local_csv = (
+                                aunps_results_dir / "packing_density_at_vesicle_fusion_points.csv"
+                            )
+                            df_packing_at_fusion.to_csv(fusion_local_csv, index=False)
+                            print(
+                                f"Saved {len(df_packing_at_fusion)} fusion-point rows to {fusion_local_csv}"
+                            )
+                            _append_tomogram_results_csv(
+                                df_packing_at_fusion,
+                                Path("results/aunps/packing_density_at_vesicle_fusion_points.csv"),
+                                tomogram_name=tomogram_name,
+                                alignment_dir=alignment_dir,
+                                set_name=set_name,
+                            )
+
+                    # --- Fusion-point vs AuNP density analysis (per active zone, multi-radius) ---
+                    if fusion_point_rows:
+                        try:
+                            from .fusion_point_vs_aunp_density import (
+                                run_fusion_point_vs_aunp_density_for_tomogram,
+                            )
+
+                            print("Running fusion-point vs AuNP density analysis per active zone...")
+                            fusion_zone_frames = run_fusion_point_vs_aunp_density_for_tomogram(
+                                Path(tomogram_path),
+                                alignment_dir,
+                                fusion_rows=fusion_point_rows,
+                                active_zones_glb=active_zones_glb,
+                                receptor_crosssection=receptor_crosssection,
+                                aunps_per_receptor=aunps_per_receptor,
+                                vertex_sampling_step=vertex_sampling_step,
+                                write_figures=True,
+                            )
+                            if fusion_zone_frames:
+                                df_fusion_vs_aunp = pd.concat(fusion_zone_frames, ignore_index=True)
+                                _append_tomogram_results_csv(
+                                    df_fusion_vs_aunp,
+                                    Path("results/aunps/fusion_point_vs_aunp_density.csv"),
+                                    tomogram_name=tomogram_name,
+                                    alignment_dir=alignment_dir,
+                                    set_name=set_name,
+                                )
+                        except Exception as fusion_exc:
+                            print(f"Error in fusion-point vs AuNP density analysis: {fusion_exc}")
+                            import traceback
+                            traceback.print_exc()
+                    # --- End fusion-point vs AuNP density analysis ---
                 else:
                     print("  Could not define active zonograms for packing density calculation")
             else:
@@ -1150,19 +1395,23 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         
         # Add packing density statistics
         if packing_density_results:
-            # Calculate overall max and average across all active zones (filter None from masked edge zones)
-            all_max_values = [x for x in (z['max_packing_coefficient'] for z in packing_density_results.values()) if x is not None]
-            all_avg_values = [x for x in (z['avg_packing_coefficient'] for z in packing_density_results.values()) if x is not None]
-            all_min_values = [x for x in (z['min_packing_coefficient'] for z in packing_density_results.values()) if x is not None]
-            if all_max_values and all_avg_values and all_min_values:
-                summary_stats['packing_density_max'] = float(np.max(all_max_values))
-                summary_stats['packing_density_avg'] = float(np.mean(all_avg_values))
-                summary_stats['packing_density_min'] = float(np.min(all_min_values))
+            all_max_values = [
+                zone_data['max_packing_coefficient'] for zone_data in packing_density_results.values()
+            ]
+            all_avg_values = [
+                zone_data['avg_packing_coefficient'] for zone_data in packing_density_results.values()
+            ]
+            summary_stats['packing_density_max'] = float(np.max(all_max_values)) if all_max_values else 0.0
+            summary_stats['packing_density_avg'] = float(np.mean(all_avg_values)) if all_avg_values else 0.0
+            summary_stats['packing_density_min'] = (
+                float(np.min([zone_data['min_packing_coefficient'] for zone_data in packing_density_results.values()]))
+                if packing_density_results
+                else 0.0
+            )
         else:
-            # Packing density calculation was attempted but no results were produced
-            # This is acceptable - not all analyses may have packing density data
-            # Don't set to 0.0, just don't include these stats
-            pass
+            summary_stats['packing_density_max'] = 0.0
+            summary_stats['packing_density_avg'] = 0.0
+            summary_stats['packing_density_min'] = 0.0
         
         # Add completion status
         summary_stats['status'] = 'completed'

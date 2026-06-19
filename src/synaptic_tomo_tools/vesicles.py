@@ -237,8 +237,10 @@ def remove_overlapping_vesicles(vesicles: List[Dict[str, Any]]) -> List[Dict[str
 def import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir: str) -> Dict[str, Dict[str, np.ndarray]]:
     """
     Import presynaptic membranes and their associated active zones.
-    Note: Active zones are already filtered by the active zone analysis step, so only
-    relevant zones (those with AuNPs) will be present in the saved files.
+
+    ``active_zone_points`` combines each zone's presynaptic outer and inner surfaces
+    (full active presynaptic membrane patch). Used for vesicle distance classification
+    (fusing / close), fusion-point geometry, and related AZ proximity metrics.
     
     Args:
         tomogram_path: Path to the tomogram directory (str or Path)
@@ -275,28 +277,36 @@ def import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir: 
             membrane_name = membrane_file.stem  # e.g., "presynapticmembranes_1"
             membrane_number = membrane_name.split('_')[-1]  # e.g., "1"
             
-            # Look for active zone files with matching number in STT_results/activezone
-            # Note: These files are already filtered by the active zone analysis step
-            # to only include zones with AuNPs, so no additional filtering is needed
-            active_zone_files = list(stt_results_dir.glob(f"active_zone_pre{membrane_number}_post*_pre_inner.txt"))
-            
-            if active_zone_files:
-                # Load all active zones for this membrane
+            # Whole active presynaptic membrane per zone (outer + inner), not inner alone.
+            zone_names: set[str] = set()
+            for path in stt_results_dir.glob(f"active_zone_pre{membrane_number}_post*_pre_outer.txt"):
+                zone_names.add(path.name.replace("_pre_outer.txt", ""))
+            for path in stt_results_dir.glob(f"active_zone_pre{membrane_number}_post*_pre_inner.txt"):
+                zone_names.add(path.name.replace("_pre_inner.txt", ""))
+
+            if zone_names:
                 all_active_zone_points = []
-                for active_zone_file in sorted(active_zone_files):
-                    active_zone_points = np.loadtxt(active_zone_file, delimiter=None)
-                    all_active_zone_points.append(active_zone_points)
-                
-                # Combine all active zone points into a single array
+                for zone_name in sorted(zone_names):
+                    zone_parts: list[np.ndarray] = []
+                    pre_outer_file = stt_results_dir / f"{zone_name}_pre_outer.txt"
+                    pre_inner_file = stt_results_dir / f"{zone_name}_pre_inner.txt"
+                    if pre_outer_file.is_file():
+                        zone_parts.append(np.atleast_2d(np.loadtxt(pre_outer_file, delimiter=None)))
+                    if pre_inner_file.is_file():
+                        zone_parts.append(np.atleast_2d(np.loadtxt(pre_inner_file, delimiter=None)))
+                    if zone_parts:
+                        combined_zone_points = np.vstack(zone_parts)
+                        all_active_zone_points.append(combined_zone_points)
+
                 if all_active_zone_points:
                     combined_active_zone_points = np.vstack(all_active_zone_points)
                 else:
                     combined_active_zone_points = np.array([])
-                
+
                 membrane_active_zone_pairs[membrane_name] = {
                     'membrane_points': membrane_points,
                     'active_zone_points': combined_active_zone_points,
-                    'individual_active_zones': all_active_zone_points  # Keep individual zones for detailed analysis
+                    'individual_active_zones': all_active_zone_points,
                 }
                 # Loaded membrane with active zone points
             else:

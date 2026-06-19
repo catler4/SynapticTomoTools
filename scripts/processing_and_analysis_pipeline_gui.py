@@ -367,7 +367,7 @@ class AnalysisPipelineGUI(tk.Tk):
         ToolTip(aunp_distance_max_entry, "Maximum distance (nm) for AuNP color scale; leave empty for auto.")
         ToolTip(cutoff_direction_combo, "Direction of AuNP distance cutoff filter: keep below or above cutoff value.")
         ToolTip(aunp_distance_cutoff_value_entry, "Distance cutoff value in nm for AuNP visualization filtering.")
-        ToolTip(cylinder_radius_entry, "Sliding-cylinder radius in nm for packing-density calculation (default 25.0).")
+        ToolTip(cylinder_radius_entry, "Sliding-cylinder radius in nm for packing-density heat map (default 25.0).")
         ToolTip(receptor_crosssection_entry, "Receptor cross-sectional area in nm² used in packing-density conversion (default 122.0).")
         ToolTip(aunps_per_receptor_entry, "AuNPs per receptor scaling factor for packing density (2=dimer/full receptor, 1=monomer/half receptor).")
         ToolTip(vertex_sampling_step_entry, "Use every Nth mesh vertex for packing-density computation (1=all vertices; default 50).")

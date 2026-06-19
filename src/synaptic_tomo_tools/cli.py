@@ -409,6 +409,15 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
     print(f"  Individual tomogram directories: {viz_output_dir}")
     print(f"  Organized results directory: {base_viz_dir}")
 
+    print("\n" + "=" * 60)
+    print("AGGREGATING FUSION-POINT VS AUNP DENSITY RESULTS")
+    print("=" * 60)
+    try:
+        from .fusion_point_vs_aunp_density import aggregate_fusion_point_vs_aunp_density_visualizations
+
+        aggregate_fusion_point_vs_aunp_density_visualizations(tomo_paths)
+    except Exception as e:
+        print(f"Warning: Could not aggregate fusion-point vs AuNP density results: {e}")
     
     # Per-tomogram active zonogram analysis runs in the loop above. PDF summaries are generated once here.
     print("\n" + "="*60)
@@ -487,7 +496,8 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
               vesicle_distance_threshold=vesicle_distance_threshold,
               dbscan_eps=dbscan_eps, dbscan_min_samples=dbscan_min_samples,
               cylinder_radius=cylinder_radius, receptor_crosssection=receptor_crosssection,
-              aunps_per_receptor=aunps_per_receptor, vertex_sampling_step=vertex_sampling_step,
+              aunps_per_receptor=aunps_per_receptor,
+              vertex_sampling_step=vertex_sampling_step,
               synaptic_designation_cutoff=synaptic_designation_cutoff,
               min_cluster_size=min_cluster_size, fusion_point_threshold=fusion_point_threshold,
               fusing_perimeter_threshold=fusing_perimeter_threshold,
@@ -1032,7 +1042,8 @@ def main():
                   vesicle_distance_threshold=vesicle_distance_threshold,
                   dbscan_eps=dbscan_eps, dbscan_min_samples=dbscan_min_samples,
                   cylinder_radius=cylinder_radius, receptor_crosssection=receptor_crosssection,
-                  aunps_per_receptor=aunps_per_receptor, vertex_sampling_step=vertex_sampling_step,
+                  aunps_per_receptor=aunps_per_receptor,
+                  vertex_sampling_step=vertex_sampling_step,
                   synaptic_designation_cutoff=synaptic_designation_cutoff,
                   min_cluster_size=min_cluster_size, fusion_point_threshold=fusion_point_threshold,
                   fusing_perimeter_threshold=fusing_perimeter_threshold,
