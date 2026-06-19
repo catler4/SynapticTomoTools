@@ -169,7 +169,7 @@ def load_or_compute_scan_df(
                 return subset
 
     print(f"  Computing scan vertices for probe r={probe_radius_nm:.0f} nm...")
-    from synaptic_tomo_tools.activezone import (
+    from .activezone import (
         define_active_zonogram,
         find_active_zones_from_glb,
         import_membrane_segmentations_from_glb,
@@ -335,7 +335,7 @@ def _load_zone_transform_from_active_zone_results(
     Matches the coordinate system used when STT visualizations render active zonograms
     (same define_active_zonogram path as visualization.run_combined_zonogram_analysis).
     """
-    from synaptic_tomo_tools.activezone import (
+    from .activezone import (
         define_active_zonogram,
         find_active_zones_from_glb,
         import_membrane_segmentations_from_glb,
@@ -363,7 +363,7 @@ def _load_precalculated_zonogram_for_zone(
     """Return (zonogram_findingampa, zone_data) using saved MRC + active-zone transform."""
     import mrcfile
     import torch
-    from synaptic_tomo_tools.visualization import transform_positions_to_zonogram_coords
+    from .visualization import transform_positions_to_zonogram_coords
 
     mrc_path = _find_precalculated_zonogram_mrc(tomogram_path, alignment_dir, zone_name)
     if mrc_path is None:
@@ -394,7 +394,7 @@ def _plot_fusion_vs_control_zonogram(
 ) -> None:
     """All tangential controls on one active zonogram, colored by offset d."""
     from matplotlib import cm
-    from synaptic_tomo_tools.visualization import render_mini_zonogram_xy_only
+    from .visualization import render_mini_zonogram_xy_only
 
     zone_col = "nearest_scan_active_zone_name"
     if zone_col not in real.columns:
@@ -1349,7 +1349,7 @@ def _load_aunp_coordinates_for_zone(
     max_snap_to_surface_nm: float = 50.0,
 ) -> np.ndarray:
     import starfile
-    from synaptic_tomo_tools.activezone import load_active_zone_mapping
+    from .activezone import load_active_zone_mapping
 
     aunps_dir = tomogram_path / alignment_dir / "STT_results" / "aunps"
     star_path = aunps_dir / "aunp_clusters.star"
