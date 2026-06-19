@@ -1399,6 +1399,30 @@ def _dedupe_rows_by_xyz(df: pd.DataFrame, cols: tuple[str, str, str], *, decimal
     return df.loc[~rounded.duplicated()].copy()
 
 
+def _ripley_csv_row_meta(tomogram_path: Path, alignment_dir: str) -> dict[str, str]:
+    return {
+        "tomogram_name": tomogram_path.name,
+        "alignment_dir": alignment_dir,
+    }
+
+
+def _stamp_tomogram_metadata(
+    df: pd.DataFrame | None,
+    *,
+    tomogram_name: str,
+    alignment_dir: str,
+) -> pd.DataFrame | None:
+    """Ensure combined tables identify their source tomogram."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    if "tomogram_name" not in out.columns:
+        out["tomogram_name"] = tomogram_name
+    if "alignment_dir" not in out.columns:
+        out["alignment_dir"] = alignment_dir
+    return out
+
+
 def run_ripley_postsynaptic_analysis(
     df: pd.DataFrame,
     tomogram_path: Path,
@@ -1433,6 +1457,7 @@ def run_ripley_postsynaptic_analysis(
 
     r_vals = _ripley_r_grid(r_max_nm, r_step_nm)
     rng = np.random.default_rng(seed)
+    row_meta = _ripley_csv_row_meta(tomogram_path, alignment_dir)
     figures_dir = output_dir / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1607,6 +1632,7 @@ def run_ripley_postsynaptic_analysis(
         ):
             all_result_rows.append(
                 {
+                    **row_meta,
                     "zone_name": zone_name,
                     "analysis": "label_permutation",
                     "uncertainty_method": UNCERTAINTY_METHOD_PERCENTILE,
@@ -1741,6 +1767,7 @@ def run_ripley_postsynaptic_analysis(
             ):
                 all_result_rows.append(
                     {
+                        **row_meta,
                         "zone_name": zone_name,
                         "analysis": "fusion_vs_control",
                         "uncertainty_method": UNCERTAINTY_METHOD_PERCENTILE,
@@ -1881,6 +1908,7 @@ def run_ripley_o_membrain_postsynaptic_analysis(
     r_vals = _ripley_r_grid(r_max_nm, r_step_nm)
     r_patch_nm = r_max_nm + r_step_nm
     rng = np.random.default_rng(seed)
+    row_meta = _ripley_csv_row_meta(tomogram_path, alignment_dir)
     figures_dir = output_dir / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2073,6 +2101,7 @@ def run_ripley_o_membrain_postsynaptic_analysis(
         ):
             all_result_rows.append(
                 {
+                    **row_meta,
                     "zone_name": zone_name,
                     "analysis": "label_permutation",
                     "uncertainty_method": UNCERTAINTY_METHOD_PERCENTILE,
@@ -2211,6 +2240,7 @@ def run_ripley_o_membrain_postsynaptic_analysis(
             ):
                 all_result_rows.append(
                     {
+                        **row_meta,
                         "zone_name": zone_name,
                         "analysis": "fusion_vs_control",
                         "uncertainty_method": UNCERTAINTY_METHOD_PERCENTILE,
@@ -2315,6 +2345,7 @@ def plot_results(
     *,
     tomogram_path: Path | None = None,
     alignment_dir: str = "best_alignment",
+    filename_tag: str = "",
 ) -> None:
     """Quick diagnostic figures."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -2330,6 +2361,23 @@ def plot_results(
     ncols = min(3, n_panels)
     nrows = int(np.ceil(n_panels / ncols))
     mid_radius = probe_radii[len(probe_radii) // 2]
+    name_suffix = f"_{filename_tag}" if filename_tag else ""
+
+    if "tomogram_name" in real.columns:
+        vesicle_keys = real[["tomogram_name", "vesicle_id"]].drop_duplicates()
+    else:
+        vesicle_keys = real[["vesicle_id"]].drop_duplicates()
+        vesicle_keys["tomogram_name"] = None
+
+    if filename_tag == "pooled":
+        n_tomograms = int(real["tomogram_name"].nunique()) if "tomogram_name" in real.columns else 1
+        title_suffix = (
+            f"\npooled | n_fusion_vesicles={len(vesicle_keys)}, n_tomograms={n_tomograms}"
+        )
+    elif filename_tag:
+        title_suffix = f"\n{filename_tag}"
+    else:
+        title_suffix = ""
 
     # 1) Paired delta (real - control mean) per vesicle vs offset, one probe radius panel
     n_panels = len(probe_radii)
@@ -2339,16 +2387,19 @@ def plot_results(
     for ax, probe_radius in zip(axes, probe_radii):
         deltas = []
         offsets = []
-        for vesicle_id in real["vesicle_id"].unique():
-            r_row = real[
-                (real["vesicle_id"] == vesicle_id) & (real["probe_radius_nm"] == probe_radius)
-            ]
+        for _, key_row in vesicle_keys.iterrows():
+            vesicle_id = key_row["vesicle_id"]
+            tomogram_name = key_row.get("tomogram_name")
+            r_mask = (real["vesicle_id"] == vesicle_id) & (real["probe_radius_nm"] == probe_radius)
+            c_mask = (ctrl["vesicle_id"] == vesicle_id) & (ctrl["probe_radius_nm"] == probe_radius)
+            if tomogram_name is not None and pd.notna(tomogram_name):
+                r_mask &= real["tomogram_name"] == tomogram_name
+                c_mask &= ctrl["tomogram_name"] == tomogram_name
+            r_row = real[r_mask]
             if r_row.empty:
                 continue
             real_val = float(r_row["packing_coefficient"].iloc[0])
-            c_sub = ctrl[
-                (ctrl["vesicle_id"] == vesicle_id) & (ctrl["probe_radius_nm"] == probe_radius)
-            ]
+            c_sub = ctrl[c_mask]
             for offset_nm, grp in c_sub.groupby("control_offset_nm"):
                 offsets.append(offset_nm)
                 deltas.append(real_val - float(grp["packing_coefficient"].mean()))
@@ -2368,9 +2419,9 @@ def plot_results(
         ax.set_title(f"probe r={int(probe_radius)} nm")
         ax.set_xlabel("Control offset d (nm)")
     axes[0].set_ylabel("Δ packing (fusion − control mean)")
-    fig.suptitle("Paired fusion minus control packing", y=1.02)
+    fig.suptitle(f"Paired fusion minus control packing{title_suffix}", y=1.02)
     fig.tight_layout()
-    fig.savefig(output_dir / "delta_packing_vs_offset.png", dpi=150, bbox_inches="tight")
+    fig.savefig(output_dir / f"delta_packing_vs_offset{name_suffix}.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     # 2) AuNP density per nm² vs offset — faceted like plot #1
@@ -2412,20 +2463,27 @@ def plot_results(
         ax.legend(fontsize=7, loc="best")
     for ax in axes_flat[n_panels:]:
         ax.set_visible(False)
-    fig.suptitle("AuNP density at controls vs offset (mean ± SEM at each d)", y=1.02, fontsize=11)
+    fig.suptitle(
+        f"AuNP density at controls vs offset (mean ± SEM at each d){title_suffix}",
+        y=1.02,
+        fontsize=11,
+    )
     fig.tight_layout()
-    fig.savefig(output_dir / "aunp_density_vs_control_offset.png", dpi=150, bbox_inches="tight")
+    fig.savefig(output_dir / f"aunp_density_vs_control_offset{name_suffix}.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     if not ctrl.empty and tomogram_path is not None:
-        _plot_fusion_vs_control_zonogram(
-            real,
-            ctrl,
-            tomogram_path=tomogram_path,
-            alignment_dir=alignment_dir,
-            probe_radius_nm=mid_radius,
-            output_path=output_dir / "fusion_vs_control_zonogram.png",
-        )
+        try:
+            _plot_fusion_vs_control_zonogram(
+                real,
+                ctrl,
+                tomogram_path=tomogram_path,
+                alignment_dir=alignment_dir,
+                probe_radius_nm=mid_radius,
+                output_path=output_dir / f"fusion_vs_control_zonogram{name_suffix}.png",
+            )
+        except Exception as exc:
+            print(f"  Warning: zonogram overlay failed{f' for {filename_tag}' if filename_tag else ''}: {exc}")
 
     print(f"Saved figures to {output_dir}")
 
@@ -2757,6 +2815,7 @@ def collect_per_tomogram_fusion_point_vs_aunp_density_tables(
 
     for tomo, _set_name, _aunp_active_zones, alignment_dir in tomo_paths:
         tomogram_path = Path(tomo)
+        tomogram_name = tomogram_path.name
         base = (
             tomogram_path
             / alignment_dir
@@ -2771,13 +2830,31 @@ def collect_per_tomogram_fusion_point_vs_aunp_density_tables(
             fusion_csv = zone_dir / "fusion_point_vs_aunp_density.csv"
             df_f = _read_optional_csv(fusion_csv)
             if df_f is not None:
-                fusion_frames.append(df_f)
+                fusion_frames.append(
+                    _stamp_tomogram_metadata(
+                        df_f,
+                        tomogram_name=tomogram_name,
+                        alignment_dir=alignment_dir,
+                    )
+                )
             df_h12 = _read_optional_csv(zone_dir / "ripley_h12_postsynaptic.csv")
             if df_h12 is not None:
-                h12_frames.append(df_h12)
+                h12_frames.append(
+                    _stamp_tomogram_metadata(
+                        df_h12,
+                        tomogram_name=tomogram_name,
+                        alignment_dir=alignment_dir,
+                    )
+                )
             df_o = _read_optional_csv(zone_dir / "ripley_o_membrain_postsynaptic.csv")
             if df_o is not None:
-                o_frames.append(df_o)
+                o_frames.append(
+                    _stamp_tomogram_metadata(
+                        df_o,
+                        tomogram_name=tomogram_name,
+                        alignment_dir=alignment_dir,
+                    )
+                )
 
     fusion_combined = pd.concat(fusion_frames, ignore_index=True) if fusion_frames else pd.DataFrame()
     h12_combined = pd.concat(h12_frames, ignore_index=True) if h12_frames else None
@@ -3368,6 +3445,7 @@ def aggregate_fusion_point_vs_aunp_density_visualizations(
 
     Per-tomogram Ripley CSVs are concatenated only (not recomputed). Dataset-level pooled
     Ripley figures stack saved per-vesicle curves from each tomogram (no Ripley recomputation).
+    Packing summary plots are written per tomogram and as pooled figures across all tomograms.
 
     Called from the visualization pipeline after active zonograms exist (for zonogram overlays).
     """
@@ -3386,13 +3464,6 @@ def aggregate_fusion_point_vs_aunp_density_visualizations(
         f"{len(fusion_df)} rows -> {results_dir / 'fusion_point_vs_aunp_density_combined.csv'}"
     )
 
-    plot_results(
-        fusion_df,
-        figures_dir,
-        tomogram_path=None,
-        alignment_dir="",
-    )
-
     if h12_df is not None:
         h12_df.to_csv(results_dir / "ripley_h12_postsynaptic_combined.csv", index=False)
     if o_df is not None:
@@ -3407,27 +3478,27 @@ def aggregate_fusion_point_vs_aunp_density_visualizations(
     if real.empty or ctrl.empty:
         return
 
-    probe_radii = sorted(fusion_df["probe_radius_nm"].unique())
-    mid_radius = float(probe_radii[len(probe_radii) // 2])
+    print("Generating pooled packing summary plots across all tomograms...")
+    plot_results(
+        fusion_df,
+        figures_dir,
+        tomogram_path=None,
+        filename_tag="pooled",
+    )
 
     for tomo, _set_name, _aunp_active_zones, alignment_dir in tomo_paths:
         tomogram_path = Path(tomo)
         tomogram_name = tomogram_path.name
-        sub_real = real[real["tomogram_name"] == tomogram_name]
-        sub_ctrl = ctrl[ctrl["tomogram_name"] == tomogram_name]
-        if sub_real.empty or sub_ctrl.empty:
+        sub_df = fusion_df[fusion_df["tomogram_name"] == tomogram_name]
+        if sub_df.empty:
             continue
-        try:
-            _plot_fusion_vs_control_zonogram(
-                sub_real,
-                sub_ctrl,
-                tomogram_path=tomogram_path,
-                alignment_dir=alignment_dir,
-                probe_radius_nm=mid_radius,
-                output_path=figures_dir / f"fusion_vs_control_zonogram_{tomogram_name}.png",
-            )
-        except Exception as exc:
-            print(f"  Warning: zonogram overlay failed for {tomogram_name}: {exc}")
+        plot_results(
+            sub_df,
+            figures_dir,
+            tomogram_path=tomogram_path,
+            alignment_dir=alignment_dir,
+            filename_tag=tomogram_name,
+        )
 
     print(f"Combined fusion-point vs AuNP density figures -> {figures_dir}")
 
