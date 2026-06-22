@@ -11,7 +11,10 @@ For each tomogram / alignment / active zone in a CSV:
       {tomoname}/{alignment_dir}/STT_results/activezone/
   - Compute distance to postsynaptic active-zone center as mean(outer, inner) KD-tree
     distances (same strategy as analyze_aunps in synaptic_tomo_tools).
-  - Write a curated dimer_closest table: one pick per dimer pair (closest to postsynaptic).
+  - Write dimer tables three ways (each_dimer pairs = consecutive STAR rows):
+      closest: one pick per pair (minimum mean distance to postsynaptic)
+      farthest: one pick per pair (maximum mean distance)
+      all: both picks per pair with dimer_pick_role closer/farther
 
 Requires active_zone_mapping.json from a prior activezone run when multiple zones exist.
 """
@@ -213,23 +216,12 @@ def analyze_one(
 
     base = f"{tomoname}__{alignment_dir}__az{active_zone}"
     write_results_table(df, output_dir / f"{base}_postsynaptic_distances.csv")
-    dimer_closest = select_closest_dimer_picks_per_pair(df)
-    if not dimer_closest.empty:
-        write_results_table(
-            dimer_closest,
-            output_dir / f"{base}_postsynaptic_distances_dimer_closest.csv",
-        )
+    write_dimer_variant_tables(df, output_dir, base)
     return df
 
 
-def select_closest_dimer_picks_per_pair(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    From each_dimer picks, keep one AuNP per dimer pair: the closest to postsynaptic
-    active-zone center (lowest outer/inner mean distance).
-
-    Pairs are consecutive rows in each_dimer.star (source_pick_index // 2), matching
-    the two individual AuNPs per dimer.
-    """
+def _prepare_dimer_pairs(df: pd.DataFrame) -> pd.DataFrame:
+    """Dimer picks with dimer_pair_index (source_pick_index // 2)."""
     dimers = df[df["classification"] == "dimer"].copy()
     if dimers.empty:
         return dimers
@@ -241,12 +233,95 @@ def select_closest_dimer_picks_per_pair(df: pd.DataFrame) -> pd.DataFrame:
     if not odd_pairs.empty:
         print(
             f"  Warning: {len(odd_pairs)} dimer pair(s) do not have exactly 2 picks; "
-            "still selecting closest pick per group"
+            "still applying per-pair selection"
         )
+    return dimers
+
+
+def select_dimer_picks_per_pair(df: pd.DataFrame, *, pick: str) -> pd.DataFrame:
+    """
+    From each_dimer picks, keep one AuNP per dimer pair by postsynaptic mean distance.
+
+    pick: 'closest' (minimum) or 'farthest' (maximum).
+
+    Pairs are consecutive rows in each_dimer.star (source_pick_index // 2).
+    """
+    dimers = _prepare_dimer_pairs(df)
+    if dimers.empty:
+        return dimers
 
     dist_col = "distance_to_postsynaptic_active_outer_inner_mean_nm"
-    pick_idx = dimers.groupby(group_cols, dropna=False)[dist_col].idxmin()
+    group_cols = ["tomogram_name", "alignment_dir", "active_zone", "dimer_pair_index"]
+    if pick == "closest":
+        pick_idx = dimers.groupby(group_cols, dropna=False)[dist_col].idxmin()
+    elif pick == "farthest":
+        pick_idx = dimers.groupby(group_cols, dropna=False)[dist_col].idxmax()
+    else:
+        raise ValueError(f"pick must be 'closest' or 'farthest', got {pick!r}")
     return dimers.loc[pick_idx].reset_index(drop=True)
+
+
+def select_closest_dimer_picks_per_pair(df: pd.DataFrame) -> pd.DataFrame:
+    return select_dimer_picks_per_pair(df, pick="closest")
+
+
+def select_farthest_dimer_picks_per_pair(df: pd.DataFrame) -> pd.DataFrame:
+    return select_dimer_picks_per_pair(df, pick="farthest")
+
+
+def annotate_all_dimer_picks(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    All each_dimer picks with dimer_pair_index and dimer_pick_role (closer/farther).
+
+    Role is relative within each dimer pair by postsynaptic outer/inner mean distance.
+    """
+    dimers = _prepare_dimer_pairs(df)
+    if dimers.empty:
+        return dimers
+
+    dist_col = "distance_to_postsynaptic_active_outer_inner_mean_nm"
+    group_cols = ["tomogram_name", "alignment_dir", "active_zone", "dimer_pair_index"]
+    roles: list[str] = []
+    for _, group in dimers.groupby(group_cols, dropna=False, sort=False):
+        dists = group[dist_col]
+        min_d = dists.min()
+        max_d = dists.max()
+        for d in dists:
+            if d == min_d and d == max_d:
+                roles.append("tie")
+            elif d == min_d:
+                roles.append("closer")
+            elif d == max_d:
+                roles.append("farther")
+            else:
+                roles.append("intermediate")
+    dimers = dimers.copy()
+    dimers["dimer_pick_role"] = roles
+    return dimers.reset_index(drop=True)
+
+
+def write_dimer_variant_tables(df: pd.DataFrame, output_dir: Path, base: str) -> None:
+    """Write closest, farthest, and all dimer pick tables for one job."""
+    dimer_closest = select_closest_dimer_picks_per_pair(df)
+    if not dimer_closest.empty:
+        write_results_table(
+            dimer_closest,
+            output_dir / f"{base}_postsynaptic_distances_dimer_closest.csv",
+        )
+
+    dimer_farthest = select_farthest_dimer_picks_per_pair(df)
+    if not dimer_farthest.empty:
+        write_results_table(
+            dimer_farthest,
+            output_dir / f"{base}_postsynaptic_distances_dimer_farthest.csv",
+        )
+
+    dimer_all = annotate_all_dimer_picks(df)
+    if not dimer_all.empty:
+        write_results_table(
+            dimer_all,
+            output_dir / f"{base}_postsynaptic_distances_dimer_all.csv",
+        )
 
 
 def write_results_table(df: pd.DataFrame, output_csv: Path) -> None:
@@ -269,6 +344,8 @@ def write_results_table(df: pd.DataFrame, output_csv: Path) -> None:
     ]
     if "dimer_pair_index" in df.columns:
         cols.insert(cols.index("source_pick_index") + 1, "dimer_pair_index")
+    if "dimer_pick_role" in df.columns:
+        cols.insert(cols.index("dimer_pair_index") + 1, "dimer_pick_role")
     out = df[cols].copy()
     out = out.rename(
         columns={
@@ -297,12 +374,7 @@ def write_combined_outputs(frames: List[pd.DataFrame], output_dir: Path, label: 
             subset,
             output_dir / f"{stem}_postsynaptic_distances_{classification}.csv",
         )
-    dimer_closest = select_closest_dimer_picks_per_pair(combined)
-    if not dimer_closest.empty:
-        write_results_table(
-            dimer_closest,
-            output_dir / f"{stem}_postsynaptic_distances_dimer_closest.csv",
-        )
+    write_dimer_variant_tables(combined, output_dir, stem)
 
 
 def iter_csv_jobs(csv_path: Path) -> Iterable[Tuple[str, str, str, int]]:
