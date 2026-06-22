@@ -479,9 +479,11 @@ def _plot_fusion_vs_control_zonogram(
                 zorder=6,
             )
 
+        zone_note = _fusing_vesicle_sample_note(sub_f, default_n_tomograms=1)
         ax.set_title(
             f"Fusion vs tangential controls on active zonogram\n"
-            f"{zone_name} | r={int(probe_radius_nm)} nm | controls colored by d"
+            f"{zone_name} | r={int(probe_radius_nm)} nm | controls colored by d\n"
+            f"{zone_note}"
         )
         ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), fontsize=7, framealpha=0.9)
         fig.tight_layout()
@@ -493,6 +495,51 @@ def _plot_fusion_vs_control_zonogram(
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"  Zonogram overlay from {mrc_path.name} -> {save_path}")
+
+
+def _fusing_vesicle_sample_note(
+    real: pd.DataFrame,
+    *,
+    default_n_tomograms: int | None = None,
+) -> str:
+    """Human-readable fusing-vesicle and tomogram counts for plot annotations."""
+    if real.empty:
+        n_tomograms = 0 if default_n_tomograms is None else int(default_n_tomograms)
+        return f"n_fusing_vesicles=0, n_tomograms={n_tomograms}"
+
+    if "tomogram_name" in real.columns:
+        n_vesicles = len(real[["tomogram_name", "vesicle_id"]].drop_duplicates())
+        n_tomograms = (
+            int(default_n_tomograms)
+            if default_n_tomograms is not None
+            else int(real["tomogram_name"].nunique())
+        )
+    else:
+        n_vesicles = int(real["vesicle_id"].nunique())
+        n_tomograms = 1 if default_n_tomograms is None else int(default_n_tomograms)
+
+    parts = [f"n_fusing_vesicles={n_vesicles}", f"n_tomograms={n_tomograms}"]
+    if "nearest_scan_active_zone_name" in real.columns:
+        n_zones = int(real["nearest_scan_active_zone_name"].dropna().nunique())
+        if n_zones > 1:
+            parts.append(f"n_active_zones={n_zones}")
+    return ", ".join(parts)
+
+
+def _add_figure_sample_note(fig, note: str, *, y: float = 0.01) -> None:
+    """Bottom-right annotation listing how many fusing vesicles are in the plot."""
+    if not note:
+        return
+    fig.text(
+        0.99,
+        y,
+        note,
+        ha="right",
+        va="bottom",
+        fontsize=8,
+        transform=fig.transFigure,
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.9, pad=0.3),
+    )
 
 
 DEFAULT_RIPLEY_R_MAX_NM = 150.0
@@ -1588,7 +1635,10 @@ def run_ripley_postsynaptic_analysis(
                 f"{zone_name} | two-sided Monte Carlo p, n={n_perm}"
             ),
             output_path=figures_dir / f"ripley_h12_pvalues_label_permutation_{zone_name}.png",
-            panel_note=f"n_fusion={len(fusion_post)}, n_aunp={len(aunp_post)}",
+            panel_note=(
+                f"n_fusing_vesicles={len(fusion_by_vesicle)}, n_tomograms=1, "
+                f"n_fusion={len(fusion_post)}, n_aunp={len(aunp_post)}"
+            ),
         )
         fig, ax = plt.subplots(figsize=(7, 4))
         neglog_greater = _neglog10_p(p_label_greater)
@@ -1710,6 +1760,7 @@ def run_ripley_postsynaptic_analysis(
             p_by_d[f"d={int(offset_nm)} nm"] = p_fusion_vs_ctrl
             min_p_floor = _wilcoxon_min_achievable_p(len(paired_ids))
             panel_notes[f"d={int(offset_nm)} nm"] = (
+                f"n_fusing_vesicles={len(fusion_by_vesicle)}, n_tomograms=1, "
                 f"n_paired={len(paired_ids)}"
                 + (
                     f"\nWilcoxon floor={min_p_floor:.3g}"
@@ -1798,7 +1849,8 @@ def run_ripley_postsynaptic_analysis(
             ax.set_visible(False)
         fig.suptitle(
             f"Ripley H₁₂ on postsynaptic AZ: fusion vs controls "
-            f"(2.5–97.5% bands + median across per-vesicle H₁₂ curves)\n{zone_name}",
+            f"(2.5–97.5% bands + median across per-vesicle H₁₂ curves)\n"
+            f"{zone_name} | n_fusing_vesicles={len(fusion_by_vesicle)}, n_tomograms=1",
             y=1.02,
         )
         fig.tight_layout()
@@ -1813,7 +1865,8 @@ def run_ripley_postsynaptic_analysis(
             ax_mean.set_visible(False)
         fig_mean.suptitle(
             f"Ripley H₁₂ on postsynaptic AZ: fusion vs controls "
-            f"(fusion and control means only)\n{zone_name}",
+            f"(fusion and control means only)\n"
+            f"{zone_name} | n_fusing_vesicles={len(fusion_by_vesicle)}, n_tomograms=1",
             y=1.02,
         )
         fig_mean.tight_layout()
@@ -2057,7 +2110,10 @@ def run_ripley_o_membrain_postsynaptic_analysis(
                 f"{zone_name} | two-sided Monte Carlo p, n={n_perm}"
             ),
             output_path=figures_dir / f"ripley_o_pvalues_label_permutation_{zone_name}.png",
-            panel_note=f"n_fusion={len(fusion_post)}, n_aunp={len(aunp_post)}",
+            panel_note=(
+                f"n_fusing_vesicles={len(fusion_by_vesicle)}, n_tomograms=1, "
+                f"n_fusion={len(fusion_post)}, n_aunp={len(aunp_post)}"
+            ),
         )
         fig, ax = plt.subplots(figsize=(7, 4))
         neglog_greater = _neglog10_p(p_label_greater)
@@ -2183,6 +2239,7 @@ def run_ripley_o_membrain_postsynaptic_analysis(
             p_by_d[f"d={int(offset_nm)} nm"] = p_fusion_vs_ctrl
             min_p_floor = _wilcoxon_min_achievable_p(len(paired_ids))
             panel_notes[f"d={int(offset_nm)} nm"] = (
+                f"n_fusing_vesicles={len(fusion_by_vesicle)}, n_tomograms=1, "
                 f"n_paired={len(paired_ids)}"
                 + (
                     f"\nWilcoxon floor={min_p_floor:.3g}"
@@ -2273,7 +2330,8 @@ def run_ripley_o_membrain_postsynaptic_analysis(
             ax.set_visible(False)
         fig.suptitle(
             f"Ripley's O (membrain-stats geodesic): fusion vs controls "
-            f"(2.5–97.5% bands + median across per-vesicle O curves)\n{zone_name}",
+            f"(2.5–97.5% bands + median across per-vesicle O curves)\n"
+            f"{zone_name} | n_fusing_vesicles={len(fusion_by_vesicle)}, n_tomograms=1",
             y=1.02,
         )
         fig.tight_layout()
@@ -2288,7 +2346,8 @@ def run_ripley_o_membrain_postsynaptic_analysis(
             ax_mean.set_visible(False)
         fig_mean.suptitle(
             f"Ripley's O (membrain-stats geodesic): fusion vs controls "
-            f"(fusion and control means only)\n{zone_name}",
+            f"(fusion and control means only)\n"
+            f"{zone_name} | n_fusing_vesicles={len(fusion_by_vesicle)}, n_tomograms=1",
             y=1.02,
         )
         fig_mean.tight_layout()
@@ -2369,15 +2428,13 @@ def plot_results(
         vesicle_keys = real[["vesicle_id"]].drop_duplicates()
         vesicle_keys["tomogram_name"] = None
 
+    sample_note = _fusing_vesicle_sample_note(real)
     if filename_tag == "pooled":
-        n_tomograms = int(real["tomogram_name"].nunique()) if "tomogram_name" in real.columns else 1
-        title_suffix = (
-            f"\npooled | n_fusion_vesicles={len(vesicle_keys)}, n_tomograms={n_tomograms}"
-        )
+        title_suffix = f"\npooled | {sample_note}"
     elif filename_tag:
-        title_suffix = f"\n{filename_tag}"
+        title_suffix = f"\n{filename_tag} | {sample_note}"
     else:
-        title_suffix = ""
+        title_suffix = f"\n{sample_note}"
 
     # 1) Paired delta (real - control mean) per vesicle vs offset, one probe radius panel
     n_panels = len(probe_radii)
@@ -2420,6 +2477,7 @@ def plot_results(
         ax.set_xlabel("Control offset d (nm)")
     axes[0].set_ylabel("Δ packing (fusion − control mean)")
     fig.suptitle(f"Paired fusion minus control packing{title_suffix}", y=1.02)
+    _add_figure_sample_note(fig, sample_note)
     fig.tight_layout()
     fig.savefig(output_dir / f"delta_packing_vs_offset{name_suffix}.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -2468,6 +2526,7 @@ def plot_results(
         y=1.02,
         fontsize=11,
     )
+    _add_figure_sample_note(fig, sample_note)
     fig.tight_layout()
     fig.savefig(output_dir / f"aunp_density_vs_control_offset{name_suffix}.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -2672,6 +2731,8 @@ def run_fusion_point_vs_aunp_density_for_zone(
 
     df = df.copy()
     df["active_zone_name"] = zone_name
+    df["tomogram_name"] = tomogram_path.name
+    df["alignment_dir"] = alignment_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_dir / "fusion_point_vs_aunp_density.csv", index=False)
 
@@ -3074,6 +3135,7 @@ def plot_pooled_ripley_h12_from_vesicle_artifacts(
         refline_label="H₁₂ = 0",
     )
     fig.tight_layout()
+    _add_figure_sample_note(fig, pool_note)
     fig.savefig(figures_dir / f"ripley_h12_label_permutation_{file_tag}.png", dpi=150)
     plt.close(fig)
 
@@ -3082,7 +3144,7 @@ def plot_pooled_ripley_h12_from_vesicle_artifacts(
         p_label_two,
         title=(
             "Pooled label-permutation significance (fusion vs AuNP)\n"
-            f"all fusing vesicles | two-sided Monte Carlo p, n_null={n_null}"
+            f"all fusing vesicles | {pool_note} | two-sided Monte Carlo p, n_null={n_null}"
         ),
         output_path=figures_dir / f"ripley_h12_pvalues_label_permutation_{file_tag}.png",
         panel_note=pool_note,
@@ -3209,10 +3271,11 @@ def plot_pooled_ripley_h12_from_vesicle_artifacts(
     for ax in axes_flat[n_panels:]:
         ax.set_visible(False)
     fig.suptitle(
-        "Pooled Ripley H₁₂: fusion vs controls across all fusing vesicles",
+        f"Pooled Ripley H₁₂: fusion vs controls across all fusing vesicles\n{pool_note}",
         y=1.02,
     )
     fig.tight_layout()
+    _add_figure_sample_note(fig, pool_note)
     fig.savefig(
         figures_dir / f"ripley_h12_fusion_vs_controls_by_d_{file_tag}.png",
         dpi=150,
@@ -3226,7 +3289,7 @@ def plot_pooled_ripley_h12_from_vesicle_artifacts(
             p_by_d,
             title=(
                 "Pooled fusion vs controls significance (Mann–Whitney on per-vesicle H₁₂)\n"
-                "all fusing vesicles combined"
+                f"all fusing vesicles combined | {pool_note}"
             ),
             output_path=figures_dir / f"ripley_h12_pvalues_fusion_vs_control_{file_tag}.png",
             panel_notes=panel_notes,
@@ -3341,13 +3404,17 @@ def plot_pooled_ripley_o_from_vesicle_artifacts(
         refline_label="CSR (O=1)",
     )
     fig.tight_layout()
+    _add_figure_sample_note(fig, pool_note)
     fig.savefig(figures_dir / f"ripley_o_label_permutation_{file_tag}.png", dpi=150)
     plt.close(fig)
 
     _plot_significance_single(
         r_vals,
         p_label_two,
-        title="Pooled Ripley's O label-permutation significance\nall fusing vesicles",
+        title=(
+            "Pooled Ripley's O label-permutation significance\n"
+            f"all fusing vesicles | {pool_note}"
+        ),
         output_path=figures_dir / f"ripley_o_pvalues_label_permutation_{file_tag}.png",
         panel_note=f"{pool_note}, n_null={n_null}",
     )
@@ -3431,10 +3498,11 @@ def plot_pooled_ripley_o_from_vesicle_artifacts(
     for ax in axes_flat[n_panels:]:
         ax.set_visible(False)
     fig.suptitle(
-        "Pooled Ripley's O: fusion vs controls across all fusing vesicles",
+        f"Pooled Ripley's O: fusion vs controls across all fusing vesicles\n{pool_note}",
         y=1.02,
     )
     fig.tight_layout()
+    _add_figure_sample_note(fig, pool_note)
     fig.savefig(
         figures_dir / f"ripley_o_fusion_vs_controls_by_d_{file_tag}.png",
         dpi=150,
@@ -3446,7 +3514,10 @@ def plot_pooled_ripley_o_from_vesicle_artifacts(
         _plot_significance_panels(
             r_vals,
             p_by_d,
-            title="Pooled Ripley's O fusion vs controls significance\nall fusing vesicles combined",
+            title=(
+                "Pooled Ripley's O fusion vs controls significance\n"
+                f"all fusing vesicles combined | {pool_note}"
+            ),
             output_path=figures_dir / f"ripley_o_pvalues_fusion_vs_control_{file_tag}.png",
         )
 
