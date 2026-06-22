@@ -497,6 +497,22 @@ def _plot_fusion_vs_control_zonogram(
         print(f"  Zonogram overlay from {mrc_path.name} -> {save_path}")
 
 
+def _count_active_zone_instances(df: pd.DataFrame) -> int | None:
+    """Count tomogram×active-zone instances (additive across tomograms), not unique zone names."""
+    if df.empty:
+        return None
+    zone_col = None
+    for col in ("active_zone_name", "nearest_scan_active_zone_name"):
+        if col in df.columns:
+            zone_col = col
+            break
+    if zone_col is None:
+        return None
+    if "tomogram_name" in df.columns:
+        return int(df[["tomogram_name", zone_col]].dropna(how="any").drop_duplicates().shape[0])
+    return int(df[zone_col].dropna().nunique())
+
+
 def _fusing_vesicle_sample_note(
     real: pd.DataFrame,
     *,
@@ -519,10 +535,9 @@ def _fusing_vesicle_sample_note(
         n_tomograms = 1 if default_n_tomograms is None else int(default_n_tomograms)
 
     parts = [f"n_fusing_vesicles={n_vesicles}", f"n_tomograms={n_tomograms}"]
-    if "nearest_scan_active_zone_name" in real.columns:
-        n_zones = int(real["nearest_scan_active_zone_name"].dropna().nunique())
-        if n_zones > 1:
-            parts.append(f"n_active_zones={n_zones}")
+    n_zones = _count_active_zone_instances(real)
+    if n_zones is not None and n_zones > 0:
+        parts.append(f"n_active_zones={n_zones}")
     return ", ".join(parts)
 
 
@@ -3028,7 +3043,13 @@ def _ripley_artifact_pool_summary(
 ) -> tuple[int, int, int]:
     """Return (n_fusion_vesicle_curves, n_tomograms, n_active_zones) for pooled Ripley plots."""
     n_tomograms = len({str(a.get("tomogram_name", "")) for a in artifacts if a.get("tomogram_name")})
-    n_zones = len({str(a.get("zone_name", "")) for a in artifacts if a.get("zone_name")})
+    n_zones = len(
+        {
+            (str(a.get("tomogram_name", "")), str(a.get("zone_name", "")))
+            for a in artifacts
+            if a.get("tomogram_name") and a.get("zone_name")
+        }
+    )
     fusion_parts = [_stack_nonempty_curves([np.asarray(a["fusion_vesicle_curves"])]) for a in artifacts]
     fusion_vesicle_curves = _stack_nonempty_curves(fusion_parts)
     return len(fusion_vesicle_curves), n_tomograms, n_zones
