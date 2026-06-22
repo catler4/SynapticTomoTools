@@ -410,14 +410,14 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
     print(f"  Organized results directory: {base_viz_dir}")
 
     print("\n" + "=" * 60)
-    print("AGGREGATING FUSION-POINT VS AUNP DENSITY RESULTS")
+    print("AGGREGATING FUSION-POINT VS AUNP DENSITY RESULTS (PER TOMOGRAM)")
     print("=" * 60)
     try:
-        from .fusion_point_vs_aunp_density import aggregate_fusion_point_vs_aunp_density_visualizations
+        from .fusion_point_vs_aunp_density import aggregate_fusion_point_per_tomogram_visualizations
 
-        aggregate_fusion_point_vs_aunp_density_visualizations(tomo_paths)
+        aggregate_fusion_point_per_tomogram_visualizations(tomo_paths)
     except Exception as e:
-        print(f"Warning: Could not aggregate fusion-point vs AuNP density results: {e}")
+        print(f"Warning: Could not aggregate per-tomogram fusion-point vs AuNP density figures: {e}")
     
     # Per-tomogram active zonogram analysis runs in the loop above. PDF summaries are generated once here.
     print("\n" + "="*60)
@@ -614,6 +614,16 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
             results_manager.store_tomogram_results(
                 analysis_name, 'aunps', error_results, overwrite=True, set_name=set_name, alignment_dir=alignment_dir
             )
+
+    print("\n" + "=" * 60)
+    print("AGGREGATING FUSION-POINT VS AUNP DENSITY RESULTS (POOLED)")
+    print("=" * 60)
+    try:
+        from .fusion_point_vs_aunp_density import aggregate_fusion_point_pooled_visualizations
+
+        aggregate_fusion_point_pooled_visualizations(tomo_paths)
+    except Exception as e:
+        print(f"Warning: Could not aggregate pooled fusion-point vs AuNP density results: {e}")
 
 def delete_csv_tomogram_results(csv_path, results_dir="results", data_dir="data"):
     """Delete results only for tomograms specified in the CSV file."""

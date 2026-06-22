@@ -3530,19 +3530,16 @@ def plot_pooled_ripley_o_from_vesicle_artifacts(
     return out_df
 
 
-def aggregate_fusion_point_vs_aunp_density_visualizations(
+def aggregate_fusion_point_pooled_visualizations(
     tomo_paths: Iterable[tuple[Any, Any, Any, str]],
     *,
     results_dir: Path | str = COMBINED_RESULTS_DIR,
-) -> None:
+) -> pd.DataFrame | None:
     """
-    Combine per-tomogram fusion-point vs AuNP density outputs and regenerate summary plots.
+    First post-AuNPs batch step: combine CSVs and write pooled Ripley/packing figures.
 
-    Per-tomogram Ripley CSVs are concatenated only (not recomputed). Pooled Ripley figures
-    stack saved per-vesicle curves from all tomograms and active zones together.
-    Packing summary plots are written per tomogram and as pooled figures across all tomograms.
-
-    Called from the visualization pipeline after active zonograms exist (for zonogram overlays).
+    Called at the end of the AuNPs analysis step after all tomograms in the CSV
+    have been processed. Uses per-tomogram fusion-point outputs only (no zonogram MRCs).
     """
     results_dir = Path(results_dir)
     figures_dir = results_dir / "figures"
@@ -3551,7 +3548,7 @@ def aggregate_fusion_point_vs_aunp_density_visualizations(
     fusion_df, h12_df, o_df = collect_per_tomogram_fusion_point_vs_aunp_density_tables(tomo_paths)
     if fusion_df.empty:
         print("No fusion-point vs AuNP density tables found to aggregate.")
-        return
+        return None
 
     fusion_df.to_csv(results_dir / "fusion_point_vs_aunp_density_combined.csv", index=False)
     print(
@@ -3570,17 +3567,51 @@ def aggregate_fusion_point_vs_aunp_density_visualizations(
 
     real = fusion_df[fusion_df["point_type"] == "fusion"].copy()
     ctrl = fusion_df[fusion_df["point_type"] == "control"].copy()
+    if not real.empty and not ctrl.empty:
+        print("Generating pooled packing summary plots across all tomograms...")
+        plot_results(
+            fusion_df,
+            figures_dir,
+            tomogram_path=None,
+            filename_tag="pooled",
+        )
+
+    print(f"Pooled fusion-point vs AuNP density figures -> {figures_dir}")
+    return fusion_df
+
+
+def aggregate_fusion_point_per_tomogram_visualizations(
+    tomo_paths: Iterable[tuple[Any, Any, Any, str]],
+    *,
+    results_dir: Path | str = COMBINED_RESULTS_DIR,
+    fusion_df: pd.DataFrame | None = None,
+) -> None:
+    """
+    After per-tomogram active zonograms: cross-zone packing plots with zonogram overlays.
+
+    Run once the visualization loop has written active zonogram MRCs.
+    """
+    results_dir = Path(results_dir)
+    figures_dir = results_dir / "figures"
+    figures_dir.mkdir(parents=True, exist_ok=True)
+
+    if fusion_df is None:
+        combined_csv = results_dir / "fusion_point_vs_aunp_density_combined.csv"
+        if combined_csv.is_file():
+            fusion_df = pd.read_csv(combined_csv)
+        else:
+            fusion_df, _, _ = collect_per_tomogram_fusion_point_vs_aunp_density_tables(tomo_paths)
+
+    if fusion_df is None or fusion_df.empty:
+        print("No fusion-point vs AuNP density tables for per-tomogram figures.")
+        return
+
+    real = fusion_df[fusion_df["point_type"] == "fusion"].copy()
+    ctrl = fusion_df[fusion_df["point_type"] == "control"].copy()
     if real.empty or ctrl.empty:
         return
 
-    print("Generating pooled packing summary plots across all tomograms...")
-    plot_results(
-        fusion_df,
-        figures_dir,
-        tomogram_path=None,
-        filename_tag="pooled",
-    )
-
+    print("Generating per-tomogram packing summary plots (with zonogram overlays)...")
     for tomo, _set_name, _aunp_active_zones, alignment_dir in tomo_paths:
         tomogram_path = Path(tomo)
         tomogram_name = tomogram_path.name
@@ -3595,7 +3626,21 @@ def aggregate_fusion_point_vs_aunp_density_visualizations(
             filename_tag=tomogram_name,
         )
 
-    print(f"Combined fusion-point vs AuNP density figures -> {figures_dir}")
+    print(f"Per-tomogram fusion-point vs AuNP density figures -> {figures_dir}")
+
+
+def aggregate_fusion_point_vs_aunp_density_visualizations(
+    tomo_paths: Iterable[tuple[Any, Any, Any, str]],
+    *,
+    results_dir: Path | str = COMBINED_RESULTS_DIR,
+) -> None:
+    """Run pooled then per-tomogram aggregation (single-call convenience wrapper)."""
+    fusion_df = aggregate_fusion_point_pooled_visualizations(tomo_paths, results_dir=results_dir)
+    aggregate_fusion_point_per_tomogram_visualizations(
+        tomo_paths,
+        results_dir=results_dir,
+        fusion_df=fusion_df,
+    )
 
 
 def main() -> None:
