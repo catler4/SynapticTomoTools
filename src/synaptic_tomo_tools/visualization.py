@@ -1805,6 +1805,304 @@ def transform_positions_to_zonogram_coords(
     return transformed
 
 
+def _filter_positions_inside_zonogram_extent(
+    world_xyz: np.ndarray,
+    zonogram_findingampa,
+    original_zone_data: dict,
+) -> np.ndarray:
+    """Transform world coordinates and keep only points inside the zonogram volume."""
+    world_xyz = np.atleast_2d(np.asarray(world_xyz, dtype=float))
+    if world_xyz.size == 0:
+        return np.zeros((0, 3), dtype=float)
+    transformed = transform_positions_to_zonogram_coords(
+        world_xyz, zonogram_findingampa, original_zone_data
+    )
+    extent = np.asarray(original_zone_data["extent"], dtype=float).reshape(1, -1)
+    valid = np.all(transformed >= 0, axis=1) & np.all(transformed < extent, axis=1)
+    return transformed[valid]
+
+
+def _scatter_points_on_zonogram_axes(
+    axxy,
+    axxz,
+    axyz,
+    zonogram_xyz: np.ndarray,
+    *,
+    marker: str = "o",
+    color: str = "cyan",
+    size: float = 28,
+    alpha: float = 0.85,
+    edgecolors: Optional[str] = None,
+    linewidths: float = 0.5,
+    zorder: int = 6,
+) -> None:
+    """Scatter Nx3 zonogram-panel coordinates on all three active-zonogram views."""
+    if len(zonogram_xyz) == 0:
+        return
+    scatter_kw = dict(
+        s=size,
+        c=color,
+        alpha=alpha,
+        marker=marker,
+        zorder=zorder,
+    )
+    if edgecolors is not None:
+        scatter_kw["edgecolors"] = edgecolors
+        scatter_kw["linewidths"] = linewidths
+    axxy.scatter(zonogram_xyz[:, 0], zonogram_xyz[:, 1], **scatter_kw)
+    axxz.scatter(zonogram_xyz[:, 2], zonogram_xyz[:, 1], **scatter_kw)
+    axyz.scatter(zonogram_xyz[:, 0], zonogram_xyz[:, 2], **scatter_kw)
+
+
+def _aunp_coords_and_zone_ids_for_null_models(
+    aunp_df: pd.DataFrame,
+) -> tuple[np.ndarray, np.ndarray]:
+    """AuNP coordinates and active-zone indices for fusion null-model distance tables."""
+    if aunp_df is None or aunp_df.empty:
+        return np.zeros((0, 3), dtype=float), np.array([], dtype=int)
+    df = aunp_df.copy()
+    if "active_zone" in df.columns:
+        df["active_zone"] = pd.to_numeric(df["active_zone"], errors="coerce")
+        df = df[df["active_zone"].notna() & (df["active_zone"] != -1)]
+    if df.empty:
+        return np.zeros((0, 3), dtype=float), np.array([], dtype=int)
+    coords = df[["faCoordinateX", "faCoordinateY", "faCoordinateZ"]].to_numpy(dtype=float)
+    az_ids = df["active_zone"].to_numpy(dtype=int)
+    return coords, az_ids
+
+
+def _compute_fusion_null_query_point_dataframes(
+    tomogram_path: Path,
+    alignment_dir: str,
+    aunp_df: pd.DataFrame,
+    az_mapping: dict,
+    *,
+    vesicle_distance_threshold: float = 20.0,
+    fusion_point_threshold: float = 20.0,
+) -> dict[str, pd.DataFrame]:
+    """
+    Build long-form 40 nm shift and label-permutation tables for zonogram overlays.
+
+    Uses the same geometry as analyze_aunps / fusion_point_vs_aunp_density exports.
+    """
+    from .fusion_point_vs_aunp_density import (
+        compute_40nm_shifted_fusion_point_aunp_pairwise_distances,
+        compute_label_permutation_fusion_point_aunp_pairwise_distances,
+    )
+
+    alignment_dir = require_alignment_dir(alignment_dir)
+    coords, az_ids = _aunp_coords_and_zone_ids_for_null_models(aunp_df)
+    if coords.size == 0:
+        return {"40nm_shift": pd.DataFrame(), "label_permutation": pd.DataFrame()}
+
+    az_mapping = {int(k): v for k, v in (az_mapping or {}).items()}
+    try:
+        df_40nm = compute_40nm_shifted_fusion_point_aunp_pairwise_distances(
+            tomogram_path,
+            alignment_dir,
+            coords,
+            vesicle_distance_threshold=vesicle_distance_threshold,
+            fusion_point_threshold=fusion_point_threshold,
+        )
+    except Exception as exc:
+        print(f"Warning: could not compute 40 nm shift query points for zonograms: {exc}")
+        df_40nm = pd.DataFrame()
+
+    try:
+        df_label_perm = compute_label_permutation_fusion_point_aunp_pairwise_distances(
+            tomogram_path,
+            alignment_dir,
+            coords,
+            az_ids,
+            az_mapping,
+            vesicle_distance_threshold=vesicle_distance_threshold,
+            fusion_point_threshold=fusion_point_threshold,
+        )
+    except Exception as exc:
+        print(f"Warning: could not compute label-permutation query points for zonograms: {exc}")
+        df_label_perm = pd.DataFrame()
+
+    return {"40nm_shift": df_40nm, "label_permutation": df_label_perm}
+
+
+def _unique_shift_query_points_for_zone(df: pd.DataFrame, zone_name: str) -> np.ndarray:
+    if df is None or df.empty or "active_zone_name" not in df.columns:
+        return np.zeros((0, 3), dtype=float)
+    sub = df[df["active_zone_name"] == zone_name]
+    if sub.empty:
+        return np.zeros((0, 3), dtype=float)
+    cols = ["query_point_x_nm", "query_point_y_nm", "query_point_z_nm"]
+    return sub.drop_duplicates(subset=["vesicle_id", "shift_replicate_id"])[cols].to_numpy(dtype=float)
+
+
+def _unique_label_perm_query_points_for_zone(df: pd.DataFrame, zone_name: str) -> np.ndarray:
+    if df is None or df.empty or "active_zone_name" not in df.columns:
+        return np.zeros((0, 3), dtype=float)
+    sub = df[df["active_zone_name"] == zone_name]
+    if sub.empty:
+        return np.zeros((0, 3), dtype=float)
+    cols = ["query_point_x_nm", "query_point_y_nm", "query_point_z_nm"]
+    return (
+        sub.drop_duplicates(subset=["permutation_id", "fusion_site_index"])[cols]
+        .to_numpy(dtype=float)
+    )
+
+
+def _fusing_fusion_points_by_zone(
+    tomogram_path: Path,
+    alignment_dir: str,
+    *,
+    vesicle_distance_threshold: float = 20.0,
+    fusion_point_threshold: float = 20.0,
+) -> dict[str, np.ndarray]:
+    """Real fusing-vesicle fusion points grouped by active zone name."""
+    from .aunps import enumerate_close_vesicle_fusion_points
+    from .fusion_point_vs_aunp_density import zone_name_for_presynaptic_membrane
+
+    by_zone: dict[str, list[list[float]]] = {}
+    for fp in enumerate_close_vesicle_fusion_points(
+        tomogram_path,
+        alignment_dir=alignment_dir,
+        vesicle_distance_threshold=vesicle_distance_threshold,
+        fusion_point_threshold=fusion_point_threshold,
+        fusing_only=True,
+    ):
+        zone_name = zone_name_for_presynaptic_membrane(fp.get("closest_membrane"))
+        if not zone_name:
+            continue
+        by_zone.setdefault(zone_name, []).append(
+            [
+                float(fp["fusion_point_x_nm"]),
+                float(fp["fusion_point_y_nm"]),
+                float(fp["fusion_point_z_nm"]),
+            ]
+        )
+    return {
+        zone_name: np.asarray(pts, dtype=float)
+        for zone_name, pts in by_zone.items()
+        if pts
+    }
+
+
+def _save_active_zonogram_query_point_overlay(
+    *,
+    zonogram_findingampa,
+    original_zone_data: dict,
+    query_world_xyz: np.ndarray,
+    reference_world_xyz: np.ndarray | None,
+    output_path_results: Path,
+    output_path_tomogram: Path,
+    overlay_label: str,
+    overlay_color: str,
+    overlay_marker: str = "o",
+    overlay_size: float = 30,
+    overlay_alpha: float = 0.8,
+    reference_label: str = "Fusing fusion points",
+    rerun: bool = False,
+) -> bool:
+    """Save a three-panel active zonogram with null-model and optional reference fusion sites."""
+    if output_path_results.exists() and output_path_tomogram.exists() and not rerun:
+        print(f"    Skipping {output_path_results.name}, already exists.")
+        return False
+
+    query_zono = _filter_positions_inside_zonogram_extent(
+        query_world_xyz, zonogram_findingampa, original_zone_data
+    )
+    reference_zono = (
+        _filter_positions_inside_zonogram_extent(
+            reference_world_xyz, zonogram_findingampa, original_zone_data
+        )
+        if reference_world_xyz is not None and len(reference_world_xyz) > 0
+        else np.zeros((0, 3), dtype=float)
+    )
+    if len(query_zono) == 0 and len(reference_zono) == 0:
+        return False
+
+    fig = render_active_zonograms_findingampa_style(zonogram_findingampa)
+    axxy, axxz, axyz = fig.get_axes()
+
+    if len(reference_zono) > 0:
+        _scatter_points_on_zonogram_axes(
+            axxy,
+            axxz,
+            axyz,
+            reference_zono,
+            marker="*",
+            color="orange",
+            size=100,
+            alpha=0.9,
+            edgecolors="darkorange",
+            linewidths=0.5,
+            zorder=8,
+        )
+    if len(query_zono) > 0:
+        _scatter_points_on_zonogram_axes(
+            axxy,
+            axxz,
+            axyz,
+            query_zono,
+            marker=overlay_marker,
+            color=overlay_color,
+            size=overlay_size,
+            alpha=overlay_alpha,
+            edgecolors="white" if overlay_marker != "." else None,
+            linewidths=0.4,
+            zorder=7,
+        )
+
+    legend_handles: list = []
+    legend_labels: list[str] = []
+    if len(reference_zono) > 0:
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                marker="*",
+                color="w",
+                markerfacecolor="orange",
+                markeredgecolor="darkorange",
+                markersize=10,
+                linewidth=0.5,
+            )
+        )
+        legend_labels.append(reference_label)
+    if len(query_zono) > 0:
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                marker=overlay_marker,
+                color="w",
+                markerfacecolor=overlay_color,
+                markeredgecolor="white" if overlay_marker != "." else overlay_color,
+                markersize=8,
+                linewidth=0.5,
+                alpha=overlay_alpha,
+            )
+        )
+        legend_labels.append(f"{overlay_label} (n={len(query_zono)})")
+
+    if legend_handles:
+        fig.legend(
+            legend_handles,
+            legend_labels,
+            loc="lower right",
+            bbox_to_anchor=(1.0, 0.0),
+            fontsize=8,
+            frameon=True,
+            fancybox=True,
+            shadow=True,
+        )
+
+    output_path_results.parent.mkdir(parents=True, exist_ok=True)
+    output_path_tomogram.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path_results)
+    fig.savefig(output_path_tomogram)
+    plt.close(fig)
+    print(f"    ✓ Saved PNG: {output_path_results.name}")
+    return True
+
+
 def _postsynaptic_center_distance_column(aunp_df: "pd.DataFrame") -> Optional[str]:
     """Column for mean of active-zone postsynaptic inner/outer distances (from analyze_aunps)."""
     for col in (
@@ -2154,6 +2452,19 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                 tomogram_active_zonograms_dir.mkdir(parents=True, exist_ok=True)
                 
                 files_created = []
+                
+                fusion_null_query_dfs = _compute_fusion_null_query_point_dataframes(
+                    Path(tomogram_path),
+                    alignment_dir,
+                    aunp_data,
+                    active_zones_data.get("az_mapping", {}),
+                    vesicle_distance_threshold=vesicle_distance_threshold,
+                )
+                fusing_fusion_points_by_zone = _fusing_fusion_points_by_zone(
+                    Path(tomogram_path),
+                    alignment_dir,
+                    vesicle_distance_threshold=vesicle_distance_threshold,
+                )
                 
                 # Create filename suffix using the az_mapping (define once for all zones)
                 if 'az_mapping' in active_zones_data:
@@ -2762,6 +3073,75 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                             )
                             import traceback
                             traceback.print_exc()
+
+                    reference_fusion_world = fusing_fusion_points_by_zone.get(
+                        zone_name, np.zeros((0, 3), dtype=float)
+                    )
+                    shift_query_world = _unique_shift_query_points_for_zone(
+                        fusion_null_query_dfs.get("40nm_shift", pd.DataFrame()),
+                        zone_name,
+                    )
+                    if len(shift_query_world) > 0 or len(reference_fusion_world) > 0:
+                        shift_png_filename = (
+                            f"{tomogram_name}_active_zonogram_{zone_name}"
+                            f"_fusing_40nm_shift_controls{suffix}.png"
+                        )
+                        shift_path_results = (
+                            results_active_zonograms_dir_full / shift_png_filename
+                        )
+                        shift_path_tomogram = (
+                            tomogram_active_zonograms_dir / shift_png_filename
+                        )
+                        if _save_active_zonogram_query_point_overlay(
+                            zonogram_findingampa=zonogram_findingampa,
+                            original_zone_data=original_zone_data,
+                            query_world_xyz=shift_query_world,
+                            reference_world_xyz=reference_fusion_world,
+                            output_path_results=shift_path_results,
+                            output_path_tomogram=shift_path_tomogram,
+                            overlay_label="40 nm tangential shift controls",
+                            overlay_color="deepskyblue",
+                            overlay_marker="o",
+                            overlay_size=26,
+                            overlay_alpha=0.75,
+                            rerun=rerun,
+                        ) or (
+                            shift_path_results.exists() and shift_path_tomogram.exists()
+                        ):
+                            files_created.append(shift_png_filename)
+
+                    perm_query_world = _unique_label_perm_query_points_for_zone(
+                        fusion_null_query_dfs.get("label_permutation", pd.DataFrame()),
+                        zone_name,
+                    )
+                    if len(perm_query_world) > 0 or len(reference_fusion_world) > 0:
+                        perm_png_filename = (
+                            f"{tomogram_name}_active_zonogram_{zone_name}"
+                            f"_label_permutation_fusion_sites{suffix}.png"
+                        )
+                        perm_path_results = (
+                            results_active_zonograms_dir_full / perm_png_filename
+                        )
+                        perm_path_tomogram = (
+                            tomogram_active_zonograms_dir / perm_png_filename
+                        )
+                        if _save_active_zonogram_query_point_overlay(
+                            zonogram_findingampa=zonogram_findingampa,
+                            original_zone_data=original_zone_data,
+                            query_world_xyz=perm_query_world,
+                            reference_world_xyz=reference_fusion_world,
+                            output_path_results=perm_path_results,
+                            output_path_tomogram=perm_path_tomogram,
+                            overlay_label="Label-permutation fusion sites",
+                            overlay_color="mediumorchid",
+                            overlay_marker=".",
+                            overlay_size=18,
+                            overlay_alpha=0.55,
+                            rerun=rerun,
+                        ) or (
+                            perm_path_results.exists() and perm_path_tomogram.exists()
+                        ):
+                            files_created.append(perm_png_filename)
             else:
                 print("No active zonograms found")
         else:
