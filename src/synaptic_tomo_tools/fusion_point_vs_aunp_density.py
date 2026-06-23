@@ -75,7 +75,8 @@ def _combined_aunp_pick_coordinates(
 DEFAULT_OFFSET_DISTANCES_NM = (10.0, 20.0, 30.0, 40.0, 50.0)
 FUSION_POINT_SHIFT_OFFSET_NM = 40.0
 FUSION_POINT_AZ_MAX_SNAP_DISTANCE_NM = 5.0
-DEFAULT_FUSION_POINT_LABEL_PERM_N = 10
+DEFAULT_FUSION_POINT_NULL_REPLICATES_N = 10
+DEFAULT_FUSION_POINT_LABEL_PERM_N = DEFAULT_FUSION_POINT_NULL_REPLICATES_N
 DEFAULT_PROBE_RADII_NM = PACKING_DENSITY_PROBE_RADII_NM
 DEFAULT_PROBE_RADIUS_NM = 25.0
 DEFAULT_N_DIRECTIONS = 100
@@ -362,14 +363,16 @@ def compute_40nm_shifted_fusion_point_aunp_pairwise_distances(
     vesicle_distance_threshold: float = 20.0,
     fusion_point_threshold: float = 20.0,
     offset_nm: float = FUSION_POINT_SHIFT_OFFSET_NM,
+    n_shifts: int = DEFAULT_FUSION_POINT_NULL_REPLICATES_N,
     seed: int = DEFAULT_ANALYSIS_SEED,
     max_snap_distance_nm: float = FUSION_POINT_AZ_MAX_SNAP_DISTANCE_NM,
 ) -> pd.DataFrame:
     """
     Per-(vesicle, AuNP) distances using tangential AZ controls at ``offset_nm``.
 
-    Matches the tangential-shift control placement in ``build_control_table`` (one
-    successful random tangent direction per fusing vesicle at the given offset).
+    Draws ``n_shifts`` independent random tangent directions per fusing vesicle
+    (same placement logic as ``build_control_table`` / ``sample_tangential_control_on_az``),
+    retrying failed placements until all replicates succeed or a safety attempt cap.
     """
     tomogram_path = Path(tomogram_path)
     alignment_dir = require_alignment_dir(alignment_dir)
@@ -405,37 +408,53 @@ def compute_40nm_shifted_fusion_point_aunp_pairwise_distances(
             [fp["fusion_point_x_nm"], fp["fusion_point_y_nm"], fp["fusion_point_z_nm"]],
             dtype=float,
         )
-        shifted_xyz, _direction = sample_tangential_control_on_az(
-            fusion_xyz,
-            az_xyz,
-            az_tree,
-            float(offset_nm),
-            rng,
-            max_snap_distance_nm=max_snap_distance_nm,
-        )
-        if shifted_xyz is None:
-            continue
-        distances = np.linalg.norm(aunp_coords - shifted_xyz, axis=1)
         zone_name = zone_name_for_presynaptic_membrane(membrane)
-        for j, dist in enumerate(distances):
-            long_rows.append(
-                {
-                    "tomogram_name": fp["tomogram_name"],
-                    "alignment_dir": alignment_dir,
-                    "active_zone_name": zone_name,
-                    "vesicle_id": fp["vesicle_id"],
-                    "vesicle_name": fp["vesicle_name"],
-                    "aunp_index": j,
-                    "distance_to_presynaptic_az_nm": fp["distance_to_presynaptic_az_nm"],
-                    "fusion_point_x_nm": float(fusion_xyz[0]),
-                    "fusion_point_y_nm": float(fusion_xyz[1]),
-                    "fusion_point_z_nm": float(fusion_xyz[2]),
-                    "query_point_x_nm": float(shifted_xyz[0]),
-                    "query_point_y_nm": float(shifted_xyz[1]),
-                    "query_point_z_nm": float(shifted_xyz[2]),
-                    "control_offset_nm": float(offset_nm),
-                    "fusion_point_to_aunp_distance_nm": float(dist),
-                }
+        n_shifts_target = int(n_shifts)
+        shift_replicate_id = 0
+        max_placement_attempts = n_shifts_target * 40
+        placement_attempts = 0
+
+        while shift_replicate_id < n_shifts_target and placement_attempts < max_placement_attempts:
+            placement_attempts += 1
+            shifted_xyz, _direction = sample_tangential_control_on_az(
+                fusion_xyz,
+                az_xyz,
+                az_tree,
+                float(offset_nm),
+                rng,
+                max_snap_distance_nm=max_snap_distance_nm,
+            )
+            if shifted_xyz is None:
+                continue
+            distances = np.linalg.norm(aunp_coords - shifted_xyz, axis=1)
+            for j, dist in enumerate(distances):
+                long_rows.append(
+                    {
+                        "tomogram_name": fp["tomogram_name"],
+                        "alignment_dir": alignment_dir,
+                        "active_zone_name": zone_name,
+                        "shift_replicate_id": int(shift_replicate_id),
+                        "vesicle_id": fp["vesicle_id"],
+                        "vesicle_name": fp["vesicle_name"],
+                        "aunp_index": j,
+                        "distance_to_presynaptic_az_nm": fp["distance_to_presynaptic_az_nm"],
+                        "fusion_point_x_nm": float(fusion_xyz[0]),
+                        "fusion_point_y_nm": float(fusion_xyz[1]),
+                        "fusion_point_z_nm": float(fusion_xyz[2]),
+                        "query_point_x_nm": float(shifted_xyz[0]),
+                        "query_point_y_nm": float(shifted_xyz[1]),
+                        "query_point_z_nm": float(shifted_xyz[2]),
+                        "control_offset_nm": float(offset_nm),
+                        "fusion_point_to_aunp_distance_nm": float(dist),
+                    }
+                )
+            shift_replicate_id += 1
+
+        if shift_replicate_id < n_shifts_target:
+            print(
+                f"  Warning: 40 nm shift — vesicle {fp['vesicle_id']} in {fp['tomogram_name']}: "
+                f"only {shift_replicate_id}/{n_shifts_target} controls placed after "
+                f"{placement_attempts} attempts."
             )
     return pd.DataFrame(long_rows)
 
@@ -449,7 +468,7 @@ def compute_label_permutation_fusion_point_aunp_pairwise_distances(
     *,
     vesicle_distance_threshold: float = 20.0,
     fusion_point_threshold: float = 20.0,
-    n_perm: int = DEFAULT_FUSION_POINT_LABEL_PERM_N,
+    n_perm: int = DEFAULT_FUSION_POINT_NULL_REPLICATES_N,
     seed: int = DEFAULT_ANALYSIS_SEED,
 ) -> pd.DataFrame:
     """
