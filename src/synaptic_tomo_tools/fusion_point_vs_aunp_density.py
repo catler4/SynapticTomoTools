@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
 
+from .alignment_utils import require_alignment_dir
 from .aunps import (
     DEFAULT_AUNP_PICK_STAR_PATTERN,
     build_packing_density_at_fusion_points_dataframe,
@@ -72,10 +73,14 @@ def _combined_aunp_pick_coordinates(
 
 
 DEFAULT_OFFSET_DISTANCES_NM = (10.0, 20.0, 30.0, 40.0, 50.0)
+FUSION_POINT_SHIFT_OFFSET_NM = 40.0
+FUSION_POINT_AZ_MAX_SNAP_DISTANCE_NM = 5.0
+DEFAULT_FUSION_POINT_LABEL_PERM_N = 10
 DEFAULT_PROBE_RADII_NM = PACKING_DENSITY_PROBE_RADII_NM
 DEFAULT_PROBE_RADIUS_NM = 25.0
 DEFAULT_N_DIRECTIONS = 100
 DEFAULT_ANALYSIS_SEED = 42
+DEFAULT_RIPLEY_N_PERM = 499
 
 FUSION_POINT_VS_AUNP_DENSITY_SUBDIR = "fusion_point_vs_aunp_density"
 COMBINED_RESULTS_DIR = Path("results/aunps/fusion_point_vs_aunp_density")
@@ -336,6 +341,248 @@ def build_control_table(
                         }
                     )
     return pd.DataFrame(out_rows)
+
+
+def zone_name_for_presynaptic_membrane(membrane_name: str | None) -> str | None:
+    """Map ``presynapticmembranes_N`` key to ``active_zone_preN_postN`` zone name."""
+    if not membrane_name or not str(membrane_name).startswith("presynapticmembranes_"):
+        return None
+    try:
+        idx = int(str(membrane_name).removeprefix("presynapticmembranes_"))
+    except ValueError:
+        return None
+    return f"active_zone_pre{idx}_post{idx}"
+
+
+def compute_40nm_shifted_fusion_point_aunp_pairwise_distances(
+    tomogram_path: Path,
+    alignment_dir: str,
+    aunp_coords: np.ndarray,
+    *,
+    vesicle_distance_threshold: float = 20.0,
+    fusion_point_threshold: float = 20.0,
+    offset_nm: float = FUSION_POINT_SHIFT_OFFSET_NM,
+    seed: int = DEFAULT_ANALYSIS_SEED,
+    max_snap_distance_nm: float = FUSION_POINT_AZ_MAX_SNAP_DISTANCE_NM,
+) -> pd.DataFrame:
+    """
+    Per-(vesicle, AuNP) distances using tangential AZ controls at ``offset_nm``.
+
+    Matches the tangential-shift control placement in ``build_control_table`` (one
+    successful random tangent direction per fusing vesicle at the given offset).
+    """
+    tomogram_path = Path(tomogram_path)
+    alignment_dir = require_alignment_dir(alignment_dir)
+    aunp_coords = np.atleast_2d(np.asarray(aunp_coords, dtype=float))
+    if aunp_coords.size == 0:
+        return pd.DataFrame()
+
+    fusion_rows = enumerate_close_vesicle_fusion_points(
+        tomogram_path,
+        alignment_dir=alignment_dir,
+        vesicle_distance_threshold=vesicle_distance_threshold,
+        fusion_point_threshold=fusion_point_threshold,
+        fusing_only=True,
+    )
+    if not fusion_rows:
+        return pd.DataFrame()
+
+    membrane_az_pairs = import_presynaptic_membranes_and_active_zones(
+        tomogram_path, alignment_dir=alignment_dir
+    )
+    rng = np.random.default_rng(seed)
+    long_rows: list[dict] = []
+
+    for fp in fusion_rows:
+        membrane = fp.get("closest_membrane")
+        if not membrane or membrane not in membrane_az_pairs:
+            continue
+        az_xyz = membrane_az_pairs[membrane]["active_zone_points"]
+        if az_xyz is None or len(az_xyz) == 0:
+            continue
+        az_tree = cKDTree(az_xyz)
+        fusion_xyz = np.array(
+            [fp["fusion_point_x_nm"], fp["fusion_point_y_nm"], fp["fusion_point_z_nm"]],
+            dtype=float,
+        )
+        shifted_xyz, _direction = sample_tangential_control_on_az(
+            fusion_xyz,
+            az_xyz,
+            az_tree,
+            float(offset_nm),
+            rng,
+            max_snap_distance_nm=max_snap_distance_nm,
+        )
+        if shifted_xyz is None:
+            continue
+        distances = np.linalg.norm(aunp_coords - shifted_xyz, axis=1)
+        zone_name = zone_name_for_presynaptic_membrane(membrane)
+        for j, dist in enumerate(distances):
+            long_rows.append(
+                {
+                    "tomogram_name": fp["tomogram_name"],
+                    "alignment_dir": alignment_dir,
+                    "active_zone_name": zone_name,
+                    "vesicle_id": fp["vesicle_id"],
+                    "vesicle_name": fp["vesicle_name"],
+                    "aunp_index": j,
+                    "distance_to_presynaptic_az_nm": fp["distance_to_presynaptic_az_nm"],
+                    "fusion_point_x_nm": float(fusion_xyz[0]),
+                    "fusion_point_y_nm": float(fusion_xyz[1]),
+                    "fusion_point_z_nm": float(fusion_xyz[2]),
+                    "query_point_x_nm": float(shifted_xyz[0]),
+                    "query_point_y_nm": float(shifted_xyz[1]),
+                    "query_point_z_nm": float(shifted_xyz[2]),
+                    "control_offset_nm": float(offset_nm),
+                    "fusion_point_to_aunp_distance_nm": float(dist),
+                }
+            )
+    return pd.DataFrame(long_rows)
+
+
+def compute_label_permutation_fusion_point_aunp_pairwise_distances(
+    tomogram_path: Path,
+    alignment_dir: str,
+    aunp_coords: np.ndarray,
+    aunp_active_zone_ids: np.ndarray,
+    az_mapping: dict[int, str],
+    *,
+    vesicle_distance_threshold: float = 20.0,
+    fusion_point_threshold: float = 20.0,
+    n_perm: int = DEFAULT_FUSION_POINT_LABEL_PERM_N,
+    seed: int = DEFAULT_ANALYSIS_SEED,
+) -> pd.DataFrame:
+    """
+    Per-(permuted fusion site, AuNP) distances under Ripley-style label permutation.
+
+    For each active zone and permutation replicate (default 10), fusion vs AuNP labels
+    are reassigned on the pooled fusion + zone AuNP positions (same index pool as
+    Ripley H₁₂ label-permutation null). Exactly ``n_fusion`` positions receive the
+    fusion label each round; each is projected onto the presynaptic active zone
+    surface before 3D distance calculation to every AuNP in that zone.
+    """
+    tomogram_path = Path(tomogram_path)
+    alignment_dir = require_alignment_dir(alignment_dir)
+    aunp_coords = np.atleast_2d(np.asarray(aunp_coords, dtype=float))
+    aunp_active_zone_ids = np.asarray(aunp_active_zone_ids, dtype=int)
+    if aunp_coords.size == 0:
+        return pd.DataFrame()
+
+    az_mapping = {int(k): v for k, v in az_mapping.items()}
+    fusion_rows = enumerate_close_vesicle_fusion_points(
+        tomogram_path,
+        alignment_dir=alignment_dir,
+        vesicle_distance_threshold=vesicle_distance_threshold,
+        fusion_point_threshold=fusion_point_threshold,
+        fusing_only=True,
+    )
+    if not fusion_rows:
+        return pd.DataFrame()
+
+    fusion_by_zone: dict[str, list[dict]] = {}
+    for fp in fusion_rows:
+        zone_name = zone_name_for_presynaptic_membrane(fp.get("closest_membrane"))
+        if zone_name:
+            fusion_by_zone.setdefault(zone_name, []).append(fp)
+
+    rng = np.random.default_rng(seed)
+    long_rows: list[dict] = []
+
+    for zone_name, zone_fusion_rows in fusion_by_zone.items():
+        az_ids = [idx for idx, zname in az_mapping.items() if zname == zone_name]
+        if not az_ids:
+            continue
+        aunp_mask = np.isin(aunp_active_zone_ids, az_ids)
+        if not np.any(aunp_mask):
+            continue
+        zone_aunp_coords = aunp_coords[aunp_mask]
+        zone_aunp_global_idx = np.flatnonzero(aunp_mask)
+
+        pre_surface = load_presynaptic_az_points_for_zone(
+            tomogram_path, alignment_dir, zone_name
+        )
+        if len(pre_surface) == 0:
+            continue
+        pre_tree = cKDTree(pre_surface)
+
+        fusion_world = np.array(
+            [
+                [fp["fusion_point_x_nm"], fp["fusion_point_y_nm"], fp["fusion_point_z_nm"]]
+                for fp in zone_fusion_rows
+            ],
+            dtype=float,
+        )
+        if len(fusion_world) == 0 or len(zone_aunp_coords) == 0:
+            continue
+
+        pool_world = np.vstack([fusion_world, zone_aunp_coords])
+        n_fusion = len(fusion_world)
+        n_pool = len(pool_world)
+        if n_pool < n_fusion + 1:
+            continue
+
+        tomogram_name = zone_fusion_rows[0]["tomogram_name"]
+
+        for perm_id in range(int(n_perm)):
+            labels = np.zeros(n_pool, dtype=bool)
+            labels[rng.choice(n_pool, n_fusion, replace=False)] = True
+            fusion_labeled_idx = np.flatnonzero(labels)
+            if len(fusion_labeled_idx) != n_fusion:
+                continue
+
+            fusion_source_world = pool_world[fusion_labeled_idx]
+            fusion_on_pre = _project_points_to_surface(
+                fusion_source_world, pre_tree, pre_surface
+            )
+
+            for fusion_site_idx, (pool_idx, query_xyz, source_xyz) in enumerate(
+                zip(fusion_labeled_idx, fusion_on_pre, fusion_source_world)
+            ):
+                pool_idx = int(pool_idx)
+                if pool_idx < n_fusion:
+                    fp = zone_fusion_rows[pool_idx]
+                    pool_source = "original_fusion"
+                    vesicle_id = fp["vesicle_id"]
+                    vesicle_name = fp["vesicle_name"]
+                    distance_to_az = fp["distance_to_presynaptic_az_nm"]
+                else:
+                    pool_source = "original_aunp"
+                    vesicle_id = np.nan
+                    vesicle_name = None
+                    distance_to_az = np.nan
+
+                distances = np.linalg.norm(zone_aunp_coords - query_xyz, axis=1)
+                for local_aunp_idx, dist in enumerate(distances):
+                    row = {
+                        "tomogram_name": tomogram_name,
+                        "alignment_dir": alignment_dir,
+                        "active_zone_name": zone_name,
+                        "permutation_id": int(perm_id),
+                        "fusion_site_index": int(fusion_site_idx),
+                        "pool_index": pool_idx,
+                        "pool_source": pool_source,
+                        "aunp_index": int(zone_aunp_global_idx[local_aunp_idx]),
+                        "source_point_x_nm": float(source_xyz[0]),
+                        "source_point_y_nm": float(source_xyz[1]),
+                        "source_point_z_nm": float(source_xyz[2]),
+                        "query_point_x_nm": float(query_xyz[0]),
+                        "query_point_y_nm": float(query_xyz[1]),
+                        "query_point_z_nm": float(query_xyz[2]),
+                        "fusion_point_to_aunp_distance_nm": float(dist),
+                    }
+                    if pool_source == "original_fusion":
+                        row["vesicle_id"] = vesicle_id
+                        row["vesicle_name"] = vesicle_name
+                        row["distance_to_presynaptic_az_nm"] = distance_to_az
+                        row["fusion_point_x_nm"] = float(fp["fusion_point_x_nm"])
+                        row["fusion_point_y_nm"] = float(fp["fusion_point_y_nm"])
+                        row["fusion_point_z_nm"] = float(fp["fusion_point_z_nm"])
+                    else:
+                        row["vesicle_id"] = vesicle_id
+                        row["vesicle_name"] = vesicle_name
+                        row["distance_to_presynaptic_az_nm"] = distance_to_az
+                    long_rows.append(row)
+    return pd.DataFrame(long_rows)
 
 
 def _find_precalculated_zonogram_mrc(

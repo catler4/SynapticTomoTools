@@ -1139,6 +1139,43 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             Path("results/aunps/fusing_vesicles_fusion_point_to_aunp_distances.csv"),
             "fusing",
         )
+
+        print("Computing 40 nm tangential-shift fusion-point to AuNP distances (fusing vesicles)...")
+        from .activezone import load_active_zone_mapping
+        from .fusion_point_vs_aunp_density import (
+            compute_40nm_shifted_fusion_point_aunp_pairwise_distances,
+            compute_label_permutation_fusion_point_aunp_pairwise_distances,
+        )
+
+        df_40nm_shifted = compute_40nm_shifted_fusion_point_aunp_pairwise_distances(
+            tomogram_path,
+            alignment_dir,
+            coords,
+            vesicle_distance_threshold=vesicle_distance_threshold,
+            fusion_point_threshold=fusion_point_threshold,
+        )
+        save_fusion_point_aunp_pairwise_csv(
+            df_40nm_shifted,
+            Path("results/aunps/40nm_shifted_vesicles_fusion_point_to_aunp_distances.csv"),
+            "fusing (40 nm tangential shift)",
+        )
+
+        az_mapping = load_active_zone_mapping(tomogram_path, alignment_dir) or {}
+        print("Computing label-permutation fusion-point to AuNP distances (fusing vesicles)...")
+        df_label_perm = compute_label_permutation_fusion_point_aunp_pairwise_distances(
+            tomogram_path,
+            alignment_dir,
+            coords,
+            df_valid["active_zone"].to_numpy(),
+            az_mapping,
+            vesicle_distance_threshold=vesicle_distance_threshold,
+            fusion_point_threshold=fusion_point_threshold,
+        )
+        save_fusion_point_aunp_pairwise_csv(
+            df_label_perm,
+            Path("results/aunps/label_permutation_vesicles_fusion_point_to_aunp_distances.csv"),
+            "fusing (label permutation)",
+        )
         # --- End per-vesicle AuNP outputs ---
         
         # --- Calculate packing density for each active zone ---
