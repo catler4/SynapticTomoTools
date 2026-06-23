@@ -1312,6 +1312,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                                 aunps_per_receptor=aunps_per_receptor,
                                 vertex_sampling_step=vertex_sampling_step,
                                 write_figures=True,
+                                aunp_pick_star_pattern=pick_pattern,
                             )
                             if fusion_zone_frames:
                                 df_fusion_vs_aunp = pd.concat(fusion_zone_frames, ignore_index=True)

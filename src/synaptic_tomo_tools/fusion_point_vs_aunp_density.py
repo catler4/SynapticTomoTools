@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -24,9 +25,13 @@ import pandas as pd
 from scipy.spatial import cKDTree
 
 from .aunps import (
+    DEFAULT_AUNP_PICK_STAR_PATTERN,
     build_packing_density_at_fusion_points_dataframe,
     calculate_packing_density_using_sliding_cylinder,
+    discover_aunp_pick_star_files,
     enumerate_close_vesicle_fusion_points,
+    load_aunp_pick_star_dataframes,
+    normalize_aunp_pick_star_pattern,
 )
 from .vesicles import import_presynaptic_membranes_and_active_zones
 
@@ -37,6 +42,33 @@ PACKING_DENSITY_PROBE_RADII_NM = (10.0, 20.0, 30.0, 40.0, 50.0)
 def packing_density_radius_tag(radius_nm: float) -> str:
     """Filename suffix for a probe radius, e.g. ``10.0`` -> ``r10nm``."""
     return f"r{int(round(radius_nm))}nm"
+
+
+def _scan_cache_subdir_name(aunp_pick_star_pattern: str | None = None) -> str:
+    """Cache folder name for scan-vertex tables; encodes non-default AuNP pick patterns."""
+    pat = normalize_aunp_pick_star_pattern(aunp_pick_star_pattern)
+    if pat == DEFAULT_AUNP_PICK_STAR_PATTERN:
+        return "_scan_cache"
+    slug = re.sub(r"[^\w.-]+", "_", pat.replace("*", "idx"))
+    return f"_scan_cache_{slug}"
+
+
+def _combined_aunp_pick_coordinates(
+    tomogram_path: Path,
+    alignment_dir: str,
+    *,
+    aunp_pick_star_pattern: str | None = None,
+) -> np.ndarray:
+    """Load and concatenate AuNP coordinates from per-zone pick STAR files."""
+    aunps_dir = tomogram_path / alignment_dir / "aunps"
+    pick_pattern = normalize_aunp_pick_star_pattern(aunp_pick_star_pattern)
+    star_dfs = load_aunp_pick_star_dataframes(aunps_dir, pattern=pick_pattern)
+    if not star_dfs:
+        raise FileNotFoundError(
+            f"No AuNP pick STAR files matching pattern {pick_pattern!r} in {aunps_dir}"
+        )
+    df = pd.concat(star_dfs, ignore_index=True)
+    return df[["faCoordinateX", "faCoordinateY", "faCoordinateZ"]].to_numpy(dtype=float)
 
 
 DEFAULT_OFFSET_DISTANCES_NM = (10.0, 20.0, 30.0, 40.0, 50.0)
@@ -143,6 +175,7 @@ def load_or_compute_scan_df(
     vertex_sampling_step: int = 50,
     receptor_crosssection: float = 122.0,
     aunps_per_receptor: float = 2.0,
+    aunp_pick_star_pattern: str | None = None,
     scan_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Load scan CSV if present; otherwise compute from GLB zones or use provided scan_df."""
@@ -176,17 +209,15 @@ def load_or_compute_scan_df(
         find_active_zones_from_glb,
         import_membrane_segmentations_from_glb,
     )
-    import starfile
-
     membrane_data = import_membrane_segmentations_from_glb(tomogram_path, alignment_dir=alignment_dir)
     active_zones_glb = find_active_zones_from_glb(membrane_data, distance_range=(10.0, 40.0))
     zonogram_results = define_active_zonogram(active_zones_glb)
 
-    aunps_dir_pick = tomogram_path / alignment_dir / "aunps"
-    star_files = sorted(aunps_dir_pick.glob("aunp_tm_BP_active_zone_*_manual_refined.star"))
-    if not star_files:
-        raise FileNotFoundError(f"No AuNP STAR files in {aunps_dir_pick}")
-    aunp_coords = starfile.read(star_files[0])[["faCoordinateX", "faCoordinateY", "faCoordinateZ"]].to_numpy()
+    aunp_coords = _combined_aunp_pick_coordinates(
+        tomogram_path,
+        alignment_dir,
+        aunp_pick_star_pattern=aunp_pick_star_pattern,
+    )
 
     tomogram_name = tomogram_path.name
     rows: list[dict] = []
@@ -557,12 +588,14 @@ def _add_figure_sample_note(fig, note: str, *, y: float = 0.01) -> None:
     )
 
 
-DEFAULT_RIPLEY_R_MAX_NM = 150.0
+DEFAULT_RIPLEY_R_MAX_NM = 100.0
 DEFAULT_RIPLEY_R_STEP_NM = 5.0
 DEFAULT_RIPLEY_N_PERM = 499
+RIPLEY_PLOT_X_MAX_NM = 100.0
 RIPLEY_PERCENTILE_LO = 2.5
 RIPLEY_PERCENTILE_HI = 97.5
 UNCERTAINTY_METHOD_PERCENTILE = "percentile_2p5_97p5"
+UNCERTAINTY_METHOD_MEAN_SD = "mean_sd"
 DEFAULT_RIPLEY_O_MESH_MAX_VERTS = 4000
 DEFAULT_RIPLEY_O_GEODESIC_METHOD = "fast"
 
@@ -1053,6 +1086,11 @@ def _decorate_significance_axis(
         fontsize=7,
         bbox=dict(boxstyle="round", facecolor="white", alpha=0.85, pad=0.25),
     )
+    _apply_ripley_xlim(ax)
+
+
+def _apply_ripley_xlim(ax) -> None:
+    ax.set_xlim(0.0, RIPLEY_PLOT_X_MAX_NM)
 
 
 def _vesicle_paired_pvalues(
@@ -1144,6 +1182,205 @@ def _plot_significance_single(
     fig.tight_layout()
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
+
+
+def _replicate_mean_sd_band(curves: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Mean ± sample SD band across replicate curves (n_replicates × n_r)."""
+    curves = np.asarray(curves, dtype=float)
+    if curves.ndim != 2 or len(curves) == 0:
+        n_r = curves.shape[1] if curves.ndim == 2 and curves.size else 0
+        nan = np.full(n_r, np.nan)
+        return nan, nan, nan
+    mean = curves.mean(axis=0)
+    if len(curves) > 1:
+        sd = curves.std(axis=0, ddof=1)
+    else:
+        sd = np.zeros_like(mean)
+    return mean - sd, mean, mean + sd
+
+
+def _replicate_envelope_band(
+    curves: np.ndarray,
+    *,
+    method: str = "percentile",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if method == "mean_sd":
+        return _replicate_mean_sd_band(curves)
+    return _replicate_percentile_band(curves)
+
+
+def _label_perm_envelope_labels(
+    *,
+    method: str,
+    n_perm: int,
+    n_obs_replicates: int,
+) -> dict[str, str]:
+    if method == "mean_sd":
+        return {
+            "secondary_band_label": f"label null mean ± SD (n={n_perm})",
+            "secondary_median_label": "label null mean",
+            "primary_band_label": f"fusion mean ± SD (n={n_obs_replicates} vesicles)",
+            "primary_median_label": "fusion mean (per-vesicle)",
+        }
+    return {
+        "secondary_band_label": f"label null 2.5–97.5% (n={n_perm})",
+        "secondary_median_label": "label null median",
+        "primary_band_label": f"observed 2.5–97.5% (n={n_obs_replicates} vesicles)",
+        "primary_median_label": "observed median (per-vesicle)",
+    }
+
+
+def _fusion_vs_control_envelope_labels(
+    *,
+    method: str,
+    offset_nm: float,
+    n_control_vesicles: int,
+    n_fusion_vesicles: int,
+) -> dict[str, str]:
+    d = int(offset_nm)
+    if method == "mean_sd":
+        return {
+            "secondary_band_label": f"controls d={d} nm mean ± SD (n={n_control_vesicles} vesicles)",
+            "secondary_median_label": f"controls d={d} nm mean",
+            "primary_band_label": f"fusion mean ± SD (n={n_fusion_vesicles} vesicles)",
+            "primary_median_label": "fusion mean (per-vesicle)",
+        }
+    return {
+        "secondary_band_label": f"controls d={d} nm 2.5–97.5% (n={n_control_vesicles} vesicles)",
+        "secondary_median_label": f"controls d={d} nm median",
+        "primary_band_label": f"fusion 2.5–97.5% (n={n_fusion_vesicles} vesicles)",
+        "primary_median_label": "fusion median (per-vesicle)",
+    }
+
+
+def _ripley_envelope_style_specs() -> list[tuple[str, str, str]]:
+    return [
+        ("percentile", "", "2.5–97.5% bands + median"),
+        ("mean_sd", "_mean_sd", "mean ± SD bands"),
+    ]
+
+
+def _save_label_perm_ripley_figures(
+    figures_dir: Path,
+    filename_stem: str,
+    *,
+    r_vals: np.ndarray,
+    null_curves: np.ndarray,
+    obs_curves: np.ndarray,
+    n_perm: int,
+    n_obs_replicates: int,
+    ylabel: str,
+    title_prefix: str,
+    refline: float | None = None,
+    refline_label: str | None = None,
+    sample_note: str | None = None,
+) -> None:
+    for method, suffix, band_note in _ripley_envelope_style_specs():
+        null_lo, null_c, null_hi = _replicate_envelope_band(null_curves, method=method)
+        obs_lo, obs_c, obs_hi = _replicate_envelope_band(obs_curves, method=method)
+        labels = _label_perm_envelope_labels(
+            method=method,
+            n_perm=n_perm,
+            n_obs_replicates=n_obs_replicates,
+        )
+        fig, ax = plt.subplots(figsize=(7, 5))
+        _plot_label_permutation_envelope_panel(
+            ax,
+            r_vals,
+            null_lo=null_lo,
+            null_med=null_c,
+            null_hi=null_hi,
+            n_perm=n_perm,
+            obs_lo=obs_lo,
+            obs_med=obs_c,
+            obs_hi=obs_hi,
+            n_obs_replicates=n_obs_replicates,
+            ylabel=ylabel,
+            title=f"{title_prefix}\n({band_note})",
+            refline=refline,
+            refline_label=refline_label,
+            secondary_band_label=labels["secondary_band_label"],
+            secondary_median_label=labels["secondary_median_label"],
+            primary_band_label=labels["primary_band_label"],
+            primary_median_label=labels["primary_median_label"],
+        )
+        fig.tight_layout()
+        if sample_note:
+            _add_figure_sample_note(fig, sample_note)
+        fig.savefig(figures_dir / f"{filename_stem}{suffix}.png", dpi=150)
+        plt.close(fig)
+
+
+def _save_fusion_vs_control_by_d_figures(
+    figures_dir: Path,
+    filename_stem: str,
+    *,
+    r_vals: np.ndarray,
+    fusion_vesicle_curves: np.ndarray,
+    panel_specs: Sequence[dict[str, Any]],
+    ylabel: str,
+    suptitle_base: str,
+    refline: float | None = None,
+    refline_label: str | None = None,
+    sample_note: str | None = None,
+) -> None:
+    n_panels = len(panel_specs)
+    if n_panels == 0:
+        return
+    ncols = min(3, n_panels)
+    nrows = int(np.ceil(n_panels / ncols))
+
+    for method, suffix, band_note in _ripley_envelope_style_specs():
+        fusion_lo, fusion_c, fusion_hi = _replicate_envelope_band(
+            fusion_vesicle_curves, method=method
+        )
+        fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 4 * nrows), squeeze=False)
+        axes_flat = axes.flatten()
+        for ax, spec in zip(axes_flat, panel_specs):
+            offset_nm = float(spec["offset_nm"])
+            ctrl_curves = spec["ctrl_curves"]
+            if ctrl_curves is None:
+                ax.set_title(f"d={int(offset_nm)} nm (no controls)")
+                continue
+            ctrl_lo, ctrl_c, ctrl_hi = _replicate_envelope_band(ctrl_curves, method=method)
+            labels = _fusion_vs_control_envelope_labels(
+                method=method,
+                offset_nm=offset_nm,
+                n_control_vesicles=int(spec["n_control_vesicles"]),
+                n_fusion_vesicles=int(spec["n_fusion_vesicles"]),
+            )
+            _plot_fusion_vs_control_ripley_panel(
+                ax,
+                r_vals,
+                ctrl_lo=ctrl_lo,
+                ctrl_med=ctrl_c,
+                ctrl_hi=ctrl_hi,
+                n_control_vesicles=int(spec["n_control_vesicles"]),
+                offset_nm=offset_nm,
+                fusion_lo=fusion_lo,
+                fusion_med=fusion_c,
+                fusion_hi=fusion_hi,
+                n_fusion_vesicles=int(spec["n_fusion_vesicles"]),
+                ylabel=ylabel,
+                refline=refline,
+                refline_label=refline_label,
+                secondary_band_label=labels["secondary_band_label"],
+                secondary_median_label=labels["secondary_median_label"],
+                primary_band_label=labels["primary_band_label"],
+                primary_median_label=labels["primary_median_label"],
+            )
+        for ax in axes_flat[n_panels:]:
+            ax.set_visible(False)
+        fig.suptitle(f"{suptitle_base}\n({band_note})", y=1.02)
+        fig.tight_layout()
+        if sample_note:
+            _add_figure_sample_note(fig, sample_note)
+        fig.savefig(
+            figures_dir / f"{filename_stem}{suffix}.png",
+            dpi=150,
+            bbox_inches="tight",
+        )
+        plt.close(fig)
 
 
 def _replicate_mean(curves: np.ndarray) -> np.ndarray:
@@ -1269,6 +1506,7 @@ def _plot_ripley_dual_envelope_panel(
     ax.set_xlabel("r (nm)")
     ax.set_ylabel(ylabel)
     ax.legend(fontsize=legend_fontsize)
+    _apply_ripley_xlim(ax)
 
 
 def _plot_label_permutation_envelope_panel(
@@ -1287,23 +1525,35 @@ def _plot_label_permutation_envelope_panel(
     title: str,
     refline: float | None = None,
     refline_label: str | None = None,
+    secondary_band_label: str | None = None,
+    secondary_median_label: str | None = None,
+    primary_band_label: str | None = None,
+    primary_median_label: str | None = None,
     fusion_mean_only: bool = False,
     obs_mean: np.ndarray | None = None,
     null_mean: np.ndarray | None = None,
 ) -> None:
+    if secondary_band_label is None:
+        secondary_band_label = f"label null 2.5–97.5% (n={n_perm})"
+    if secondary_median_label is None:
+        secondary_median_label = "label null median"
+    if primary_band_label is None:
+        primary_band_label = f"observed 2.5–97.5% (n={n_obs_replicates} vesicles)"
+    if primary_median_label is None:
+        primary_median_label = "observed median (per-vesicle)"
     _plot_ripley_dual_envelope_panel(
         ax,
         r_vals,
         secondary_lo=null_lo,
         secondary_med=null_med,
         secondary_hi=null_hi,
-        secondary_band_label=f"label null 2.5–97.5% (n={n_perm})",
-        secondary_median_label="label null median",
+        secondary_band_label=secondary_band_label,
+        secondary_median_label=secondary_median_label,
         primary_lo=obs_lo,
         primary_med=obs_med,
         primary_hi=obs_hi,
-        primary_band_label=f"observed 2.5–97.5% (n={n_obs_replicates} vesicles)",
-        primary_median_label="observed median (per-vesicle)",
+        primary_band_label=primary_band_label,
+        primary_median_label=primary_median_label,
         ylabel=ylabel,
         title=title,
         refline=refline,
@@ -1337,25 +1587,37 @@ def _plot_fusion_vs_control_ripley_panel(
     ylabel: str,
     refline: float | None = None,
     refline_label: str | None = None,
+    secondary_band_label: str | None = None,
+    secondary_median_label: str | None = None,
+    primary_band_label: str | None = None,
+    primary_median_label: str | None = None,
     fusion_mean_only: bool = False,
     fusion_mean: np.ndarray | None = None,
     ctrl_mean: np.ndarray | None = None,
 ) -> None:
+    if secondary_band_label is None:
+        secondary_band_label = (
+            f"controls d={int(offset_nm)} nm 2.5–97.5% (n={n_control_vesicles} vesicles)"
+        )
+    if secondary_median_label is None:
+        secondary_median_label = f"controls d={int(offset_nm)} nm median"
+    if primary_band_label is None:
+        primary_band_label = f"fusion 2.5–97.5% (n={n_fusion_vesicles} vesicles)"
+    if primary_median_label is None:
+        primary_median_label = "fusion median (per-vesicle)"
     _plot_ripley_dual_envelope_panel(
         ax,
         r_vals,
         secondary_lo=ctrl_lo,
         secondary_med=ctrl_med,
         secondary_hi=ctrl_hi,
-        secondary_band_label=(
-            f"controls d={int(offset_nm)} nm 2.5–97.5% (n={n_control_vesicles} vesicles)"
-        ),
-        secondary_median_label=f"controls d={int(offset_nm)} nm median",
+        secondary_band_label=secondary_band_label,
+        secondary_median_label=secondary_median_label,
         primary_lo=fusion_lo,
         primary_med=fusion_med,
         primary_hi=fusion_hi,
-        primary_band_label=f"fusion 2.5–97.5% (n={n_fusion_vesicles} vesicles)",
-        primary_median_label="fusion median (per-vesicle)",
+        primary_band_label=primary_band_label,
+        primary_median_label=primary_median_label,
         ylabel=ylabel,
         panel_title=f"d = {int(offset_nm)} nm",
         refline=refline,
@@ -1419,31 +1681,57 @@ def _load_aunp_coordinates_for_zone(
     post_surface_tree: cKDTree,
     *,
     max_snap_to_surface_nm: float = 50.0,
+    aunp_pick_star_pattern: str | None = None,
 ) -> np.ndarray:
     import starfile
     from .activezone import load_active_zone_mapping
+    from .aunps import _read_aunp_pick_star_dataframe
 
     aunps_dir = tomogram_path / alignment_dir / "STT_results" / "aunps"
     star_path = aunps_dir / "aunp_clusters.star"
     if not star_path.is_file():
-        picks = sorted((tomogram_path / alignment_dir / "aunps").glob("aunp_tm_BP_active_zone_*_manual_refined.star"))
-        if not picks:
-            raise FileNotFoundError(f"No AuNP STAR file found under {tomogram_path / alignment_dir}")
-        star_path = picks[0]
-
-    star_data = starfile.read(star_path)
-    if isinstance(star_data, dict):
-        aunp_df = next(v for v in star_data.values() if isinstance(v, pd.DataFrame))
-    else:
-        aunp_df = star_data
-
-    if "active_zone" in aunp_df.columns:
+        pick_pattern = normalize_aunp_pick_star_pattern(aunp_pick_star_pattern)
+        aunps_pick_dir = tomogram_path / alignment_dir / "aunps"
         mapping = load_active_zone_mapping(tomogram_path, alignment_dir)
+        az_ids: list[int] | None = None
         if mapping:
             mapping = {int(k): v for k, v in mapping.items()}
-            az_ids = [idx for idx, zname in mapping.items() if zname == zone_name]
-            if az_ids:
-                aunp_df = aunp_df[aunp_df["active_zone"].isin(az_ids)]
+            zone_az_ids = [idx for idx, zname in mapping.items() if zname == zone_name]
+            if zone_az_ids:
+                az_ids = zone_az_ids
+        pick_files = discover_aunp_pick_star_files(
+            aunps_pick_dir, az_ids, pattern=pick_pattern
+        )
+        if not pick_files:
+            raise FileNotFoundError(
+                f"No AuNP pick STAR files matching pattern {pick_pattern!r} "
+                f"found under {aunps_pick_dir}"
+            )
+        pick_dfs = []
+        for _az_id, pick_path in pick_files:
+            pick_df = _read_aunp_pick_star_dataframe(pick_path)
+            if pick_df is not None and not pick_df.empty:
+                pick_dfs.append(pick_df)
+        if not pick_dfs:
+            raise FileNotFoundError(
+                f"No AuNP coordinates in pick STAR files matching pattern {pick_pattern!r} "
+                f"under {aunps_pick_dir}"
+            )
+        aunp_df = pd.concat(pick_dfs, ignore_index=True)
+    else:
+        star_data = starfile.read(star_path)
+        if isinstance(star_data, dict):
+            aunp_df = next(v for v in star_data.values() if isinstance(v, pd.DataFrame))
+        else:
+            aunp_df = star_data
+
+        if "active_zone" in aunp_df.columns:
+            mapping = load_active_zone_mapping(tomogram_path, alignment_dir)
+            if mapping:
+                mapping = {int(k): v for k, v in mapping.items()}
+                az_ids = [idx for idx, zname in mapping.items() if zname == zone_name]
+                if az_ids:
+                    aunp_df = aunp_df[aunp_df["active_zone"].isin(az_ids)]
 
     coords = aunp_df[["faCoordinateX", "faCoordinateY", "faCoordinateZ"]].to_numpy(dtype=float)
     if len(coords) == 0:
@@ -1496,6 +1784,7 @@ def run_ripley_postsynaptic_analysis(
     n_perm: int = DEFAULT_RIPLEY_N_PERM,
     seed: int = 42,
     probe_radius_for_coords: float | None = None,
+    aunp_pick_star_pattern: str | None = None,
 ) -> pd.DataFrame | None:
     """
     Bivariate Ripley H on postsynaptic-projected fusion / control / AuNP positions.
@@ -1538,7 +1827,11 @@ def run_ripley_postsynaptic_analysis(
 
         try:
             aunp_xyz = _load_aunp_coordinates_for_zone(
-                tomogram_path, alignment_dir, str(zone_name), post_tree
+                tomogram_path,
+                alignment_dir,
+                str(zone_name),
+                post_tree,
+                aunp_pick_star_pattern=aunp_pick_star_pattern,
             )
         except FileNotFoundError as exc:
             print(f"Skipping Ripley for {zone_name}: {exc}")
@@ -1582,65 +1875,27 @@ def run_ripley_postsynaptic_analysis(
             pool, len(fusion_post), r_vals, window_area, n_perm, rng
         )
         h12_null_lo, h12_null_med, h12_null_hi = _replicate_percentile_band(perm_curves)
-        h12_null_mean = _replicate_mean(perm_curves)
         h12_obs_lo, h12_obs_med, h12_obs_hi = _replicate_percentile_band(fusion_vesicle_curves)
         p_label_two = _monte_carlo_p_two_sided(h12_obs, perm_curves)
         p_label_greater = (np.sum(perm_curves >= h12_obs, axis=0) + 1) / (n_perm + 1)
         p_label_less = (np.sum(perm_curves <= h12_obs, axis=0) + 1) / (n_perm + 1)
 
-        fig, ax = plt.subplots(figsize=(7, 5))
-        _plot_label_permutation_envelope_panel(
-            ax,
-            r_vals,
-            null_lo=h12_null_lo,
-            null_med=h12_null_med,
-            null_hi=h12_null_hi,
+        _save_label_perm_ripley_figures(
+            figures_dir,
+            f"ripley_h12_label_permutation_{zone_name}",
+            r_vals=r_vals,
+            null_curves=perm_curves,
+            obs_curves=fusion_vesicle_curves,
             n_perm=n_perm,
-            obs_lo=h12_obs_lo,
-            obs_med=h12_obs_med,
-            obs_hi=h12_obs_hi,
             n_obs_replicates=len(fusion_by_vesicle),
             ylabel="Ripley H₁₂(r) = √(K₁₂/π) − r",
-            title=(
+            title_prefix=(
                 f"Label-permutation null: fusion vs AuNP on postsynaptic AZ\n"
                 f"{zone_name} (p-values: pooled observed vs null)"
             ),
             refline=0.0,
             refline_label="H₁₂ = 0",
         )
-        fig.tight_layout()
-        fig.savefig(figures_dir / f"ripley_h12_label_permutation_{zone_name}.png", dpi=150)
-        plt.close(fig)
-
-        fig_mean, ax_mean = plt.subplots(figsize=(7, 5))
-        _plot_label_permutation_envelope_panel(
-            ax_mean,
-            r_vals,
-            null_lo=h12_null_lo,
-            null_med=h12_null_med,
-            null_hi=h12_null_hi,
-            n_perm=n_perm,
-            obs_lo=h12_obs_lo,
-            obs_med=h12_obs_med,
-            obs_hi=h12_obs_hi,
-            n_obs_replicates=len(fusion_by_vesicle),
-            ylabel="Ripley H₁₂(r) = √(K₁₂/π) − r",
-            title=(
-                f"Label-permutation null: fusion vs AuNP on postsynaptic AZ\n"
-                f"{zone_name} (null and fusion means only)"
-            ),
-            refline=0.0,
-            refline_label="H₁₂ = 0",
-            fusion_mean_only=True,
-            obs_mean=h12_fusion_mean,
-            null_mean=h12_null_mean,
-        )
-        fig_mean.tight_layout()
-        fig_mean.savefig(
-            figures_dir / f"ripley_h12_label_permutation_{zone_name}_fusion_mean.png",
-            dpi=150,
-        )
-        plt.close(fig_mean)
 
         _plot_significance_single(
             r_vals,
@@ -1677,6 +1932,7 @@ def run_ripley_postsynaptic_analysis(
         ax.set_title(f"Directional label-permutation p-values\n{zone_name}")
         ax.legend(fontsize=8)
         ax.set_ylim(bottom=0.0)
+        _apply_ripley_xlim(ax)
         fig.tight_layout()
         fig.savefig(figures_dir / f"ripley_h12_pvalues_label_permutation_directional_{zone_name}.png", dpi=150)
         plt.close(fig)
@@ -1728,17 +1984,12 @@ def run_ripley_postsynaptic_analysis(
             )
 
         n_panels = len(offsets)
-        ncols = min(3, n_panels)
-        nrows = int(np.ceil(n_panels / ncols))
-        fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 4 * nrows), squeeze=False)
-        fig_mean, axes_mean = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 4 * nrows), squeeze=False)
-        axes_flat = axes.flatten()
-        axes_mean_flat = axes_mean.flatten()
         p_by_d: dict[str, np.ndarray] = {}
         panel_notes: dict[str, str] = {}
         fvc_by_offset: dict[float, tuple[np.ndarray, np.ndarray]] = {}
+        fvc_panel_specs: list[dict[str, Any]] = []
 
-        for ax, ax_mean, offset_nm in zip(axes_flat, axes_mean_flat, offsets):
+        for offset_nm in offsets:
             sub_c = _dedupe_rows_by_xyz(
                 ctrl[
                     (ctrl["probe_radius_nm"] == probe_radius_for_coords)
@@ -1748,8 +1999,14 @@ def run_ripley_postsynaptic_analysis(
                 ("query_point_x_nm", "query_point_y_nm", "query_point_z_nm"),
             )
             if sub_c.empty:
-                ax.set_title(f"d={int(offset_nm)} nm (no controls)")
-                ax_mean.set_title(f"d={int(offset_nm)} nm (no controls)")
+                fvc_panel_specs.append(
+                    {
+                        "offset_nm": float(offset_nm),
+                        "ctrl_curves": None,
+                        "n_control_vesicles": 0,
+                        "n_fusion_vesicles": len(fusion_by_vesicle),
+                    }
+                )
                 continue
 
             control_by_vesicle = _project_points_by_vesicle(
@@ -1768,9 +2025,16 @@ def run_ripley_postsynaptic_analysis(
                 window_area,
             )
             h12_ctrl_lo, h12_ctrl_med, h12_ctrl_hi = _replicate_percentile_band(ctrl_curves)
-            h12_ctrl_mean = _replicate_mean(ctrl_curves)
             p_fusion_vs_ctrl = _vesicle_paired_pvalues(fusion_curves, ctrl_curves)
             fvc_by_offset[float(offset_nm)] = (fusion_curves, ctrl_curves)
+            fvc_panel_specs.append(
+                {
+                    "offset_nm": float(offset_nm),
+                    "ctrl_curves": ctrl_curves,
+                    "n_control_vesicles": len(control_by_vesicle),
+                    "n_fusion_vesicles": len(fusion_by_vesicle),
+                }
+            )
 
             p_by_d[f"d={int(offset_nm)} nm"] = p_fusion_vs_ctrl
             min_p_floor = _wilcoxon_min_achievable_p(len(paired_ids))
@@ -1782,42 +2046,6 @@ def run_ripley_postsynaptic_analysis(
                     if np.isfinite(min_p_floor) and min_p_floor > 0.05
                     else ""
                 )
-            )
-
-            _plot_fusion_vs_control_ripley_panel(
-                ax,
-                r_vals,
-                ctrl_lo=h12_ctrl_lo,
-                ctrl_med=h12_ctrl_med,
-                ctrl_hi=h12_ctrl_hi,
-                n_control_vesicles=len(control_by_vesicle),
-                offset_nm=float(offset_nm),
-                fusion_lo=h12_fusion_lo,
-                fusion_med=h12_fusion_med,
-                fusion_hi=h12_fusion_hi,
-                n_fusion_vesicles=len(fusion_by_vesicle),
-                ylabel="H₁₂(r)",
-                refline=0.0,
-                refline_label="H₁₂ = 0",
-            )
-            _plot_fusion_vs_control_ripley_panel(
-                ax_mean,
-                r_vals,
-                ctrl_lo=h12_ctrl_lo,
-                ctrl_med=h12_ctrl_med,
-                ctrl_hi=h12_ctrl_hi,
-                n_control_vesicles=len(control_by_vesicle),
-                offset_nm=float(offset_nm),
-                fusion_lo=h12_fusion_lo,
-                fusion_med=h12_fusion_med,
-                fusion_hi=h12_fusion_hi,
-                n_fusion_vesicles=len(fusion_by_vesicle),
-                ylabel="H₁₂(r)",
-                refline=0.0,
-                refline_label="H₁₂ = 0",
-                fusion_mean_only=True,
-                fusion_mean=h12_fusion_mean,
-                ctrl_mean=h12_ctrl_mean,
             )
 
             for r, f_lo, f_med, f_hi, f_mean, c_lo, c_med, c_hi, p_val in zip(
@@ -1860,37 +2088,20 @@ def run_ripley_postsynaptic_analysis(
                     }
                 )
 
-        for ax in axes_flat[n_panels:]:
-            ax.set_visible(False)
-        fig.suptitle(
-            f"Ripley H₁₂ on postsynaptic AZ: fusion vs controls "
-            f"(2.5–97.5% bands + median across per-vesicle H₁₂ curves)\n"
-            f"{zone_name} | n_fusing_vesicles={len(fusion_by_vesicle)}, n_tomograms=1",
-            y=1.02,
+        _save_fusion_vs_control_by_d_figures(
+            figures_dir,
+            f"ripley_h12_fusion_vs_controls_by_d_{zone_name}",
+            r_vals=r_vals,
+            fusion_vesicle_curves=fusion_vesicle_curves,
+            panel_specs=fvc_panel_specs,
+            ylabel="H₁₂(r)",
+            suptitle_base=(
+                f"Ripley H₁₂ on postsynaptic AZ: fusion vs controls\n"
+                f"{zone_name} | n_fusing_vesicles={len(fusion_by_vesicle)}, n_tomograms=1"
+            ),
+            refline=0.0,
+            refline_label="H₁₂ = 0",
         )
-        fig.tight_layout()
-        fig.savefig(
-            figures_dir / f"ripley_h12_fusion_vs_controls_by_d_{zone_name}.png",
-            dpi=150,
-            bbox_inches="tight",
-        )
-        plt.close(fig)
-
-        for ax_mean in axes_mean_flat[n_panels:]:
-            ax_mean.set_visible(False)
-        fig_mean.suptitle(
-            f"Ripley H₁₂ on postsynaptic AZ: fusion vs controls "
-            f"(fusion and control means only)\n"
-            f"{zone_name} | n_fusing_vesicles={len(fusion_by_vesicle)}, n_tomograms=1",
-            y=1.02,
-        )
-        fig_mean.tight_layout()
-        fig_mean.savefig(
-            figures_dir / f"ripley_h12_fusion_vs_controls_by_d_{zone_name}_fusion_mean.png",
-            dpi=150,
-            bbox_inches="tight",
-        )
-        plt.close(fig_mean)
 
         if p_by_d:
             n_paired_global = len(fusion_by_vesicle)
@@ -1945,6 +2156,7 @@ def run_ripley_o_membrain_postsynaptic_analysis(
     geodesic_method: str = DEFAULT_RIPLEY_O_GEODESIC_METHOD,
     seed: int = 42,
     probe_radius_for_coords: float | None = None,
+    aunp_pick_star_pattern: str | None = None,
 ) -> pd.DataFrame | None:
     """
     Bivariate geodesic Ripley's O (membrain-stats) on postsynaptic-projected fusion,
@@ -1994,7 +2206,11 @@ def run_ripley_o_membrain_postsynaptic_analysis(
 
         try:
             aunp_xyz = _load_aunp_coordinates_for_zone(
-                tomogram_path, alignment_dir, str(zone_name), post_tree
+                tomogram_path,
+                alignment_dir,
+                str(zone_name),
+                post_tree,
+                aunp_pick_star_pattern=aunp_pick_star_pattern,
             )
         except FileNotFoundError as exc:
             print(f"Skipping Ripley's O for {zone_name}: {exc}")
@@ -2063,59 +2279,22 @@ def run_ripley_o_membrain_postsynaptic_analysis(
         p_label_greater = (np.sum(perm_curves >= o_obs, axis=0) + 1) / (n_perm + 1)
         p_label_less = (np.sum(perm_curves <= o_obs, axis=0) + 1) / (n_perm + 1)
 
-        fig, ax = plt.subplots(figsize=(7, 5))
-        _plot_label_permutation_envelope_panel(
-            ax,
-            r_vals,
-            null_lo=o_null_lo,
-            null_med=o_null_med,
-            null_hi=o_null_hi,
+        _save_label_perm_ripley_figures(
+            figures_dir,
+            f"ripley_o_label_permutation_{zone_name}",
+            r_vals=r_vals,
+            null_curves=perm_curves,
+            obs_curves=fusion_vesicle_curves,
             n_perm=n_perm,
-            obs_lo=o_obs_lo,
-            obs_med=o_obs_med,
-            obs_hi=o_obs_hi,
             n_obs_replicates=len(fusion_by_vesicle),
             ylabel="Ripley's O(r) [membrain-stats geodesic]",
-            title=(
+            title_prefix=(
                 f"Label-permutation null: Ripley's O fusion vs AuNP\n"
                 f"{zone_name} (p-values: pooled observed vs null)"
             ),
             refline=1.0,
             refline_label="CSR (O=1)",
         )
-        fig.tight_layout()
-        fig.savefig(figures_dir / f"ripley_o_label_permutation_{zone_name}.png", dpi=150)
-        plt.close(fig)
-
-        fig_mean, ax_mean = plt.subplots(figsize=(7, 5))
-        _plot_label_permutation_envelope_panel(
-            ax_mean,
-            r_vals,
-            null_lo=o_null_lo,
-            null_med=o_null_med,
-            null_hi=o_null_hi,
-            n_perm=n_perm,
-            obs_lo=o_obs_lo,
-            obs_med=o_obs_med,
-            obs_hi=o_obs_hi,
-            n_obs_replicates=len(fusion_by_vesicle),
-            ylabel="Ripley's O(r) [membrain-stats geodesic]",
-            title=(
-                f"Label-permutation null: Ripley's O fusion vs AuNP\n"
-                f"{zone_name} (null and fusion means only)"
-            ),
-            refline=1.0,
-            refline_label="CSR (O=1)",
-            fusion_mean_only=True,
-            obs_mean=o_fusion_mean,
-            null_mean=o_null_mean,
-        )
-        fig_mean.tight_layout()
-        fig_mean.savefig(
-            figures_dir / f"ripley_o_label_permutation_{zone_name}_fusion_mean.png",
-            dpi=150,
-        )
-        plt.close(fig_mean)
 
         _plot_significance_single(
             r_vals,
@@ -2152,6 +2331,7 @@ def run_ripley_o_membrain_postsynaptic_analysis(
         ax.set_title(f"Directional Ripley's O label-permutation p-values\n{zone_name}")
         ax.legend(fontsize=8)
         ax.set_ylim(bottom=0.0)
+        _apply_ripley_xlim(ax)
         fig.tight_layout()
         fig.savefig(figures_dir / f"ripley_o_pvalues_label_permutation_directional_{zone_name}.png", dpi=150)
         plt.close(fig)
@@ -2205,17 +2385,12 @@ def run_ripley_o_membrain_postsynaptic_analysis(
             )
 
         n_panels = len(offsets)
-        ncols = min(3, n_panels)
-        nrows = int(np.ceil(n_panels / ncols))
-        fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 4 * nrows), squeeze=False)
-        fig_mean, axes_mean = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 4 * nrows), squeeze=False)
-        axes_flat = axes.flatten()
-        axes_mean_flat = axes_mean.flatten()
         p_by_d: dict[str, np.ndarray] = {}
         panel_notes: dict[str, str] = {}
         fvc_by_offset: dict[float, tuple[np.ndarray, np.ndarray]] = {}
+        fvc_panel_specs: list[dict[str, Any]] = []
 
-        for ax, ax_mean, offset_nm in zip(axes_flat, axes_mean_flat, offsets):
+        for offset_nm in offsets:
             sub_c = _dedupe_rows_by_xyz(
                 ctrl[
                     (ctrl["probe_radius_nm"] == probe_radius_for_coords)
@@ -2225,8 +2400,14 @@ def run_ripley_o_membrain_postsynaptic_analysis(
                 ("query_point_x_nm", "query_point_y_nm", "query_point_z_nm"),
             )
             if sub_c.empty:
-                ax.set_title(f"d={int(offset_nm)} nm (no controls)")
-                ax_mean.set_title(f"d={int(offset_nm)} nm (no controls)")
+                fvc_panel_specs.append(
+                    {
+                        "offset_nm": float(offset_nm),
+                        "ctrl_curves": None,
+                        "n_control_vesicles": 0,
+                        "n_fusion_vesicles": len(fusion_by_vesicle),
+                    }
+                )
                 continue
 
             control_by_vesicle = _project_points_by_vesicle(
@@ -2247,9 +2428,16 @@ def run_ripley_o_membrain_postsynaptic_analysis(
                 geodesic_method=geodesic_method,
             )
             o_ctrl_lo, o_ctrl_med, o_ctrl_hi = _replicate_percentile_band(ctrl_curves)
-            o_ctrl_mean = _replicate_mean(ctrl_curves)
             p_fusion_vs_ctrl = _vesicle_paired_pvalues(fusion_curves, ctrl_curves)
             fvc_by_offset[float(offset_nm)] = (fusion_curves, ctrl_curves)
+            fvc_panel_specs.append(
+                {
+                    "offset_nm": float(offset_nm),
+                    "ctrl_curves": ctrl_curves,
+                    "n_control_vesicles": len(control_by_vesicle),
+                    "n_fusion_vesicles": len(fusion_by_vesicle),
+                }
+            )
 
             p_by_d[f"d={int(offset_nm)} nm"] = p_fusion_vs_ctrl
             min_p_floor = _wilcoxon_min_achievable_p(len(paired_ids))
@@ -2261,42 +2449,6 @@ def run_ripley_o_membrain_postsynaptic_analysis(
                     if np.isfinite(min_p_floor) and min_p_floor > 0.05
                     else ""
                 )
-            )
-
-            _plot_fusion_vs_control_ripley_panel(
-                ax,
-                r_vals,
-                ctrl_lo=o_ctrl_lo,
-                ctrl_med=o_ctrl_med,
-                ctrl_hi=o_ctrl_hi,
-                n_control_vesicles=len(control_by_vesicle),
-                offset_nm=float(offset_nm),
-                fusion_lo=o_fusion_lo,
-                fusion_med=o_fusion_med,
-                fusion_hi=o_fusion_hi,
-                n_fusion_vesicles=len(fusion_by_vesicle),
-                ylabel="Ripley's O(r)",
-                refline=1.0,
-                refline_label="CSR (O=1)",
-            )
-            _plot_fusion_vs_control_ripley_panel(
-                ax_mean,
-                r_vals,
-                ctrl_lo=o_ctrl_lo,
-                ctrl_med=o_ctrl_med,
-                ctrl_hi=o_ctrl_hi,
-                n_control_vesicles=len(control_by_vesicle),
-                offset_nm=float(offset_nm),
-                fusion_lo=o_fusion_lo,
-                fusion_med=o_fusion_med,
-                fusion_hi=o_fusion_hi,
-                n_fusion_vesicles=len(fusion_by_vesicle),
-                ylabel="Ripley's O(r)",
-                refline=1.0,
-                refline_label="CSR (O=1)",
-                fusion_mean_only=True,
-                fusion_mean=o_fusion_mean,
-                ctrl_mean=o_ctrl_mean,
             )
 
             for r, f_lo, f_med, f_hi, f_mean, c_lo, c_med, c_hi, p_val in zip(
@@ -2341,37 +2493,20 @@ def run_ripley_o_membrain_postsynaptic_analysis(
                     }
                 )
 
-        for ax in axes_flat[n_panels:]:
-            ax.set_visible(False)
-        fig.suptitle(
-            f"Ripley's O (membrain-stats geodesic): fusion vs controls "
-            f"(2.5–97.5% bands + median across per-vesicle O curves)\n"
-            f"{zone_name} | n_fusing_vesicles={len(fusion_by_vesicle)}, n_tomograms=1",
-            y=1.02,
+        _save_fusion_vs_control_by_d_figures(
+            figures_dir,
+            f"ripley_o_fusion_vs_controls_by_d_{zone_name}",
+            r_vals=r_vals,
+            fusion_vesicle_curves=fusion_vesicle_curves,
+            panel_specs=fvc_panel_specs,
+            ylabel="Ripley's O(r)",
+            suptitle_base=(
+                f"Ripley's O (membrain-stats geodesic): fusion vs controls\n"
+                f"{zone_name} | n_fusing_vesicles={len(fusion_by_vesicle)}, n_tomograms=1"
+            ),
+            refline=1.0,
+            refline_label="CSR (O=1)",
         )
-        fig.tight_layout()
-        fig.savefig(
-            figures_dir / f"ripley_o_fusion_vs_controls_by_d_{zone_name}.png",
-            dpi=150,
-            bbox_inches="tight",
-        )
-        plt.close(fig)
-
-        for ax_mean in axes_mean_flat[n_panels:]:
-            ax_mean.set_visible(False)
-        fig_mean.suptitle(
-            f"Ripley's O (membrain-stats geodesic): fusion vs controls "
-            f"(fusion and control means only)\n"
-            f"{zone_name} | n_fusing_vesicles={len(fusion_by_vesicle)}, n_tomograms=1",
-            y=1.02,
-        )
-        fig_mean.tight_layout()
-        fig_mean.savefig(
-            figures_dir / f"ripley_o_fusion_vs_controls_by_d_{zone_name}_fusion_mean.png",
-            dpi=150,
-            bbox_inches="tight",
-        )
-        plt.close(fig_mean)
 
         if p_by_d:
             n_paired_global = len(fusion_by_vesicle)
@@ -2523,13 +2658,26 @@ def plot_results(
         fusion_vals = real.loc[real["probe_radius_nm"] == probe_radius, "aunp_density_per_nm2"]
         fusion_mean = float(fusion_vals.mean())
         fusion_sem = (
-            float(fusion_vals.std() / np.sqrt(len(fusion_vals)))
+            float(fusion_vals.std(ddof=1) / np.sqrt(len(fusion_vals)))
             if len(fusion_vals) > 1
             else 0.0
         )
-        ax.axhline(fusion_mean, color="C3", linestyle="--", linewidth=1.5, label="fusion mean")
+        fusion_line_label = "fusion mean" if fusion_sem <= 0 else "_nolegend_"
+        ax.axhline(
+            fusion_mean,
+            color="C3",
+            linestyle="--",
+            linewidth=1.5,
+            label=fusion_line_label,
+        )
         if fusion_sem > 0:
-            ax.axhspan(fusion_mean - fusion_sem, fusion_mean + fusion_sem, color="C3", alpha=0.2)
+            ax.axhspan(
+                fusion_mean - fusion_sem,
+                fusion_mean + fusion_sem,
+                color="C3",
+                alpha=0.2,
+                label="fusion mean ± SEM",
+            )
         ax.set_title(f"probe r = {int(probe_radius)} nm")
         ax.set_xlabel("Control offset d (nm)")
         ax.set_ylabel("AuNP density (per nm²)")
@@ -2637,6 +2785,7 @@ def load_scan_by_radius_for_tomogram(
     vertex_sampling_step: int = 50,
     receptor_crosssection: float = 122.0,
     aunps_per_receptor: float = 2.0,
+    aunp_pick_star_pattern: str | None = None,
 ) -> dict[float, pd.DataFrame]:
     """Load or compute scan-vertex tables at each probe radius (original script behaviour)."""
     tomogram_path = Path(tomogram_path)
@@ -2659,6 +2808,7 @@ def load_scan_by_radius_for_tomogram(
             vertex_sampling_step=vertex_sampling_step,
             receptor_crosssection=receptor_crosssection,
             aunps_per_receptor=aunps_per_receptor,
+            aunp_pick_star_pattern=aunp_pick_star_pattern,
         )
         scan_df.to_csv(cache_path, index=False)
         scan_by_radius[float(probe_radius)] = scan_df
@@ -2714,6 +2864,7 @@ def run_fusion_point_vs_aunp_density_for_zone(
     write_figures: bool = False,
     skip_ripley: bool = False,
     skip_ripley_o: bool = False,
+    aunp_pick_star_pattern: str | None = None,
 ) -> pd.DataFrame | None:
     """Run tangential-shuffle control analysis for one active zone."""
     if not scan_by_radius:
@@ -2762,6 +2913,7 @@ def run_fusion_point_vs_aunp_density_for_zone(
         "seed": int(seed),
         "n_fusion_vesicles": len(zone_fusion_rows),
         "n_table_rows": len(df),
+        "aunp_pick_star_pattern": normalize_aunp_pick_star_pattern(aunp_pick_star_pattern),
     }
     with open(output_dir / "run_metadata.json", "w") as f:
         json.dump(meta, f, indent=2)
@@ -2783,6 +2935,7 @@ def run_fusion_point_vs_aunp_density_for_zone(
             output_dir,
             seed=seed,
             probe_radius_for_coords=probe_for_coords,
+            aunp_pick_star_pattern=aunp_pick_star_pattern,
         )
     if not skip_ripley_o:
         run_ripley_o_membrain_postsynaptic_analysis(
@@ -2792,6 +2945,7 @@ def run_fusion_point_vs_aunp_density_for_zone(
             output_dir,
             seed=seed,
             probe_radius_for_coords=probe_for_coords,
+            aunp_pick_star_pattern=aunp_pick_star_pattern,
         )
 
     print(
@@ -2816,6 +2970,7 @@ def run_fusion_point_vs_aunp_density_for_tomogram(
     seed: int = DEFAULT_ANALYSIS_SEED,
     max_snap_distance_nm: float = 10.0,
     write_figures: bool = True,
+    aunp_pick_star_pattern: str | None = None,
 ) -> list[pd.DataFrame]:
     """Run fusion-point vs AuNP density analysis for each active zone in one tomogram."""
     tomogram_path = Path(tomogram_path)
@@ -2833,7 +2988,7 @@ def run_fusion_point_vs_aunp_density_for_tomogram(
         / "visualizations"
         / "active_zonograms"
         / FUSION_POINT_VS_AUNP_DENSITY_SUBDIR
-        / "_scan_cache"
+        / _scan_cache_subdir_name(aunp_pick_star_pattern)
     )
     scan_by_radius = load_scan_by_radius_for_tomogram(
         tomogram_path,
@@ -2843,6 +2998,7 @@ def run_fusion_point_vs_aunp_density_for_tomogram(
         vertex_sampling_step=vertex_sampling_step,
         receptor_crosssection=receptor_crosssection,
         aunps_per_receptor=aunps_per_receptor,
+        aunp_pick_star_pattern=aunp_pick_star_pattern,
     )
 
     membrane_az_pairs = import_presynaptic_membranes_and_active_zones(
@@ -2868,6 +3024,7 @@ def run_fusion_point_vs_aunp_density_for_tomogram(
             seed=seed,
             max_snap_distance_nm=max_snap_distance_nm,
             write_figures=write_figures,
+            aunp_pick_star_pattern=aunp_pick_star_pattern,
         )
         if df_zone is not None and not df_zone.empty:
             zone_frames.append(df_zone)
@@ -3135,30 +3292,23 @@ def plot_pooled_ripley_h12_from_vesicle_artifacts(
     p_label_greater = (np.sum(perm_curves >= h12_obs, axis=0) + 1) / (n_null + 1)
     p_label_less = (np.sum(perm_curves <= h12_obs, axis=0) + 1) / (n_null + 1)
 
-    fig, ax = plt.subplots(figsize=(7, 5))
-    _plot_label_permutation_envelope_panel(
-        ax,
-        r_vals,
-        null_lo=h12_null_lo,
-        null_med=h12_null_med,
-        null_hi=h12_null_hi,
+    _save_label_perm_ripley_figures(
+        figures_dir,
+        f"ripley_h12_label_permutation_{file_tag}",
+        r_vals=r_vals,
+        null_curves=perm_curves,
+        obs_curves=fusion_vesicle_curves,
         n_perm=n_null,
-        obs_lo=h12_fusion_lo,
-        obs_med=h12_fusion_med,
-        obs_hi=h12_fusion_hi,
         n_obs_replicates=len(fusion_vesicle_curves),
         ylabel="Ripley H₁₂(r) = √(K₁₂/π) − r",
-        title=(
+        title_prefix=(
             "Pooled label-permutation null: fusion vs AuNP on postsynaptic AZ\n"
             f"all fusing vesicles | {pool_note}"
         ),
         refline=0.0,
         refline_label="H₁₂ = 0",
+        sample_note=pool_note,
     )
-    fig.tight_layout()
-    _add_figure_sample_note(fig, pool_note)
-    fig.savefig(figures_dir / f"ripley_h12_label_permutation_{file_tag}.png", dpi=150)
-    plt.close(fig)
 
     _plot_significance_single(
         r_vals,
@@ -3209,15 +3359,11 @@ def plot_pooled_ripley_h12_from_vesicle_artifacts(
         )
 
     offsets = _offset_keys_from_artifacts(artifacts)
-    n_panels = len(offsets)
-    ncols = min(3, n_panels)
-    nrows = int(np.ceil(n_panels / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 4 * nrows), squeeze=False)
-    axes_flat = axes.flatten()
     p_by_d: dict[str, np.ndarray] = {}
     panel_notes: dict[str, str] = {}
+    fvc_panel_specs: list[dict[str, Any]] = []
 
-    for ax, offset_nm in zip(axes_flat, offsets):
+    for offset_nm in offsets:
         tag = _offset_artifact_key(offset_nm)
         fusion_parts_d: list[np.ndarray] = []
         ctrl_parts_d: list[np.ndarray] = []
@@ -3229,7 +3375,14 @@ def plot_pooled_ripley_h12_from_vesicle_artifacts(
         fusion_curves = _stack_nonempty_curves(fusion_parts_d)
         ctrl_curves = _stack_nonempty_curves(ctrl_parts_d)
         if fusion_curves.size == 0 or ctrl_curves.size == 0:
-            ax.set_title(f"d={int(offset_nm)} nm (no controls)")
+            fvc_panel_specs.append(
+                {
+                    "offset_nm": float(offset_nm),
+                    "ctrl_curves": None,
+                    "n_control_vesicles": 0,
+                    "n_fusion_vesicles": len(fusion_vesicle_curves),
+                }
+            )
             continue
 
         h12_ctrl_lo, h12_ctrl_med, h12_ctrl_hi = _replicate_percentile_band(ctrl_curves)
@@ -3239,22 +3392,13 @@ def plot_pooled_ripley_h12_from_vesicle_artifacts(
             f"n_fusion_vesicles={len(fusion_curves)}, n_control_vesicles={len(ctrl_curves)}, "
             f"{pool_note}"
         )
-
-        _plot_fusion_vs_control_ripley_panel(
-            ax,
-            r_vals,
-            ctrl_lo=h12_ctrl_lo,
-            ctrl_med=h12_ctrl_med,
-            ctrl_hi=h12_ctrl_hi,
-            n_control_vesicles=len(ctrl_curves),
-            offset_nm=float(offset_nm),
-            fusion_lo=h12_fusion_lo,
-            fusion_med=h12_fusion_med,
-            fusion_hi=h12_fusion_hi,
-            n_fusion_vesicles=len(fusion_curves),
-            ylabel="H₁₂(r)",
-            refline=0.0,
-            refline_label="H₁₂ = 0",
+        fvc_panel_specs.append(
+            {
+                "offset_nm": float(offset_nm),
+                "ctrl_curves": ctrl_curves,
+                "n_control_vesicles": len(ctrl_curves),
+                "n_fusion_vesicles": len(fusion_curves),
+            }
         )
 
         for r, f_lo, f_med, f_hi, c_lo, c_med, c_hi, p_val in zip(
@@ -3289,20 +3433,18 @@ def plot_pooled_ripley_h12_from_vesicle_artifacts(
                 }
             )
 
-    for ax in axes_flat[n_panels:]:
-        ax.set_visible(False)
-    fig.suptitle(
-        f"Pooled Ripley H₁₂: fusion vs controls across all fusing vesicles\n{pool_note}",
-        y=1.02,
+    _save_fusion_vs_control_by_d_figures(
+        figures_dir,
+        f"ripley_h12_fusion_vs_controls_by_d_{file_tag}",
+        r_vals=r_vals,
+        fusion_vesicle_curves=fusion_vesicle_curves,
+        panel_specs=fvc_panel_specs,
+        ylabel="H₁₂(r)",
+        suptitle_base=f"Pooled Ripley H₁₂: fusion vs controls across all fusing vesicles\n{pool_note}",
+        refline=0.0,
+        refline_label="H₁₂ = 0",
+        sample_note=pool_note,
     )
-    fig.tight_layout()
-    _add_figure_sample_note(fig, pool_note)
-    fig.savefig(
-        figures_dir / f"ripley_h12_fusion_vs_controls_by_d_{file_tag}.png",
-        dpi=150,
-        bbox_inches="tight",
-    )
-    plt.close(fig)
 
     if p_by_d:
         _plot_significance_panels(
@@ -3404,30 +3546,23 @@ def plot_pooled_ripley_o_from_vesicle_artifacts(
             }
         )
 
-    fig, ax = plt.subplots(figsize=(7, 5))
-    _plot_label_permutation_envelope_panel(
-        ax,
-        r_vals,
-        null_lo=o_null_lo,
-        null_med=o_null_med,
-        null_hi=o_null_hi,
+    _save_label_perm_ripley_figures(
+        figures_dir,
+        f"ripley_o_label_permutation_{file_tag}",
+        r_vals=r_vals,
+        null_curves=perm_curves,
+        obs_curves=fusion_vesicle_curves,
         n_perm=n_null,
-        obs_lo=o_fusion_lo,
-        obs_med=o_fusion_med,
-        obs_hi=o_fusion_hi,
         n_obs_replicates=len(fusion_vesicle_curves),
         ylabel="Ripley's O(r) [membrain-stats geodesic]",
-        title=(
+        title_prefix=(
             "Pooled label-permutation null: Ripley's O fusion vs AuNP\n"
             f"all fusing vesicles | {pool_note}"
         ),
         refline=1.0,
         refline_label="CSR (O=1)",
+        sample_note=pool_note,
     )
-    fig.tight_layout()
-    _add_figure_sample_note(fig, pool_note)
-    fig.savefig(figures_dir / f"ripley_o_label_permutation_{file_tag}.png", dpi=150)
-    plt.close(fig)
 
     _plot_significance_single(
         r_vals,
@@ -3441,14 +3576,10 @@ def plot_pooled_ripley_o_from_vesicle_artifacts(
     )
 
     offsets = _offset_keys_from_artifacts(artifacts)
-    n_panels = len(offsets)
-    ncols = min(3, n_panels)
-    nrows = int(np.ceil(n_panels / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 4 * nrows), squeeze=False)
-    axes_flat = axes.flatten()
     p_by_d: dict[str, np.ndarray] = {}
+    fvc_panel_specs: list[dict[str, Any]] = []
 
-    for ax, offset_nm in zip(axes_flat, offsets):
+    for offset_nm in offsets:
         tag = _offset_artifact_key(offset_nm)
         fusion_parts_d: list[np.ndarray] = []
         ctrl_parts_d: list[np.ndarray] = []
@@ -3460,28 +3591,26 @@ def plot_pooled_ripley_o_from_vesicle_artifacts(
         fusion_curves = _stack_nonempty_curves(fusion_parts_d)
         ctrl_curves = _stack_nonempty_curves(ctrl_parts_d)
         if fusion_curves.size == 0 or ctrl_curves.size == 0:
-            ax.set_title(f"d={int(offset_nm)} nm (no controls)")
+            fvc_panel_specs.append(
+                {
+                    "offset_nm": float(offset_nm),
+                    "ctrl_curves": None,
+                    "n_control_vesicles": 0,
+                    "n_fusion_vesicles": len(fusion_vesicle_curves),
+                }
+            )
             continue
 
         o_ctrl_lo, o_ctrl_med, o_ctrl_hi = _replicate_percentile_band(ctrl_curves)
         p_fusion_vs_ctrl = _unpaired_curve_pvalues(fusion_curves, ctrl_curves)
         p_by_d[f"d={int(offset_nm)} nm"] = p_fusion_vs_ctrl
-
-        _plot_fusion_vs_control_ripley_panel(
-            ax,
-            r_vals,
-            ctrl_lo=o_ctrl_lo,
-            ctrl_med=o_ctrl_med,
-            ctrl_hi=o_ctrl_hi,
-            n_control_vesicles=len(ctrl_curves),
-            offset_nm=float(offset_nm),
-            fusion_lo=o_fusion_lo,
-            fusion_med=o_fusion_med,
-            fusion_hi=o_fusion_hi,
-            n_fusion_vesicles=len(fusion_curves),
-            ylabel="Ripley's O(r)",
-            refline=1.0,
-            refline_label="CSR (O=1)",
+        fvc_panel_specs.append(
+            {
+                "offset_nm": float(offset_nm),
+                "ctrl_curves": ctrl_curves,
+                "n_control_vesicles": len(ctrl_curves),
+                "n_fusion_vesicles": len(fusion_curves),
+            }
         )
 
         for r, f_lo, f_med, f_hi, c_lo, c_med, c_hi, p_val in zip(
@@ -3516,20 +3645,18 @@ def plot_pooled_ripley_o_from_vesicle_artifacts(
                 }
             )
 
-    for ax in axes_flat[n_panels:]:
-        ax.set_visible(False)
-    fig.suptitle(
-        f"Pooled Ripley's O: fusion vs controls across all fusing vesicles\n{pool_note}",
-        y=1.02,
+    _save_fusion_vs_control_by_d_figures(
+        figures_dir,
+        f"ripley_o_fusion_vs_controls_by_d_{file_tag}",
+        r_vals=r_vals,
+        fusion_vesicle_curves=fusion_vesicle_curves,
+        panel_specs=fvc_panel_specs,
+        ylabel="Ripley's O(r)",
+        suptitle_base=f"Pooled Ripley's O: fusion vs controls across all fusing vesicles\n{pool_note}",
+        refline=1.0,
+        refline_label="CSR (O=1)",
+        sample_note=pool_note,
     )
-    fig.tight_layout()
-    _add_figure_sample_note(fig, pool_note)
-    fig.savefig(
-        figures_dir / f"ripley_o_fusion_vs_controls_by_d_{file_tag}.png",
-        dpi=150,
-        bbox_inches="tight",
-    )
-    plt.close(fig)
 
     if p_by_d:
         _plot_significance_panels(
@@ -3761,6 +3888,15 @@ def main() -> None:
         default=DEFAULT_RIPLEY_O_GEODESIC_METHOD,
         help="Geodesic solver for membrain-stats Ripley's O (fast=heat method, exact=pygeodesic)",
     )
+    parser.add_argument(
+        "--aunp-pick-star-pattern",
+        type=str,
+        default=None,
+        help=(
+            "Per-AZ AuNP pick STAR filename pattern with one '*' for the active zone index "
+            f"(default: {DEFAULT_AUNP_PICK_STAR_PATTERN!r})"
+        ),
+    )
     args = parser.parse_args()
     probe_radii = [float(r) for r in args.probe_radii]
 
@@ -3807,6 +3943,7 @@ def main() -> None:
                 tomogram_path,
                 args.alignment_dir,
                 float(probe_radius),
+                aunp_pick_star_pattern=args.aunp_pick_star_pattern,
             )
             scan_by_radius[float(probe_radius)].to_csv(cache_path, index=False)
             print(f"  Scan vertices for r={probe_radius:.0f} nm: {len(scan_by_radius[float(probe_radius)])}")
@@ -3858,6 +3995,7 @@ def main() -> None:
         "seed": args.seed,
         "n_fusion_vesicles": len(fusion_rows),
         "n_table_rows": len(df),
+        "aunp_pick_star_pattern": normalize_aunp_pick_star_pattern(args.aunp_pick_star_pattern),
     }
     with open(args.output_dir / "run_metadata.json", "w") as f:
         json.dump(meta, f, indent=2)
@@ -3879,6 +4017,7 @@ def main() -> None:
             r_step_nm=args.ripley_r_step,
             n_perm=args.ripley_n_perm,
             seed=args.seed,
+            aunp_pick_star_pattern=args.aunp_pick_star_pattern,
         )
 
     if not args.skip_ripley_o:
@@ -3893,6 +4032,7 @@ def main() -> None:
             mesh_max_vertices=args.ripley_o_mesh_max_verts,
             geodesic_method=args.ripley_o_geodesic_method,
             seed=args.seed,
+            aunp_pick_star_pattern=args.aunp_pick_star_pattern,
         )
 
 
