@@ -1158,6 +1158,123 @@ def run_fusion_point_aunp_analyses_for_zone(
     }
 
 
+def build_fusion_null_query_point_dataframes_for_zonograms(
+    tomogram_path: Path,
+    alignment_dir: str,
+    az_mapping: dict,
+    *,
+    vesicle_distance_threshold: float = 20.0,
+    fusion_point_threshold: float = 20.0,
+    n_replicates: int = DEFAULT_NULL_REPLICATES_N,
+    seed: int = DEFAULT_ANALYSIS_SEED,
+) -> dict[str, pd.DataFrame]:
+    """
+    Long-form 40 nm shift and label-permutation query sites for zonogram overlays.
+
+    Uses the same 3D geometry, monomer+dimer AuNP pool, replicate count, and seed as
+  ``run_fusion_point_aunp_analyses_for_zone``.
+    """
+    tomogram_path = Path(tomogram_path)
+    alignment_dir = require_alignment_dir(alignment_dir)
+    az_mapping = {int(k): v for k, v in (az_mapping or {}).items()}
+    if not az_mapping:
+        return {"40nm_shift": pd.DataFrame(), "label_permutation": pd.DataFrame()}
+
+    membrane_az_pairs = import_presynaptic_membranes_and_active_zones(
+        tomogram_path, alignment_dir=alignment_dir
+    )
+    shift_rows: list[dict] = []
+    perm_rows: list[dict] = []
+
+    for az_idx in sorted(az_mapping):
+        zone_name = az_mapping[az_idx]
+        membrane_name = presynaptic_membrane_name_for_zone(zone_name)
+        fusing_rows = filter_fusion_rows_for_zone(
+            enumerate_close_vesicle_fusion_points(
+                tomogram_path,
+                alignment_dir=alignment_dir,
+                vesicle_distance_threshold=vesicle_distance_threshold,
+                fusion_point_threshold=fusion_point_threshold,
+                fusing_only=True,
+            ),
+            membrane_name,
+        )
+        if not fusing_rows:
+            continue
+
+        try:
+            aunp_coords_all, _ = load_monomer_dimer_aunps_for_zone(
+                tomogram_path, alignment_dir, az_idx
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            print(
+                f"  Zonogram null overlays: skipping {zone_name} AuNPs ({exc})"
+            )
+            continue
+
+        pre_surface = load_presynaptic_az_points_for_zone(
+            tomogram_path, alignment_dir, zone_name
+        )
+        rng = np.random.default_rng(seed)
+
+        shift_by_rep = _shift_sites_by_replicate(
+            fusing_rows,
+            membrane_az_pairs,
+            offset_nm=FUSION_POINT_SHIFT_OFFSET_NM,
+            n_shifts=n_replicates,
+            rng=rng,
+            max_snap_distance_nm=FUSION_POINT_AZ_MAX_SNAP_DISTANCE_NM,
+        )
+        _, label_pooled = _label_permutation_sites(
+            fusing_rows,
+            aunp_coords_all,
+            pre_surface,
+            n_perm=n_replicates,
+            rng=rng,
+        )
+
+        for rep_id, ves_map in shift_by_rep.items():
+            for fp in fusing_rows:
+                vid = int(fp["vesicle_id"])
+                if vid not in ves_map:
+                    continue
+                query = ves_map[vid]
+                shift_rows.append(
+                    {
+                        "active_zone_name": zone_name,
+                        "shift_replicate_id": int(rep_id),
+                        "vesicle_id": vid,
+                        "vesicle_name": fp.get("vesicle_name"),
+                        "fusion_point_x_nm": float(fp["fusion_point_x_nm"]),
+                        "fusion_point_y_nm": float(fp["fusion_point_y_nm"]),
+                        "fusion_point_z_nm": float(fp["fusion_point_z_nm"]),
+                        "query_point_x_nm": float(query[0]),
+                        "query_point_y_nm": float(query[1]),
+                        "query_point_z_nm": float(query[2]),
+                        "control_offset_nm": float(FUSION_POINT_SHIFT_OFFSET_NM),
+                    }
+                )
+
+        for perm_id, queries in label_pooled.items():
+            for fusion_site_idx, query in enumerate(queries):
+                q = np.asarray(query, dtype=float).reshape(3)
+                perm_rows.append(
+                    {
+                        "active_zone_name": zone_name,
+                        "permutation_id": int(perm_id),
+                        "fusion_site_index": int(fusion_site_idx),
+                        "query_point_x_nm": float(q[0]),
+                        "query_point_y_nm": float(q[1]),
+                        "query_point_z_nm": float(q[2]),
+                    }
+                )
+
+    return {
+        "40nm_shift": pd.DataFrame(shift_rows),
+        "label_permutation": pd.DataFrame(perm_rows),
+    }
+
+
 def run_fusion_point_aunp_analyses_for_tomogram(
     tomogram_path: Path,
     alignment_dir: str,

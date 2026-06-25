@@ -1854,27 +1854,10 @@ def _scatter_points_on_zonogram_axes(
     axyz.scatter(zonogram_xyz[:, 0], zonogram_xyz[:, 2], **scatter_kw)
 
 
-def _aunp_coords_and_zone_ids_for_null_models(
-    aunp_df: pd.DataFrame,
-) -> tuple[np.ndarray, np.ndarray]:
-    """AuNP coordinates and active-zone indices for fusion null-model distance tables."""
-    if aunp_df is None or aunp_df.empty:
-        return np.zeros((0, 3), dtype=float), np.array([], dtype=int)
-    df = aunp_df.copy()
-    if "active_zone" in df.columns:
-        df["active_zone"] = pd.to_numeric(df["active_zone"], errors="coerce")
-        df = df[df["active_zone"].notna() & (df["active_zone"] != -1)]
-    if df.empty:
-        return np.zeros((0, 3), dtype=float), np.array([], dtype=int)
-    coords = df[["faCoordinateX", "faCoordinateY", "faCoordinateZ"]].to_numpy(dtype=float)
-    az_ids = df["active_zone"].to_numpy(dtype=int)
-    return coords, az_ids
-
 
 def _compute_fusion_null_query_point_dataframes(
     tomogram_path: Path,
     alignment_dir: str,
-    aunp_df: pd.DataFrame,
     az_mapping: dict,
     *,
     vesicle_distance_threshold: float = 20.0,
@@ -1883,46 +1866,25 @@ def _compute_fusion_null_query_point_dataframes(
     """
     Build long-form 40 nm shift and label-permutation tables for zonogram overlays.
 
-    Uses the same geometry as analyze_aunps / fusion_point_vs_aunp_density exports.
+    Uses the same 3D geometry and null models as
+    ``fusion_point_aunp_position_distance_and_Ripleys_analyses``.
     """
-    from .fusion_point_vs_aunp_density import (
-        compute_40nm_shifted_fusion_point_aunp_pairwise_distances,
-        compute_label_permutation_fusion_point_aunp_pairwise_distances,
+    from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
+        build_fusion_null_query_point_dataframes_for_zonograms,
     )
 
     alignment_dir = require_alignment_dir(alignment_dir)
-    coords, az_ids = _aunp_coords_and_zone_ids_for_null_models(aunp_df)
-    if coords.size == 0:
-        return {"40nm_shift": pd.DataFrame(), "label_permutation": pd.DataFrame()}
-
-    az_mapping = {int(k): v for k, v in (az_mapping or {}).items()}
     try:
-        df_40nm = compute_40nm_shifted_fusion_point_aunp_pairwise_distances(
+        return build_fusion_null_query_point_dataframes_for_zonograms(
             tomogram_path,
             alignment_dir,
-            coords,
-            vesicle_distance_threshold=vesicle_distance_threshold,
-            fusion_point_threshold=fusion_point_threshold,
-        )
-    except Exception as exc:
-        print(f"Warning: could not compute 40 nm shift query points for zonograms: {exc}")
-        df_40nm = pd.DataFrame()
-
-    try:
-        df_label_perm = compute_label_permutation_fusion_point_aunp_pairwise_distances(
-            tomogram_path,
-            alignment_dir,
-            coords,
-            az_ids,
             az_mapping,
             vesicle_distance_threshold=vesicle_distance_threshold,
             fusion_point_threshold=fusion_point_threshold,
         )
     except Exception as exc:
-        print(f"Warning: could not compute label-permutation query points for zonograms: {exc}")
-        df_label_perm = pd.DataFrame()
-
-    return {"40nm_shift": df_40nm, "label_permutation": df_label_perm}
+        print(f"Warning: could not compute fusion null query points for zonograms: {exc}")
+        return {"40nm_shift": pd.DataFrame(), "label_permutation": pd.DataFrame()}
 
 
 def _unique_shift_query_points_for_zone(df: pd.DataFrame, zone_name: str) -> np.ndarray:
@@ -1957,7 +1919,9 @@ def _fusing_fusion_points_by_zone(
 ) -> dict[str, np.ndarray]:
     """Real fusing-vesicle fusion points grouped by active zone name."""
     from .aunps import enumerate_close_vesicle_fusion_points
-    from .fusion_point_vs_aunp_density import zone_name_for_presynaptic_membrane
+    from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
+        zone_name_for_presynaptic_membrane,
+    )
 
     by_zone: dict[str, list[list[float]]] = {}
     for fp in enumerate_close_vesicle_fusion_points(
@@ -2456,7 +2420,6 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                 fusion_null_query_dfs = _compute_fusion_null_query_point_dataframes(
                     Path(tomogram_path),
                     alignment_dir,
-                    aunp_data,
                     active_zones_data.get("az_mapping", {}),
                     vesicle_distance_threshold=vesicle_distance_threshold,
                 )
@@ -3099,7 +3062,7 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                             reference_world_xyz=reference_fusion_world,
                             output_path_results=shift_path_results,
                             output_path_tomogram=shift_path_tomogram,
-                            overlay_label="40 nm tangential shift controls",
+                            overlay_label="40 nm tangential shift controls (100 replicates)",
                             overlay_color="deepskyblue",
                             overlay_marker="o",
                             overlay_size=26,
@@ -3132,7 +3095,7 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                             reference_world_xyz=reference_fusion_world,
                             output_path_results=perm_path_results,
                             output_path_tomogram=perm_path_tomogram,
-                            overlay_label="Label-permutation fusion sites",
+                            overlay_label="Label-permutation fusion sites (100 replicates)",
                             overlay_color="mediumorchid",
                             overlay_marker=".",
                             overlay_size=18,
