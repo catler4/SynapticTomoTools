@@ -1088,12 +1088,12 @@ def _membrain_ripley_o_on_r_grid(
         "positions_target": _snap_points_to_mesh_vertices(target_xyz, mesh_verts),
     }
     with _suppress_membrain_mesh_stdout():
-        ripley_stat = compute_ripleys_stats(mesh_dict, method=geodesic_method)
-        x_vals, o_vals = _membrain_aggregate_ripley_o(
-            [ripley_stat],
-            bin_size_nm=bin_size_nm,
-            num_bins=max(10, len(r_vals)),
-        )
+    ripley_stat = compute_ripleys_stats(mesh_dict, method=geodesic_method)
+    x_vals, o_vals = _membrain_aggregate_ripley_o(
+        [ripley_stat],
+        bin_size_nm=bin_size_nm,
+        num_bins=max(10, len(r_vals)),
+    )
     r_max = float(r_vals[-1])
     valid = x_vals <= r_max + 0.5 * bin_size_nm
     x_vals = np.asarray(x_vals, dtype=float)[valid]
@@ -1646,7 +1646,7 @@ def _save_fusion_vs_control_by_d_figures(
             dpi=150,
             bbox_inches="tight",
         )
-        plt.close(fig)
+    plt.close(fig)
 
 
 def _replicate_mean(curves: np.ndarray) -> np.ndarray:
@@ -1709,20 +1709,20 @@ def _plot_ripley_dual_envelope_panel(
         secondary_line_label if secondary_line_label is not None else secondary_median_label
     )
     if secondary_show_envelope:
-        ax.fill_between(
-            r_vals,
-            secondary_lo,
-            secondary_hi,
-            color="0.85",
-            zorder=1,
-            label=secondary_band_label,
-        )
-        ax.plot(
-            r_vals,
+    ax.fill_between(
+        r_vals,
+        secondary_lo,
+        secondary_hi,
+        color="0.85",
+        zorder=1,
+        label=secondary_band_label,
+    )
+    ax.plot(
+        r_vals,
             secondary_plot,
-            color="0.45",
-            lw=1.8,
-            zorder=2,
+        color="0.45",
+        lw=1.8,
+        zorder=2,
             label=secondary_label,
         )
     else:
@@ -1733,7 +1733,7 @@ def _plot_ripley_dual_envelope_panel(
             lw=1.8,
             zorder=2,
             label=secondary_label,
-        )
+    )
     fusion_line = primary_line if primary_line is not None else primary_med
     fusion_label = primary_line_label if primary_line_label is not None else primary_median_label
     if primary_show_envelope:
@@ -1985,19 +1985,19 @@ def _load_aunp_coordinates_for_zone(
             )
         aunp_df = pd.concat(pick_dfs, ignore_index=True)
     else:
-        star_data = starfile.read(star_path)
-        if isinstance(star_data, dict):
-            aunp_df = next(v for v in star_data.values() if isinstance(v, pd.DataFrame))
-        else:
-            aunp_df = star_data
+    star_data = starfile.read(star_path)
+    if isinstance(star_data, dict):
+        aunp_df = next(v for v in star_data.values() if isinstance(v, pd.DataFrame))
+    else:
+        aunp_df = star_data
 
-        if "active_zone" in aunp_df.columns:
-            mapping = load_active_zone_mapping(tomogram_path, alignment_dir)
-            if mapping:
-                mapping = {int(k): v for k, v in mapping.items()}
-                az_ids = [idx for idx, zname in mapping.items() if zname == zone_name]
-                if az_ids:
-                    aunp_df = aunp_df[aunp_df["active_zone"].isin(az_ids)]
+    if "active_zone" in aunp_df.columns:
+        mapping = load_active_zone_mapping(tomogram_path, alignment_dir)
+        if mapping:
+            mapping = {int(k): v for k, v in mapping.items()}
+            az_ids = [idx for idx, zname in mapping.items() if zname == zone_name]
+            if az_ids:
+                aunp_df = aunp_df[aunp_df["active_zone"].isin(az_ids)]
 
     coords = aunp_df[["faCoordinateX", "faCoordinateY", "faCoordinateZ"]].to_numpy(dtype=float)
     if len(coords) == 0:
@@ -2395,7 +2395,7 @@ def run_ripley_postsynaptic_analysis(
             label_perm_null_curves=perm_curves,
             h12_obs=h12_obs,
             fusion_vs_control_by_offset=fvc_by_offset,
-        )
+            )
 
         print(
             f"  Ripley H₁₂: {zone_name} — {len(fusion_post)} fusion, {len(aunp_post)} AuNPs "
@@ -2800,7 +2800,7 @@ def run_ripley_o_membrain_postsynaptic_analysis(
             label_perm_null_curves=perm_curves,
             o_obs=o_obs,
             fusion_vs_control_by_offset=fvc_by_offset,
-        )
+            )
 
         print(
             f"  Ripley's O: {zone_name} — {len(fusion_post)} fusion, {len(aunp_post)} AuNPs "
@@ -2962,14 +2962,14 @@ def plot_results(
 
     if not ctrl.empty and tomogram_path is not None:
         try:
-            _plot_fusion_vs_control_zonogram(
-                real,
-                ctrl,
-                tomogram_path=tomogram_path,
-                alignment_dir=alignment_dir,
-                probe_radius_nm=mid_radius,
+        _plot_fusion_vs_control_zonogram(
+            real,
+            ctrl,
+            tomogram_path=tomogram_path,
+            alignment_dir=alignment_dir,
+            probe_radius_nm=mid_radius,
                 output_path=output_dir / f"fusion_vs_control_zonogram{name_suffix}.png",
-            )
+        )
         except Exception as exc:
             print(f"  Warning: zonogram overlay failed{f' for {filename_tag}' if filename_tag else ''}: {exc}")
 
@@ -3983,10 +3983,10 @@ def aggregate_fusion_point_pooled_visualizations(
     ctrl = fusion_df[fusion_df["point_type"] == "control"].copy()
     if not real.empty and not ctrl.empty:
         print("Generating pooled packing summary plots across all tomograms...")
-        plot_results(
-            fusion_df,
-            figures_dir,
-            tomogram_path=None,
+    plot_results(
+        fusion_df,
+        figures_dir,
+        tomogram_path=None,
             filename_tag="pooled",
         )
 
@@ -4035,8 +4035,8 @@ def aggregate_fusion_point_per_tomogram_visualizations(
         plot_results(
             sub_df,
             figures_dir,
-            tomogram_path=tomogram_path,
-            alignment_dir=alignment_dir,
+                tomogram_path=tomogram_path,
+                alignment_dir=alignment_dir,
             filename_tag=tomogram_name,
         )
 

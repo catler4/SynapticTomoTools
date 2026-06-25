@@ -1140,43 +1140,52 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             "fusing",
         )
 
-        print("Computing 40 nm tangential-shift fusion-point to AuNP distances (fusing vesicles)...")
-        from .activezone import load_active_zone_mapping
-        from .fusion_point_vs_aunp_density import (
-            compute_40nm_shifted_fusion_point_aunp_pairwise_distances,
-            compute_label_permutation_fusion_point_aunp_pairwise_distances,
-        )
+        print("Running 3D fusion-point vs AuNP distance and Ripley L12 analyses...")
+        try:
+            from .activezone import load_active_zone_mapping
+            from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
+                plot_pooled_fusion_point_aunp_ripley_l12_visualizations,
+                run_fusion_point_aunp_analyses_for_tomogram,
+            )
 
-        df_40nm_shifted = compute_40nm_shifted_fusion_point_aunp_pairwise_distances(
-            tomogram_path,
-            alignment_dir,
-            coords,
-            vesicle_distance_threshold=vesicle_distance_threshold,
-            fusion_point_threshold=fusion_point_threshold,
-        )
-        save_fusion_point_aunp_pairwise_csv(
-            df_40nm_shifted,
-            Path("results/aunps/40nm_shifted_vesicles_fusion_point_to_aunp_distances.csv"),
-            "fusing (40 nm tangential shift)",
-        )
-
-        az_mapping = load_active_zone_mapping(tomogram_path, alignment_dir) or {}
-        print("Computing label-permutation fusion-point to AuNP distances (fusing vesicles)...")
-        df_label_perm = compute_label_permutation_fusion_point_aunp_pairwise_distances(
-            tomogram_path,
-            alignment_dir,
-            coords,
-            df_valid["active_zone"].to_numpy(),
-            az_mapping,
-            vesicle_distance_threshold=vesicle_distance_threshold,
-            fusion_point_threshold=fusion_point_threshold,
-        )
-        save_fusion_point_aunp_pairwise_csv(
-            df_label_perm,
-            Path("results/aunps/label_permutation_vesicles_fusion_point_to_aunp_distances.csv"),
-            "fusing (label permutation)",
-        )
-        # --- End per-vesicle AuNP outputs ---
+            az_indices_for_analysis = active_zone_indices
+            if az_indices_for_analysis is None:
+                az_mapping_for_analysis = load_active_zone_mapping(tomogram_path, alignment_dir) or {}
+                az_indices_for_analysis = sorted(int(k) for k in az_mapping_for_analysis)
+            ripley_frames, prism_frames = run_fusion_point_aunp_analyses_for_tomogram(
+                Path(tomogram_path),
+                alignment_dir,
+                active_zone_indices=az_indices_for_analysis,
+                vesicle_distance_threshold=vesicle_distance_threshold,
+                fusion_point_threshold=fusion_point_threshold,
+                write_figures=True,
+            )
+            if ripley_frames:
+                df_ripley = pd.concat(ripley_frames, ignore_index=True)
+                if "tomogram_name" not in df_ripley.columns:
+                    df_ripley.insert(0, "tomogram_name", tomogram_name)
+                _append_tomogram_results_csv(
+                    df_ripley,
+                    Path("results/aunps/fusion_point_aunp_ripley_l12_curves.csv"),
+                    tomogram_name=tomogram_name,
+                    alignment_dir=alignment_dir,
+                    set_name=set_name,
+                )
+            if prism_frames:
+                df_prism = pd.concat(prism_frames, ignore_index=True)
+                _append_tomogram_results_csv(
+                    df_prism,
+                    Path("results/aunps/fusion_point_aunp_ripley_l12_prism_envelopes.csv"),
+                    tomogram_name=tomogram_name,
+                    alignment_dir=alignment_dir,
+                    set_name=set_name,
+                )
+            plot_pooled_fusion_point_aunp_ripley_l12_visualizations()
+        except Exception as fusion_3d_exc:
+            print(f"Error in 3D fusion-point/AuNP Ripley analyses: {fusion_3d_exc}")
+            import traceback
+            traceback.print_exc()
+# --- End per-vesicle AuNP outputs ---
         
         # --- Calculate packing density for each active zone ---
         packing_density_results: dict = {}
@@ -1332,39 +1341,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                                 set_name=set_name,
                             )
 
-                    # --- Fusion-point vs AuNP density analysis (per active zone, multi-radius) ---
-                    if fusion_point_rows:
-                        try:
-                            from .fusion_point_vs_aunp_density import (
-                                run_fusion_point_vs_aunp_density_for_tomogram,
-                            )
-
-                            print("Running fusion-point vs AuNP density analysis per active zone...")
-                            fusion_zone_frames = run_fusion_point_vs_aunp_density_for_tomogram(
-                                Path(tomogram_path),
-                                alignment_dir,
-                                fusion_rows=fusion_point_rows,
-                                active_zones_glb=active_zones_glb,
-                                receptor_crosssection=receptor_crosssection,
-                                aunps_per_receptor=aunps_per_receptor,
-                                vertex_sampling_step=vertex_sampling_step,
-                                write_figures=True,
-                                aunp_pick_star_pattern=pick_pattern,
-                            )
-                            if fusion_zone_frames:
-                                df_fusion_vs_aunp = pd.concat(fusion_zone_frames, ignore_index=True)
-                                _append_tomogram_results_csv(
-                                    df_fusion_vs_aunp,
-                                    Path("results/aunps/fusion_point_vs_aunp_density.csv"),
-                                    tomogram_name=tomogram_name,
-                                    alignment_dir=alignment_dir,
-                                    set_name=set_name,
-                                )
-                        except Exception as fusion_exc:
-                            print(f"Error in fusion-point vs AuNP density analysis: {fusion_exc}")
-                            import traceback
-                            traceback.print_exc()
-                    # --- End fusion-point vs AuNP density analysis ---
+                    # --- End packing density at fusion points ---
                 else:
                     print("  Could not define active zonograms for packing density calculation")
             else:

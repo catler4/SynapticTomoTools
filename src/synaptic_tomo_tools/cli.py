@@ -619,6 +619,14 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
     print("AGGREGATING FUSION-POINT VS AUNP DENSITY RESULTS (POOLED)")
     print("=" * 60)
     try:
+        from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
+            plot_pooled_fusion_point_aunp_ripley_l12_visualizations,
+        )
+
+        plot_pooled_fusion_point_aunp_ripley_l12_visualizations()
+    except Exception as e:
+        print(f"Warning: Could not write pooled fusion-point/AuNP Ripley L₁₂ figures: {e}")
+    try:
         from .fusion_point_vs_aunp_density import aggregate_fusion_point_pooled_visualizations
 
         aggregate_fusion_point_pooled_visualizations(tomo_paths)
