@@ -13,7 +13,8 @@ Ripley window options (both run for every zone):
    points (entire synaptic cleft envelope for the zone).
 
 Distance and Ripley partner sets are reported separately for monomer-only, dimer-only,
-and combined monomer+dimer picks. Hull definitions are independent of the partner subset.
+and combined monomer+dimer picks when both STAR files are present. If only one STAR
+file exists, analyses run for that kind only.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal, Optional, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -68,6 +69,9 @@ POOLED_RIPLEY_PRISM_CSV = Path("results/aunps/fusion_point_aunp_ripley_l12_prism
 POOLED_RIPLEY_PRISM_WIDE_CSV = Path("results/aunps/fusion_point_aunp_ripley_l12_prism_envelopes_pooled_wide.csv")
 POOLED_RIPLEY_FIGURES_DIR = Path("results/aunps/figures/fusion_point_aunp_ripley_l12_pooled")
 
+DEFAULT_MONOMER_STAR_PATTERN = "aunp_tm_BP_active_zone_*_manual_refined_monomer.star"
+DEFAULT_DIMER_STAR_PATTERN = "aunp_tm_BP_active_zone_*_manual_refined_dimer.star"
+
 CONTROL_COMPARISONS: tuple[ControlKind, ...] = ("close", "shift_40nm", "label_permutation")
 CONTROL_CURVE_TYPE: dict[ControlKind, str] = {
     "close": "close_per_vesicle",
@@ -75,6 +79,29 @@ CONTROL_CURVE_TYPE: dict[ControlKind, str] = {
     "label_permutation": "label_permutation_replicate",
 }
 FUSING_CURVE_TYPE = "fusing_per_vesicle"
+AunpKind = Literal["monomer", "dimer"]
+
+
+@dataclass(frozen=True)
+class ZoneAunpLoadResult:
+    """Monomer and/or dimer pick coordinates loaded for one active zone."""
+
+    coords: np.ndarray
+    meta: pd.DataFrame
+    kinds_loaded: tuple[AunpKind, ...]
+
+
+def available_aunp_subsets(kinds_loaded: Sequence[AunpKind]) -> tuple[AunpSubset, ...]:
+    """Analysis subsets to run given which STAR files were found."""
+    kinds = tuple(kinds_loaded)
+    out: list[AunpSubset] = []
+    if "monomer" in kinds:
+        out.append("monomer")
+    if "dimer" in kinds:
+        out.append("dimer")
+    if "monomer" in kinds and "dimer" in kinds:
+        out.append("both")
+    return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -98,6 +125,29 @@ def output_dir_for_zone(tomogram_path: Path, alignment_dir: str, zone_name: str)
     )
 
 
+def _normalize_monomer_dimer_star_pattern(
+    pattern: Optional[str],
+    *,
+    default: str,
+) -> str:
+    """Return monomer/dimer STAR filename pattern (``*`` = active zone index)."""
+    if pattern is None or not str(pattern).strip():
+        return default
+    pat = str(pattern).strip()
+    if "*" not in pat or pat.count("*") != 1:
+        raise ValueError(
+            "Monomer/dimer STAR pattern must contain exactly one '*' for the active zone index "
+            f"(e.g. {default!r})."
+        )
+    if not pat.endswith(".star"):
+        raise ValueError("Monomer/dimer STAR pattern must end with '.star'.")
+    return pat
+
+
+def _monomer_dimer_star_filename(active_zone_index: int, pattern: str) -> str:
+    return pattern.replace("*", str(int(active_zone_index)), 1)
+
+
 def _resolve_monomer_dimer_star_paths(
     aunps_dir: Path,
     tomogram_name: str,
@@ -105,57 +155,126 @@ def _resolve_monomer_dimer_star_paths(
     active_zone_index: int,
     *,
     kind: Literal["monomer", "dimer"],
+    pattern: Optional[str] = None,
 ) -> Path:
-    suffix = f"_manual_refined_{kind}.star"
+    default = (
+        DEFAULT_MONOMER_STAR_PATTERN if kind == "monomer" else DEFAULT_DIMER_STAR_PATTERN
+    )
+    pat = _normalize_monomer_dimer_star_pattern(pattern, default=default)
+    filename = _monomer_dimer_star_filename(active_zone_index, pat)
     candidates = [
-        aunps_dir / f"{tomogram_name}_{alignment_dir}_aunp_tm_BP_active_zone_{active_zone_index}{suffix}",
-        aunps_dir / f"aunp_tm_BP_active_zone_{active_zone_index}{suffix}",
+        aunps_dir / f"{tomogram_name}_{alignment_dir}_{filename}",
+        aunps_dir / filename,
     ]
     for path in candidates:
         if path.is_file():
             return path
     raise FileNotFoundError(
-        f"Required AuNP {kind} STAR not found for active zone {active_zone_index}. "
-        f"Tried: {[str(p) for p in candidates]}"
+        f"Required AuNP {kind} STAR not found for active zone {active_zone_index} "
+        f"(pattern {pat!r}). Tried: {[str(p) for p in candidates]}"
     )
+
+
+def _find_monomer_dimer_star_path(
+    aunps_dir: Path,
+    tomogram_name: str,
+    alignment_dir: str,
+    active_zone_index: int,
+    *,
+    kind: AunpKind,
+    pattern: Optional[str] = None,
+) -> Path | None:
+    """Return monomer/dimer STAR path if present, else None."""
+    try:
+        return _resolve_monomer_dimer_star_paths(
+            aunps_dir,
+            tomogram_name,
+            alignment_dir,
+            active_zone_index,
+            kind=kind,
+            pattern=pattern,
+        )
+    except FileNotFoundError:
+        return None
+
+
+def _read_aunp_kind_star_frame(
+    path: Path,
+    *,
+    kind: AunpKind,
+    active_zone_index: int,
+) -> pd.DataFrame:
+    df = _read_aunp_pick_star_dataframe(path)
+    if df is None or df.empty:
+        raise ValueError(f"Empty or unreadable {kind} STAR: {path}")
+    missing = [c for c in COORD_COLS if c not in df.columns]
+    if missing:
+        raise ValueError(f"{path} missing columns: {missing}")
+    part = df[list(COORD_COLS)].copy()
+    part["aunp_kind"] = kind
+    part["source_star"] = path.name
+    part["active_zone_index"] = int(active_zone_index)
+    return part
 
 
 def load_monomer_dimer_aunps_for_zone(
     tomogram_path: Path,
     alignment_dir: str,
     active_zone_index: int,
-) -> tuple[np.ndarray, pd.DataFrame]:
-    """Load monomer + dimer (center) pick coordinates for one active zone index."""
+    *,
+    monomer_star_pattern: Optional[str] = None,
+    dimer_star_pattern: Optional[str] = None,
+) -> ZoneAunpLoadResult:
+    """Load monomer and/or dimer pick coordinates for one active zone index.
+
+    Runs when at least one STAR file is present. Missing monomer or dimer files are
+    skipped; ``kinds_loaded`` records which were found.
+    """
     tomogram_path = Path(tomogram_path)
     alignment_dir = require_alignment_dir(alignment_dir)
     aunps_dir = tomogram_path / alignment_dir / "aunps"
     tomogram_name = tomogram_path.name
 
-    monomer_path = _resolve_monomer_dimer_star_paths(
-        aunps_dir, tomogram_name, alignment_dir, active_zone_index, kind="monomer"
-    )
-    dimer_path = _resolve_monomer_dimer_star_paths(
-        aunps_dir, tomogram_name, alignment_dir, active_zone_index, kind="dimer"
-    )
-
     frames: list[pd.DataFrame] = []
-    for kind, path in (("monomer", monomer_path), ("dimer", dimer_path)):
-        df = _read_aunp_pick_star_dataframe(path)
-        if df is None or df.empty:
-            raise ValueError(f"Empty or unreadable {kind} STAR: {path}")
-        missing = [c for c in COORD_COLS if c not in df.columns]
-        if missing:
-            raise ValueError(f"{path} missing columns: {missing}")
-        part = df[list(COORD_COLS)].copy()
-        part["aunp_kind"] = kind
-        part["source_star"] = path.name
-        part["active_zone_index"] = int(active_zone_index)
-        frames.append(part)
+    kinds_loaded: list[AunpKind] = []
+
+    for kind, pattern in (
+        ("monomer", monomer_star_pattern),
+        ("dimer", dimer_star_pattern),
+    ):
+        path = _find_monomer_dimer_star_path(
+            aunps_dir,
+            tomogram_name,
+            alignment_dir,
+            active_zone_index,
+            kind=kind,
+            pattern=pattern,
+        )
+        if path is None:
+            continue
+        frames.append(
+            _read_aunp_kind_star_frame(
+                path, kind=kind, active_zone_index=active_zone_index
+            )
+        )
+        kinds_loaded.append(kind)
+
+    if not frames:
+        raise FileNotFoundError(
+            f"No monomer or dimer AuNP STAR files found for active zone "
+            f"{active_zone_index} in {aunps_dir} "
+            f"(monomer pattern {monomer_star_pattern or DEFAULT_MONOMER_STAR_PATTERN!r}, "
+            f"dimer pattern {dimer_star_pattern or DEFAULT_DIMER_STAR_PATTERN!r})"
+        )
 
     meta = pd.concat(frames, ignore_index=True)
     meta["aunp_index"] = np.arange(len(meta), dtype=int)
     coords = meta[list(COORD_COLS)].to_numpy(dtype=float)
-    return coords, meta
+    return ZoneAunpLoadResult(
+        coords=coords,
+        meta=meta,
+        kinds_loaded=tuple(kinds_loaded),
+    )
 
 
 def subset_aunps(
@@ -468,6 +587,39 @@ def _percentile_band(curves: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.nda
     return lo, med, hi
 
 
+def _mean_sd_band(curves: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return (mean − SD, mean, mean + SD, SD) across replicate curves at each r."""
+    if curves.size == 0:
+        empty = np.array([])
+        return empty, empty, empty, empty
+    mean = np.nanmean(curves, axis=0)
+    if len(curves) > 1:
+        sd = np.nanstd(curves, axis=0, ddof=1)
+    else:
+        sd = np.zeros_like(mean)
+    return mean - sd, mean, mean + sd, sd
+
+
+def _prism_sd_envelope_columns(
+    curves: np.ndarray,
+    r_vals: np.ndarray,
+    *,
+    prefix: str,
+) -> dict[str, np.ndarray]:
+    """SD summary columns for Prism tables (mean ± SD envelope)."""
+    if len(curves):
+        sd_lo, mean, sd_hi, sd = _mean_sd_band(curves)
+    else:
+        nan = np.full(len(r_vals), np.nan)
+        sd_lo = mean = sd_hi = sd = nan
+    return {
+        f"{prefix}_mean": mean,
+        f"{prefix}_sd": sd,
+        f"{prefix}_sd_envelope_lo": sd_lo,
+        f"{prefix}_sd_envelope_hi": sd_hi,
+    }
+
+
 def _fusing_mean_curve(obs_curves: np.ndarray, r_vals: np.ndarray) -> np.ndarray:
     if len(obs_curves) == 0:
         return np.full(len(r_vals), np.nan)
@@ -485,19 +637,24 @@ def build_ripley_l12_prism_envelope_table(
     n_aunp_partners: int,
 ) -> pd.DataFrame:
     """
-    Pre-aggregated mean curves and 95% control envelopes for graphing (e.g. Prism).
+    Pre-aggregated mean curves and control envelopes for graphing (e.g. Prism).
+
+    Percentile envelopes use 2.5–97.5% across replicate curves. SD envelopes use
+    mean ± 1 sample SD (per-vesicle curves for fusing/close; per-replicate for nulls).
 
     One row per (control_comparison, r_nm). ``fusing_L12_mean`` is identical within
     each comparison group (mean across fusing-vesicle curves).
     """
-    fusing_mean = _fusing_mean_curve(obs_curves, r_vals)
+    fusing_sd = _prism_sd_envelope_columns(obs_curves, r_vals, prefix="fusing_L12")
     rows: list[dict] = []
     for comparison, control_curves in control_curves_by_comparison.items():
         if len(control_curves):
             ctrl_lo, ctrl_mean, ctrl_hi = _percentile_band(control_curves)
+            ctrl_sd = _prism_sd_envelope_columns(control_curves, r_vals, prefix="control_L12")
             n_control = int(len(control_curves))
         else:
             ctrl_lo = ctrl_mean = ctrl_hi = np.full(len(r_vals), np.nan)
+            ctrl_sd = _prism_sd_envelope_columns(np.empty((0, len(r_vals))), r_vals, prefix="control_L12")
             n_control = 0
         for i, r_nm in enumerate(r_vals):
             rows.append(
@@ -507,10 +664,16 @@ def build_ripley_l12_prism_envelope_table(
                     "window_mode": window.defining_mode,
                     "control_comparison": comparison,
                     "r_nm": float(r_nm),
-                    "fusing_L12_mean": float(fusing_mean[i]),
+                    "fusing_L12_mean": float(fusing_sd["fusing_L12_mean"][i]),
+                    "fusing_L12_sd": float(fusing_sd["fusing_L12_sd"][i]),
+                    "fusing_L12_sd_envelope_lo": float(fusing_sd["fusing_L12_sd_envelope_lo"][i]),
+                    "fusing_L12_sd_envelope_hi": float(fusing_sd["fusing_L12_sd_envelope_hi"][i]),
                     "control_L12_mean": float(ctrl_mean[i]),
+                    "control_L12_sd": float(ctrl_sd["control_L12_sd"][i]),
                     "control_L12_envelope_lo": float(ctrl_lo[i]),
                     "control_L12_envelope_hi": float(ctrl_hi[i]),
+                    "control_L12_sd_envelope_lo": float(ctrl_sd["control_L12_sd_envelope_lo"][i]),
+                    "control_L12_sd_envelope_hi": float(ctrl_sd["control_L12_sd_envelope_hi"][i]),
                     "n_fusing_curves": int(len(obs_curves)),
                     "n_control_curves": n_control,
                     "n_aunp_partners": int(n_aunp_partners),
@@ -530,8 +693,7 @@ def build_ripley_l12_prism_wide_table(
     """
     Wide layout for Prism XY tables: one row per ``r_nm`` per window/comparison.
 
-    Columns: r_nm, fusing_L12_mean, control_L12_mean, control_L12_envelope_lo,
-    control_L12_envelope_hi (+ identifiers).
+    Columns: r_nm, fusing/control means, percentile envelopes, mean ± SD envelopes (+ identifiers).
     """
     if prism_long.empty:
         return prism_long.copy()
@@ -541,9 +703,15 @@ def build_ripley_l12_prism_wide_table(
         col
         for col in (
             "fusing_L12_mean",
+            "fusing_L12_sd",
+            "fusing_L12_sd_envelope_lo",
+            "fusing_L12_sd_envelope_hi",
             "control_L12_mean",
+            "control_L12_sd",
             "control_L12_envelope_lo",
             "control_L12_envelope_hi",
+            "control_L12_sd_envelope_lo",
+            "control_L12_sd_envelope_hi",
             "n_fusing_curves",
             "n_control_curves",
             "n_aunp_partners",
@@ -751,10 +919,10 @@ def _extract_curves_matrix(
 
 def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Pooled mean curves and 95% control envelopes across all tomograms/zones.
+    Pooled mean curves and control envelopes across all tomograms/zones.
 
     ``fusing_L12_mean`` is the mean across all pooled fusing-vesicle curves at each r.
-    Control envelope percentiles are taken across all pooled control curves at each r.
+    Percentile envelopes use 2.5–97.5%; SD envelopes use mean ± 1 sample SD.
     """
     if df.empty or "tomogram_name" not in df.columns:
         return pd.DataFrame()
@@ -772,7 +940,7 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
             if len(obs_curves) == 0:
                 continue
 
-            fusing_mean = _fusing_mean_curve(obs_curves, r_vals)
+            fusing_sd = _prism_sd_envelope_columns(obs_curves, r_vals, prefix="fusing_L12")
             n_tomograms = int(sub_df["tomogram_name"].nunique())
             n_zones = int(
                 sub_df[["tomogram_name", "alignment_dir", "active_zone_name"]]
@@ -786,9 +954,15 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
                 )
                 if len(control_curves):
                     ctrl_lo, ctrl_mean, ctrl_hi = _percentile_band(control_curves)
+                    ctrl_sd = _prism_sd_envelope_columns(
+                        control_curves, r_vals, prefix="control_L12"
+                    )
                     n_control = int(len(control_curves))
                 else:
                     ctrl_lo = ctrl_mean = ctrl_hi = np.full(len(r_vals), np.nan)
+                    ctrl_sd = _prism_sd_envelope_columns(
+                        np.empty((0, len(r_vals))), r_vals, prefix="control_L12"
+                    )
                     n_control = 0
 
                 for i, r_nm in enumerate(r_vals):
@@ -797,19 +971,33 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
                             "aunp_subset": subset,
                             "window_mode": window_mode,
                             "control_comparison": comparison,
-                        "r_nm": float(r_nm),
-                        "fusing_L12_mean": float(fusing_mean[i]),
-                        "control_L12_mean": float(ctrl_mean[i]),
-                        "control_L12_envelope_lo": float(ctrl_lo[i]),
-                        "control_L12_envelope_hi": float(ctrl_hi[i]),
-                        "n_fusing_curves": int(len(obs_curves)),
-                        "n_control_curves": n_control,
-                        "n_tomograms": n_tomograms,
-                        "n_active_zones": n_zones,
-                        "envelope_percentile_lo": float(RIPLEY_PERCENTILE_LO),
-                        "envelope_percentile_hi": float(RIPLEY_PERCENTILE_HI),
-                    }
-                )
+                            "r_nm": float(r_nm),
+                            "fusing_L12_mean": float(fusing_sd["fusing_L12_mean"][i]),
+                            "fusing_L12_sd": float(fusing_sd["fusing_L12_sd"][i]),
+                            "fusing_L12_sd_envelope_lo": float(
+                                fusing_sd["fusing_L12_sd_envelope_lo"][i]
+                            ),
+                            "fusing_L12_sd_envelope_hi": float(
+                                fusing_sd["fusing_L12_sd_envelope_hi"][i]
+                            ),
+                            "control_L12_mean": float(ctrl_mean[i]),
+                            "control_L12_sd": float(ctrl_sd["control_L12_sd"][i]),
+                            "control_L12_envelope_lo": float(ctrl_lo[i]),
+                            "control_L12_envelope_hi": float(ctrl_hi[i]),
+                            "control_L12_sd_envelope_lo": float(
+                                ctrl_sd["control_L12_sd_envelope_lo"][i]
+                            ),
+                            "control_L12_sd_envelope_hi": float(
+                                ctrl_sd["control_L12_sd_envelope_hi"][i]
+                            ),
+                            "n_fusing_curves": int(len(obs_curves)),
+                            "n_control_curves": n_control,
+                            "n_tomograms": n_tomograms,
+                            "n_active_zones": n_zones,
+                            "envelope_percentile_lo": float(RIPLEY_PERCENTILE_LO),
+                            "envelope_percentile_hi": float(RIPLEY_PERCENTILE_HI),
+                        }
+                    )
     return pd.DataFrame(rows)
 
 
@@ -912,6 +1100,8 @@ def run_fusion_point_aunp_analyses_for_zone(
     write_figures: bool = True,
     r_max_nm: float = DEFAULT_RIPLEY_R_MAX_NM,
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
+    monomer_star_pattern: Optional[str] = None,
+    dimer_star_pattern: Optional[str] = None,
 ) -> dict[str, Path] | None:
     tomogram_path = Path(tomogram_path)
     alignment_dir = require_alignment_dir(alignment_dir)
@@ -949,9 +1139,34 @@ def run_fusion_point_aunp_analyses_for_zone(
         if row.get("vesicle_distance_class") == "close" or bool(row.get("is_close"))
     ]
 
-    aunp_coords_all, aunp_meta = load_monomer_dimer_aunps_for_zone(
-        tomogram_path, alignment_dir, active_zone_index
-    )
+    try:
+        loaded = load_monomer_dimer_aunps_for_zone(
+            tomogram_path,
+            alignment_dir,
+            active_zone_index,
+            monomer_star_pattern=monomer_star_pattern,
+            dimer_star_pattern=dimer_star_pattern,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        print(
+            f"  Skipping fusion-point/AuNP analyses for {zone_name}: {exc}"
+        )
+        return None
+
+    aunp_coords_all = loaded.coords
+    aunp_meta = loaded.meta
+    subsets_to_run = available_aunp_subsets(loaded.kinds_loaded)
+    if len(loaded.kinds_loaded) == 1:
+        print(
+            f"  Only {loaded.kinds_loaded[0]} STAR found for {zone_name}; "
+            f"running {', '.join(subsets_to_run)} analyses."
+        )
+    elif len(loaded.kinds_loaded) == 2:
+        print(
+            f"  Monomer and dimer STARs found for {zone_name}; "
+            f"running {', '.join(subsets_to_run)} analyses."
+        )
+
     pre_surface = load_presynaptic_az_points_for_zone(tomogram_path, alignment_dir, zone_name)
 
     out_dir = output_dir_for_zone(tomogram_path, alignment_dir, zone_name)
@@ -1030,8 +1245,8 @@ def run_fusion_point_aunp_analyses_for_zone(
                 continue
             label_cols[_site_column_name(fp["vesicle_name"], f"perm_{perm_id:03d}")] = ves_map[vid]
 
-    distance_paths: dict[str, dict[str, Path]] = {subset: {} for subset in AUNP_SUBSETS}
-    for subset in AUNP_SUBSETS:
+    distance_paths: dict[str, dict[str, Path]] = {subset: {} for subset in subsets_to_run}
+    for subset in subsets_to_run:
         sub_coords, sub_meta = subset_aunps(aunp_meta, subset=subset)
         meta_out = sub_meta.copy()
         meta_out.insert(0, "aunp_subset", subset)
@@ -1062,7 +1277,7 @@ def run_fusion_point_aunp_analyses_for_zone(
         window = ripley_windows.get(window_mode)
         if window is None:
             continue
-        for subset in AUNP_SUBSETS:
+        for subset in subsets_to_run:
             sub_coords, _ = subset_aunps(aunp_meta, subset=subset)
             if len(sub_coords) == 0:
                 print(f"  Skipping Ripley for {zone_name} ({subset}, {window_mode}): no partner AuNPs")
@@ -1115,7 +1330,8 @@ def run_fusion_point_aunp_analyses_for_zone(
         "n_aunp_monomer": n_monomer,
         "n_aunp_dimer": n_dimer,
         "n_aunp_monomer_dimer": len(aunp_coords_all),
-        "aunp_subsets_analyzed": list(AUNP_SUBSETS),
+        "aunp_kinds_loaded": list(loaded.kinds_loaded),
+        "aunp_subsets_analyzed": list(subsets_to_run),
         "ripley_window_modes": list(RIPLEY_WINDOW_MODES),
         "ripley_windows": {
             mode: {
@@ -1167,6 +1383,8 @@ def build_fusion_null_query_point_dataframes_for_zonograms(
     fusion_point_threshold: float = 20.0,
     n_replicates: int = DEFAULT_NULL_REPLICATES_N,
     seed: int = DEFAULT_ANALYSIS_SEED,
+    monomer_star_pattern: Optional[str] = None,
+    dimer_star_pattern: Optional[str] = None,
 ) -> dict[str, pd.DataFrame]:
     """
     Long-form 40 nm shift and label-permutation query sites for zonogram overlays.
@@ -1203,14 +1421,20 @@ def build_fusion_null_query_point_dataframes_for_zonograms(
             continue
 
         try:
-            aunp_coords_all, _ = load_monomer_dimer_aunps_for_zone(
-                tomogram_path, alignment_dir, az_idx
+            loaded = load_monomer_dimer_aunps_for_zone(
+                tomogram_path,
+                alignment_dir,
+                az_idx,
+                monomer_star_pattern=monomer_star_pattern,
+                dimer_star_pattern=dimer_star_pattern,
             )
         except (FileNotFoundError, ValueError) as exc:
             print(
                 f"  Zonogram null overlays: skipping {zone_name} AuNPs ({exc})"
             )
             continue
+
+        aunp_coords_all = loaded.coords
 
         pre_surface = load_presynaptic_az_points_for_zone(
             tomogram_path, alignment_dir, zone_name
@@ -1285,6 +1509,8 @@ def run_fusion_point_aunp_analyses_for_tomogram(
     n_replicates: int = DEFAULT_NULL_REPLICATES_N,
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
+    monomer_star_pattern: Optional[str] = None,
+    dimer_star_pattern: Optional[str] = None,
 ) -> tuple[list[pd.DataFrame], list[pd.DataFrame]]:
     from .activezone import load_active_zone_mapping
 
@@ -1315,6 +1541,8 @@ def run_fusion_point_aunp_analyses_for_tomogram(
             n_replicates=n_replicates,
             seed=seed,
             write_figures=write_figures,
+            monomer_star_pattern=monomer_star_pattern,
+            dimer_star_pattern=dimer_star_pattern,
         )
         if result is None:
             continue

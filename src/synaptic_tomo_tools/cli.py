@@ -448,7 +448,10 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
                      vertex_sampling_step=None, synaptic_designation_cutoff=None,
                      min_cluster_size=None, fusion_point_threshold=None,
                      fusing_perimeter_threshold=None,
-                     aunp_pick_star_pattern=None):
+                     aunp_pick_star_pattern=None,
+                     run_fusion_point_aunp_analyses=False,
+                     monomer_star_pattern=None,
+                     dimer_star_pattern=None):
     """Run all analyses in the correct order: activezone, vesicles, aunps, visualizations."""
     print_synapse_ascii_art()
     print("="*80)
@@ -491,7 +494,10 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
               synaptic_designation_cutoff=synaptic_designation_cutoff,
               min_cluster_size=min_cluster_size, fusion_point_threshold=fusion_point_threshold,
               fusing_perimeter_threshold=fusing_perimeter_threshold,
-              aunp_pick_star_pattern=aunp_pick_star_pattern)
+              aunp_pick_star_pattern=aunp_pick_star_pattern,
+              run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
+              monomer_star_pattern=monomer_star_pattern,
+              dimer_star_pattern=dimer_star_pattern)
     
     # Step 4: Visualizations
     print("\n" + "="*80)
@@ -515,7 +521,10 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
               vertex_sampling_step=None, synaptic_designation_cutoff=None,
               min_cluster_size=None, fusion_point_threshold=None,
               fusing_perimeter_threshold=None,
-              aunp_pick_star_pattern=None):
+              aunp_pick_star_pattern=None,
+              run_fusion_point_aunp_analyses=False,
+              monomer_star_pattern=None,
+              dimer_star_pattern=None):
     if print_ascii:
         print_synapse_ascii_art()
     for i, (tomo, set_name, aunp_active_zones, alignment_dir) in enumerate(tomo_paths):
@@ -581,7 +590,10 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
                                          min_cluster_size=min_clust,
                                          fusion_point_threshold=fusion_thresh,
                                          fusing_perimeter_threshold=fusing_thresh,
-                                         aunp_pick_star_pattern=aunp_pick_star_pattern)
+                                         aunp_pick_star_pattern=aunp_pick_star_pattern,
+                                         run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
+                                         monomer_star_pattern=monomer_star_pattern,
+                                         dimer_star_pattern=dimer_star_pattern)
             
             # Store combined results
             combined_results = {
@@ -606,16 +618,17 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
             )
 
     print("\n" + "=" * 60)
-    print("AGGREGATING FUSION-POINT/AUNP RIPLEY L₁₂ RESULTS (POOLED)")
-    print("=" * 60)
-    try:
-        from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
-            plot_pooled_fusion_point_aunp_ripley_l12_visualizations,
-        )
+    if run_fusion_point_aunp_analyses:
+        print("AGGREGATING FUSION-POINT/AUNP RIPLEY L₁₂ RESULTS (POOLED)")
+        print("=" * 60)
+        try:
+            from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
+                plot_pooled_fusion_point_aunp_ripley_l12_visualizations,
+            )
 
-        plot_pooled_fusion_point_aunp_ripley_l12_visualizations()
-    except Exception as e:
-        print(f"Warning: Could not write pooled fusion-point/AuNP Ripley L₁₂ figures: {e}")
+            plot_pooled_fusion_point_aunp_ripley_l12_visualizations()
+        except Exception as e:
+            print(f"Warning: Could not write pooled fusion-point/AuNP Ripley L₁₂ figures: {e}")
 
 def delete_csv_tomogram_results(csv_path, results_dir="results", data_dir="data"):
     """Delete results only for tomograms specified in the CSV file."""
@@ -898,6 +911,30 @@ def main():
             "(default: aunp_tm_BP_active_zone_*_manual_refined.star)"
         ),
     )
+    parser.add_argument(
+        "--fusion-point-aunp-analyses",
+        dest="run_fusion_point_aunp_analyses",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Run 3D fusion-point vs monomer/dimer AuNP distance and Ripley L₁₂ analyses "
+            "(default: disabled). Use --fusion-point-aunp-analyses to enable."
+        ),
+    )
+    parser.add_argument(
+        "--monomer-star-pattern", type=str, default=None,
+        help=(
+            "Per-active-zone monomer AuNP STAR filename pattern; use '*' for the active zone index "
+            "(default: aunp_tm_BP_active_zone_*_manual_refined_monomer.star)"
+        ),
+    )
+    parser.add_argument(
+        "--dimer-star-pattern", type=str, default=None,
+        help=(
+            "Per-active-zone dimer AuNP STAR filename pattern; use '*' for the active zone index "
+            "(default: aunp_tm_BP_active_zone_*_manual_refined_dimer.star)"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -1026,6 +1063,9 @@ def main():
     fusion_point_threshold = args.fusion_point_threshold
     fusing_perimeter_threshold = args.fusing_perimeter_threshold
     aunp_pick_star_pattern = args.aunp_pick_star_pattern
+    run_fusion_point_aunp_analyses = args.run_fusion_point_aunp_analyses
+    monomer_star_pattern = args.monomer_star_pattern
+    dimer_star_pattern = args.dimer_star_pattern
     
     if args.analysis == "activezone":
         run_activezone(tomos, results_manager, rerun=args.rerun, 
@@ -1049,7 +1089,10 @@ def main():
                   synaptic_designation_cutoff=synaptic_designation_cutoff,
                   min_cluster_size=min_cluster_size, fusion_point_threshold=fusion_point_threshold,
                   fusing_perimeter_threshold=fusing_perimeter_threshold,
-                  aunp_pick_star_pattern=aunp_pick_star_pattern)
+                  aunp_pick_star_pattern=aunp_pick_star_pattern,
+                  run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
+                  monomer_star_pattern=monomer_star_pattern,
+                  dimer_star_pattern=dimer_star_pattern)
     elif args.analysis == "visualizations":
         generate_visualizations(tomos, results_manager, rerun=args.rerun, csv_path=args.csv,
                                 sphere_size=sphere_size, sphere_color=sphere_color,
@@ -1074,7 +1117,10 @@ def main():
                          synaptic_designation_cutoff=synaptic_designation_cutoff,
                          min_cluster_size=min_cluster_size, fusion_point_threshold=fusion_point_threshold,
                          fusing_perimeter_threshold=fusing_perimeter_threshold,
-                         aunp_pick_star_pattern=aunp_pick_star_pattern)
+                         aunp_pick_star_pattern=aunp_pick_star_pattern,
+                         run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
+                         monomer_star_pattern=monomer_star_pattern,
+                         dimer_star_pattern=dimer_star_pattern)
 
     # Always export summary CSVs at the end
     print("\nExporting all summary CSVs from stored results...")

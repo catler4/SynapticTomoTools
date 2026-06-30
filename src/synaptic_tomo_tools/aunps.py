@@ -586,7 +586,10 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                   vertex_sampling_step=50, synaptic_designation_cutoff=30.0,
                   min_cluster_size=4, fusion_point_threshold=20.0,
                   fusing_perimeter_threshold=1.0,
-                  aunp_pick_star_pattern=None):
+                  aunp_pick_star_pattern=None,
+                  run_fusion_point_aunp_analyses=False,
+                  monomer_star_pattern=None,
+                  dimer_star_pattern=None):
     """
     Performs analysis of gold nanoparticles (AuNPs) in the tomogram.
 
@@ -608,6 +611,12 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         min_cluster_size (int): Minimum cluster size to keep after DBSCAN (smaller clusters -> noise). Default: 4.
         fusion_point_threshold (float): Radius (nm) for AZ points contributing to fusion point. Default: 20.0.
         fusing_perimeter_threshold (float): Max perimeter-to-AZ distance (nm) for fusing vesicles. Default: 1.0.
+        run_fusion_point_aunp_analyses (bool): Run 3D fusion-point vs monomer/dimer AuNP distance and
+            Ripley L₁₂ analyses when monomer/dimer STAR files are available. Default: False.
+        monomer_star_pattern (str or None): Per-AZ monomer STAR filename pattern with ``*`` for the active
+            zone index (default: ``aunp_tm_BP_active_zone_*_manual_refined_monomer.star``).
+        dimer_star_pattern (str or None): Per-AZ dimer STAR filename pattern with ``*`` for the active
+            zone index (default: ``aunp_tm_BP_active_zone_*_manual_refined_dimer.star``).
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     print(f"Analyzing AuNPs in {Path(tomogram_path).name}")
@@ -1140,51 +1149,60 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             "fusing",
         )
 
-        print("Running 3D fusion-point vs AuNP distance and Ripley L12 analyses...")
-        try:
-            from .activezone import load_active_zone_mapping
-            from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
-                plot_pooled_fusion_point_aunp_ripley_l12_visualizations,
-                run_fusion_point_aunp_analyses_for_tomogram,
-            )
+        if run_fusion_point_aunp_analyses:
+            print("Running 3D fusion-point vs AuNP distance and Ripley L12 analyses...")
+            try:
+                from .activezone import load_active_zone_mapping
+                from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
+                    plot_pooled_fusion_point_aunp_ripley_l12_visualizations,
+                    run_fusion_point_aunp_analyses_for_tomogram,
+                )
 
-            az_indices_for_analysis = active_zone_indices
-            if az_indices_for_analysis is None:
-                az_mapping_for_analysis = load_active_zone_mapping(tomogram_path, alignment_dir) or {}
-                az_indices_for_analysis = sorted(int(k) for k in az_mapping_for_analysis)
-            ripley_frames, prism_frames = run_fusion_point_aunp_analyses_for_tomogram(
-                Path(tomogram_path),
-                alignment_dir,
-                active_zone_indices=az_indices_for_analysis,
-                vesicle_distance_threshold=vesicle_distance_threshold,
-                fusion_point_threshold=fusion_point_threshold,
-                write_figures=True,
+                az_indices_for_analysis = active_zone_indices
+                if az_indices_for_analysis is None:
+                    az_mapping_for_analysis = load_active_zone_mapping(tomogram_path, alignment_dir) or {}
+                    az_indices_for_analysis = sorted(int(k) for k in az_mapping_for_analysis)
+                ripley_frames, prism_frames = run_fusion_point_aunp_analyses_for_tomogram(
+                    Path(tomogram_path),
+                    alignment_dir,
+                    active_zone_indices=az_indices_for_analysis,
+                    vesicle_distance_threshold=vesicle_distance_threshold,
+                    fusion_point_threshold=fusion_point_threshold,
+                    write_figures=True,
+                    monomer_star_pattern=monomer_star_pattern,
+                    dimer_star_pattern=dimer_star_pattern,
+                )
+                if ripley_frames:
+                    df_ripley = pd.concat(ripley_frames, ignore_index=True)
+                    if "tomogram_name" not in df_ripley.columns:
+                        df_ripley.insert(0, "tomogram_name", tomogram_name)
+                    _append_tomogram_results_csv(
+                        df_ripley,
+                        Path("results/aunps/fusion_point_aunp_ripley_l12_curves.csv"),
+                        tomogram_name=tomogram_name,
+                        alignment_dir=alignment_dir,
+                        set_name=set_name,
+                    )
+                if prism_frames:
+                    df_prism = pd.concat(prism_frames, ignore_index=True)
+                    _append_tomogram_results_csv(
+                        df_prism,
+                        Path("results/aunps/fusion_point_aunp_ripley_l12_prism_envelopes.csv"),
+                        tomogram_name=tomogram_name,
+                        alignment_dir=alignment_dir,
+                        set_name=set_name,
+                    )
+                if ripley_frames or prism_frames:
+                    plot_pooled_fusion_point_aunp_ripley_l12_visualizations()
+            except Exception as fusion_3d_exc:
+                print(f"Error in 3D fusion-point/AuNP Ripley analyses: {fusion_3d_exc}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(
+                "Skipping 3D fusion-point vs monomer/dimer AuNP analyses "
+                "(disabled by run_fusion_point_aunp_analyses=False)."
             )
-            if ripley_frames:
-                df_ripley = pd.concat(ripley_frames, ignore_index=True)
-                if "tomogram_name" not in df_ripley.columns:
-                    df_ripley.insert(0, "tomogram_name", tomogram_name)
-                _append_tomogram_results_csv(
-                    df_ripley,
-                    Path("results/aunps/fusion_point_aunp_ripley_l12_curves.csv"),
-                    tomogram_name=tomogram_name,
-                    alignment_dir=alignment_dir,
-                    set_name=set_name,
-                )
-            if prism_frames:
-                df_prism = pd.concat(prism_frames, ignore_index=True)
-                _append_tomogram_results_csv(
-                    df_prism,
-                    Path("results/aunps/fusion_point_aunp_ripley_l12_prism_envelopes.csv"),
-                    tomogram_name=tomogram_name,
-                    alignment_dir=alignment_dir,
-                    set_name=set_name,
-                )
-            plot_pooled_fusion_point_aunp_ripley_l12_visualizations()
-        except Exception as fusion_3d_exc:
-            print(f"Error in 3D fusion-point/AuNP Ripley analyses: {fusion_3d_exc}")
-            import traceback
-            traceback.print_exc()
 # --- End per-vesicle AuNP outputs ---
         
         # --- Calculate packing density for each active zone ---

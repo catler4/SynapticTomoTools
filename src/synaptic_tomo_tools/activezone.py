@@ -29,6 +29,34 @@ def _collect_active_zone_surface_points(zone_data: Dict[str, Any]) -> np.ndarray
     return np.vstack(chunks)
 
 
+def _active_zone_membrane_area_from_hull_um2(
+    inner_points: np.ndarray,
+    outer_points: np.ndarray,
+) -> float:
+    """
+    Estimate one membrane sheet area (µm²) from inner+outer active-zone surface points.
+
+    Builds a 3D convex hull over both sheets and uses half the hull surface area as the
+    active-zone membrane area (coordinates in nm; converted to µm²).
+    """
+    chunks: List[np.ndarray] = []
+    for pts in (inner_points, outer_points):
+        if pts is not None and len(pts) > 0:
+            chunks.append(np.asarray(pts, dtype=float))
+    if not chunks:
+        return 0.0
+    points = np.vstack(chunks)
+    if len(points) < 4:
+        return 0.0
+    try:
+        hull = ConvexHull(points, qhull_options="QJ")
+        if hull.area <= 0:
+            return 0.0
+        return float(hull.area) / 2.0 / 1e6
+    except Exception:
+        return 0.0
+
+
 def compute_active_zone_max_distance_nm(zone_data: Dict[str, Any]) -> float:
     """
     Farthest distance between any two active-zone surface points (nm).
@@ -480,27 +508,22 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
             front_facing_faces = int(np.sum(pre_outer_face_mask))
             back_facing_faces = int(np.sum(pre_inner_face_mask))
 
-            if np.any(pre_outer_face_mask):
-                pre_outer_mesh = active_pre_mesh.submesh([np.where(pre_outer_face_mask)[0]], append=True)
-                active_pre_area = pre_outer_mesh.area / 1e6
-            else:
-                active_pre_area = 0.0
+            active_pre_area = _active_zone_membrane_area_from_hull_um2(
+                active_pre_inner_points, active_pre_outer_points
+            )
 
             if total_post_faces > 0:
                 post_outer_face_mask = np.isin(active_post_mesh.faces, post_outer_global).all(axis=1)
                 post_inner_face_mask = np.isin(active_post_mesh.faces, post_inner_global).all(axis=1)
                 post_front_facing_faces = int(np.sum(post_outer_face_mask))
                 post_back_facing_faces = int(np.sum(post_inner_face_mask))
-
-                if np.any(post_outer_face_mask):
-                    post_outer_mesh = active_post_mesh.submesh([np.where(post_outer_face_mask)[0]], append=True)
-                    active_post_area = post_outer_mesh.area / 1e6
-                else:
-                    active_post_area = 0.0
             else:
                 post_front_facing_faces = 0
                 post_back_facing_faces = 0
-                active_post_area = 0.0
+
+            active_post_area = _active_zone_membrane_area_from_hull_um2(
+                active_post_inner_points, active_post_outer_points
+            )
 
             active_zones[zone_name] = {
                 'presynaptic_membrane_index': pre_idx + 1,
@@ -783,21 +806,29 @@ def define_active_zone(
 
             # Require presynaptic area data - raise error if missing
             if 'active_presynaptic_area' not in zone_data:
-                raise ValueError(f"No presynaptic mesh area data available for {zone_name}. All active zones must have area data.")
+                raise ValueError(f"No presynaptic area data available for {zone_name}. All active zones must have area data.")
             active_zone_pre_areas.append(zone_data['active_presynaptic_area'])
             total_faces = zone_data.get('total_faces', 0)
             front_facing_faces = zone_data.get('front_facing_faces', 0)
             back_facing_faces = zone_data.get('back_facing_faces', 0)
-            print(f"Presynaptic active zone area {zone_name}: {zone_data['active_presynaptic_area']:.6f} µm² (faces: {front_facing_faces}/{total_faces} front-facing, {back_facing_faces} back-facing)")
+            print(
+                f"Presynaptic active zone area {zone_name}: {zone_data['active_presynaptic_area']:.6f} µm² "
+                f"(3D hull inner+outer, area/2; mesh faces: {front_facing_faces}/{total_faces} outer, "
+                f"{back_facing_faces} inner)"
+            )
             
             # Require postsynaptic area data - raise error if missing
             if 'active_postsynaptic_area' not in zone_data:
-                raise ValueError(f"No postsynaptic mesh area data available for {zone_name}. All active zones must have area data.")
+                raise ValueError(f"No postsynaptic area data available for {zone_name}. All active zones must have area data.")
             active_zone_post_areas.append(zone_data['active_postsynaptic_area'])
             post_total_faces = zone_data.get('postsynaptic_total_faces', 0)
             post_front_facing_faces = zone_data.get('postsynaptic_front_facing_faces', 0)
             post_back_facing_faces = zone_data.get('postsynaptic_back_facing_faces', 0)
-            print(f"Postsynaptic active zone area {zone_name}: {zone_data['active_postsynaptic_area']:.6f} µm² (faces: {post_front_facing_faces}/{post_total_faces} front-facing, {post_back_facing_faces} back-facing)")
+            print(
+                f"Postsynaptic active zone area {zone_name}: {zone_data['active_postsynaptic_area']:.6f} µm² "
+                f"(3D hull inner+outer, area/2; mesh faces: {post_front_facing_faces}/{post_total_faces} outer, "
+                f"{post_back_facing_faces} inner)"
+            )
         
         if not active_zone_pre_areas:
             raise ValueError("No active zone presynaptic areas calculated. Cannot compute average area.")

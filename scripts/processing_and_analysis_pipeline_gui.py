@@ -86,6 +86,9 @@ class AnalysisPipelineGUI(tk.Tk):
         self.fusion_point_threshold = tk.StringVar(value="20.0")
         self.fusing_perimeter_threshold = tk.StringVar(value="1.0")
         self.aunp_pick_star_pattern = tk.StringVar(value="")
+        self.run_fusion_point_aunp_analyses = tk.BooleanVar(value=False)
+        self.monomer_star_pattern = tk.StringVar(value="")
+        self.dimer_star_pattern = tk.StringVar(value="")
         
         self._build_tabs()
         self.protocol("WM_DELETE_WINDOW", self._on_app_close)
@@ -294,6 +297,35 @@ class AnalysisPipelineGUI(tk.Tk):
             aunp_frame,
             text="(default: aunp_tm_BP_active_zone_*_manual_refined.star; * = AZ index)",
         ).grid(row=6, column=0, columnspan=3, padx=5, sticky=tk.W)
+        fusion_aunp_cb = ttk.Checkbutton(
+            aunp_frame,
+            text="Run fusion-point vs monomer/dimer AuNP analyses (Ripley L₁₂ + distances)",
+            variable=self.run_fusion_point_aunp_analyses,
+            command=self._toggle_fusion_point_aunp_entries,
+        )
+        fusion_aunp_cb.grid(row=7, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(4, 0))
+        ttk.Label(aunp_frame, text="Monomer STAR filename pattern:").grid(
+            row=8, column=0, sticky=tk.W, padx=5
+        )
+        self._monomer_star_entry = ttk.Entry(
+            aunp_frame, textvariable=self.monomer_star_pattern, width=42
+        )
+        self._monomer_star_entry.grid(row=8, column=1, columnspan=2, padx=5, sticky=tk.W)
+        ttk.Label(aunp_frame, text="Dimer STAR filename pattern:").grid(
+            row=9, column=0, sticky=tk.W, padx=5
+        )
+        self._dimer_star_entry = ttk.Entry(
+            aunp_frame, textvariable=self.dimer_star_pattern, width=42
+        )
+        self._dimer_star_entry.grid(row=9, column=1, columnspan=2, padx=5, sticky=tk.W)
+        ttk.Label(
+            aunp_frame,
+            text=(
+                "(defaults: *_manual_refined_monomer.star / *_manual_refined_dimer.star; "
+                "files in {alignment}/aunps/)"
+            ),
+        ).grid(row=10, column=0, columnspan=3, padx=5, sticky=tk.W)
+        self._toggle_fusion_point_aunp_entries()
         
         # Visualization parameters
         viz_frame = ttk.LabelFrame(self.custom_params_frame, text="Visualization Parameters", padding=5)
@@ -360,6 +392,23 @@ class AnalysisPipelineGUI(tk.Tk):
             "Filename pattern for per-active-zone AuNP pick STAR files under {alignment}/aunps/. "
             "Use exactly one * for the active zone number (e.g. aunps_other_name_*_etc.star). "
             "Leave empty for the default aunp_tm_BP_active_zone_*_manual_refined.star.",
+        )
+        ToolTip(
+            fusion_aunp_cb,
+            "3D fusion-site vs monomer/dimer AuNP distance tables and bivariate Ripley L₁₂. "
+            "Disable for datasets without separate monomer/dimer STAR picks.",
+        )
+        ToolTip(
+            self._monomer_star_entry,
+            "Filename pattern for per-active-zone monomer AuNP STAR files under {alignment}/aunps/. "
+            "Use one * for the active zone index. "
+            "Leave empty for aunp_tm_BP_active_zone_*_manual_refined_monomer.star.",
+        )
+        ToolTip(
+            self._dimer_star_entry,
+            "Filename pattern for per-active-zone dimer AuNP STAR files under {alignment}/aunps/. "
+            "Use one * for the active zone index. "
+            "Leave empty for aunp_tm_BP_active_zone_*_manual_refined_dimer.star.",
         )
         ToolTip(sphere_size_entry, "Marker size for visualization sphere overlays (default 36).")
         ToolTip(self.sphere_color_combo, "Marker color for visualization sphere overlays (default gold).")
@@ -858,6 +907,28 @@ Do you want to continue?"""
             return ["--aunp-pick-star-pattern", pat]
         return []
 
+    def _cli_fusion_point_aunp_analyses_args(self):
+        """CLI flags for optional fusion-point vs monomer/dimer AuNP analyses."""
+        if not self.use_custom_params.get():
+            return []
+        args = []
+        if self.run_fusion_point_aunp_analyses.get():
+            args += ["--fusion-point-aunp-analyses"]
+        mon = self.monomer_star_pattern.get().strip()
+        dim = self.dimer_star_pattern.get().strip()
+        if mon:
+            args += ["--monomer-star-pattern", mon]
+        if dim:
+            args += ["--dimer-star-pattern", dim]
+        return args
+
+    def _toggle_fusion_point_aunp_entries(self):
+        """Enable monomer/dimer STAR pattern fields only when analyses are enabled."""
+        state = "normal" if self.run_fusion_point_aunp_analyses.get() else "disabled"
+        if hasattr(self, "_monomer_star_entry"):
+            self._monomer_star_entry.configure(state=state)
+            self._dimer_star_entry.configure(state=state)
+
     def _toggle_custom_params(self):
         """Handle custom parameters toggle to show/hide custom parameters frame."""
         if self.use_custom_params.get():
@@ -1138,6 +1209,7 @@ Do you want to continue?"""
                 except ValueError:
                     pass
             cli += self._cli_aunp_pick_star_pattern_args()
+            cli += self._cli_fusion_point_aunp_analyses_args()
             
             # Visualization parameters
             if self.sphere_size.get():
