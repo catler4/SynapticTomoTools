@@ -165,9 +165,11 @@ python -m src.synaptic_tomo_tools.cli --help
 ## Outputs
 
 - **Active zone results:**
-  - `results/activezone_results.csv` — summary statistics for all tomograms
-  - `results/all_cleft_distances.csv` — average cleft width per tomogram (one row per tomogram)
-  - Per-tomogram results in each tomogram's `best_alignment/STT_results/active_zones/`
+  - `results/activezone/activezone_results.csv` — per active zone (one row per tomogram + active zone): areas, AZ distances, cleft width stats
+  - `results/activezone/all_cleft_distances.csv` — average cleft width per active zone (one row per tomogram + active zone)
+  - `results/activezone/all_cleft_measurements.csv` — individual cleft distance measurements (one row per point pair)
+  - `results/analysis_results.json` — full nested results (including tomogram-level summaries)
+  - Per-tomogram surface coordinates in each tomogram's `{alignment_dir}/STT_results/activezone/`
 - **Vesicle results:**
   - `results/vesicle_results.csv` — summary statistics for all tomograms
   - `results/all_vesicle_data.csv` — all individual vesicle data for all tomograms

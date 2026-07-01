@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import os
 import shutil
-from .activezone import define_active_zone, calculate_cleft_width
+from .activezone import define_active_zone, calculate_cleft_width, build_activezone_per_zone_rows, upsert_activezone_per_zone_csv
 from .vesicles import detect_vesicles, measure_distances_to_az
 from .aunps import analyze_aunps
 from .results_manager import ResultsManager
@@ -185,6 +185,20 @@ def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True, a
             results_manager.store_tomogram_results(
                 analysis_name, 'activezone', combined_results, overwrite=rerun, set_name=set_name, alignment_dir=alignment_dir
             )
+            per_zone_rows = build_activezone_per_zone_rows(
+                tomogram_name=tomogram_name,
+                set_name=set_name or "",
+                alignment_dir=alignment_dir,
+                az_results=az_results,
+                cleft_results=cleft_results,
+            )
+            if per_zone_rows:
+                upsert_activezone_per_zone_csv(
+                    per_zone_rows,
+                    tomogram_name=tomogram_name,
+                    alignment_dir=alignment_dir,
+                    results_dir=str(results_manager.results_dir),
+                )
         except Exception as e:
             print(f"Error in active zone analysis for {analysis_name}: {e}")
             # Store error results so we know this analysis failed
@@ -450,6 +464,7 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
                      fusing_perimeter_threshold=None,
                      aunp_pick_star_pattern=None,
                      run_fusion_point_aunp_analyses=False,
+                     run_aunp_vs_az_center_ripley=False,
                      monomer_star_pattern=None,
                      dimer_star_pattern=None):
     """Run all analyses in the correct order: activezone, vesicles, aunps, visualizations."""
@@ -496,6 +511,7 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
               fusing_perimeter_threshold=fusing_perimeter_threshold,
               aunp_pick_star_pattern=aunp_pick_star_pattern,
               run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
+              run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
               monomer_star_pattern=monomer_star_pattern,
               dimer_star_pattern=dimer_star_pattern)
     
@@ -523,6 +539,7 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
               fusing_perimeter_threshold=None,
               aunp_pick_star_pattern=None,
               run_fusion_point_aunp_analyses=False,
+              run_aunp_vs_az_center_ripley=False,
               monomer_star_pattern=None,
               dimer_star_pattern=None):
     if print_ascii:
@@ -592,6 +609,7 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
                                          fusing_perimeter_threshold=fusing_thresh,
                                          aunp_pick_star_pattern=aunp_pick_star_pattern,
                                          run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
+                                         run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
                                          monomer_star_pattern=monomer_star_pattern,
                                          dimer_star_pattern=dimer_star_pattern)
             
@@ -935,6 +953,16 @@ def main():
             "(default: aunp_tm_BP_active_zone_*_manual_refined_dimer.star)"
         ),
     )
+    parser.add_argument(
+        "--aunp-vs-az-center-ripley",
+        dest="run_aunp_vs_az_center_ripley",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Run 3D Ripley L₁₂ of AuNP positions relative to the active zone center "
+            "(default: disabled). Use --aunp-vs-az-center-ripley to enable."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -1064,6 +1092,7 @@ def main():
     fusing_perimeter_threshold = args.fusing_perimeter_threshold
     aunp_pick_star_pattern = args.aunp_pick_star_pattern
     run_fusion_point_aunp_analyses = args.run_fusion_point_aunp_analyses
+    run_aunp_vs_az_center_ripley = args.run_aunp_vs_az_center_ripley
     monomer_star_pattern = args.monomer_star_pattern
     dimer_star_pattern = args.dimer_star_pattern
     
@@ -1091,6 +1120,7 @@ def main():
                   fusing_perimeter_threshold=fusing_perimeter_threshold,
                   aunp_pick_star_pattern=aunp_pick_star_pattern,
                   run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
+                  run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
                   monomer_star_pattern=monomer_star_pattern,
                   dimer_star_pattern=dimer_star_pattern)
     elif args.analysis == "visualizations":
@@ -1119,6 +1149,7 @@ def main():
                          fusing_perimeter_threshold=fusing_perimeter_threshold,
                          aunp_pick_star_pattern=aunp_pick_star_pattern,
                          run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
+                         run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
                          monomer_star_pattern=monomer_star_pattern,
                          dimer_star_pattern=dimer_star_pattern)
 

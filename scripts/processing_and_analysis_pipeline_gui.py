@@ -87,6 +87,7 @@ class AnalysisPipelineGUI(tk.Tk):
         self.fusing_perimeter_threshold = tk.StringVar(value="1.0")
         self.aunp_pick_star_pattern = tk.StringVar(value="")
         self.run_fusion_point_aunp_analyses = tk.BooleanVar(value=False)
+        self.run_aunp_vs_az_center_ripley = tk.BooleanVar(value=False)
         self.monomer_star_pattern = tk.StringVar(value="")
         self.dimer_star_pattern = tk.StringVar(value="")
         
@@ -325,6 +326,12 @@ class AnalysisPipelineGUI(tk.Tk):
                 "files in {alignment}/aunps/)"
             ),
         ).grid(row=10, column=0, columnspan=3, padx=5, sticky=tk.W)
+        aunp_az_center_cb = ttk.Checkbutton(
+            aunp_frame,
+            text="Run AuNP vs active zone center Ripley L₁₂",
+            variable=self.run_aunp_vs_az_center_ripley,
+        )
+        aunp_az_center_cb.grid(row=11, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(4, 0))
         self._toggle_fusion_point_aunp_entries()
         
         # Visualization parameters
@@ -409,6 +416,11 @@ class AnalysisPipelineGUI(tk.Tk):
             "Filename pattern for per-active-zone dimer AuNP STAR files under {alignment}/aunps/. "
             "Use one * for the active zone index. "
             "Leave empty for aunp_tm_BP_active_zone_*_manual_refined_dimer.star.",
+        )
+        ToolTip(
+            aunp_az_center_cb,
+            "3D bivariate Ripley L₁₂ of AuNP positions relative to each active zone center "
+            "(uses existing pick STAR files; no null model).",
         )
         ToolTip(sphere_size_entry, "Marker size for visualization sphere overlays (default 36).")
         ToolTip(self.sphere_color_combo, "Marker color for visualization sphere overlays (default gold).")
@@ -922,6 +934,14 @@ Do you want to continue?"""
             args += ["--dimer-star-pattern", dim]
         return args
 
+    def _cli_aunp_vs_az_center_ripley_args(self):
+        """CLI flag for optional AuNP vs active zone center Ripley L₁₂."""
+        if not self.use_custom_params.get():
+            return []
+        if self.run_aunp_vs_az_center_ripley.get():
+            return ["--aunp-vs-az-center-ripley"]
+        return []
+
     def _toggle_fusion_point_aunp_entries(self):
         """Enable monomer/dimer STAR pattern fields only when analyses are enabled."""
         state = "normal" if self.run_fusion_point_aunp_analyses.get() else "disabled"
@@ -1210,6 +1230,7 @@ Do you want to continue?"""
                     pass
             cli += self._cli_aunp_pick_star_pattern_args()
             cli += self._cli_fusion_point_aunp_analyses_args()
+            cli += self._cli_aunp_vs_az_center_ripley_args()
             
             # Visualization parameters
             if self.sphere_size.get():
@@ -1270,7 +1291,7 @@ Do you want to continue?"""
         env = os.environ.copy()
         if self.root_dir.get():
             env["TOMO_ROOT_BASE"] = self.root_dir.get()
-        threading.Thread(target=self._run_subprocess, args=(cli, env)).start()
+        threading.Thread(target=self._run_subprocess, args=(cli, env, str(REPO_ROOT))).start()
 
     def _run_subprocess(self, cli, env, cwd=None):
         self._current_process = subprocess.Popen(cli, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, cwd=cwd, bufsize=1, universal_newlines=True)

@@ -588,6 +588,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                   fusing_perimeter_threshold=1.0,
                   aunp_pick_star_pattern=None,
                   run_fusion_point_aunp_analyses=False,
+                  run_aunp_vs_az_center_ripley=False,
                   monomer_star_pattern=None,
                   dimer_star_pattern=None):
     """
@@ -613,6 +614,8 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         fusing_perimeter_threshold (float): Max perimeter-to-AZ distance (nm) for fusing vesicles. Default: 1.0.
         run_fusion_point_aunp_analyses (bool): Run 3D fusion-point vs monomer/dimer AuNP distance and
             Ripley L₁₂ analyses when monomer/dimer STAR files are available. Default: False.
+        run_aunp_vs_az_center_ripley (bool): Run 3D Ripley L₁₂ of AuNP positions relative to the
+            per-zone active zone center. Default: False.
         monomer_star_pattern (str or None): Per-AZ monomer STAR filename pattern with ``*`` for the active
             zone index (default: ``aunp_tm_BP_active_zone_*_manual_refined_monomer.star``).
         dimer_star_pattern (str or None): Per-AZ dimer STAR filename pattern with ``*`` for the active
@@ -1202,6 +1205,57 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             print(
                 "Skipping 3D fusion-point vs monomer/dimer AuNP analyses "
                 "(disabled by run_fusion_point_aunp_analyses=False)."
+            )
+
+        if run_aunp_vs_az_center_ripley:
+            print("Running AuNP vs active zone center Ripley L₁₂ analyses...")
+            try:
+                from .activezone import import_active_zone_segmentations, load_active_zone_mapping
+                from .aunp_ripley_vs_active_zone_center import (
+                    POOLED_CURVES_CSV,
+                    plot_pooled_aunp_vs_az_center_ripley_visualizations,
+                    run_aunp_vs_az_center_ripley_for_tomogram,
+                )
+
+                az_segmentations = import_active_zone_segmentations(
+                    tomogram_path, alignment_dir=alignment_dir
+                )
+                az_indices_for_ripley = active_zone_indices
+                if az_indices_for_ripley is None:
+                    az_mapping_for_ripley = load_active_zone_mapping(
+                        tomogram_path, alignment_dir
+                    ) or {}
+                    az_indices_for_ripley = sorted(int(k) for k in az_mapping_for_ripley)
+
+                ripley_frames, prism_frames = run_aunp_vs_az_center_ripley_for_tomogram(
+                    Path(tomogram_path),
+                    alignment_dir,
+                    active_zone_indices=az_indices_for_ripley,
+                    df_valid=df_valid,
+                    az_segmentations=az_segmentations,
+                    write_figures=True,
+                )
+                if ripley_frames:
+                    df_ripley = pd.concat(ripley_frames, ignore_index=True)
+                    if "tomogram_name" not in df_ripley.columns:
+                        df_ripley.insert(0, "tomogram_name", tomogram_name)
+                    _append_tomogram_results_csv(
+                        df_ripley,
+                        POOLED_CURVES_CSV,
+                        tomogram_name=tomogram_name,
+                        alignment_dir=alignment_dir,
+                        set_name=set_name,
+                    )
+                if ripley_frames or prism_frames:
+                    plot_pooled_aunp_vs_az_center_ripley_visualizations()
+            except Exception as az_center_ripley_exc:
+                print(f"Error in AuNP vs AZ-center Ripley analyses: {az_center_ripley_exc}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(
+                "Skipping AuNP vs active zone center Ripley L₁₂ analyses "
+                "(disabled by run_aunp_vs_az_center_ripley=False)."
             )
 # --- End per-vesicle AuNP outputs ---
         

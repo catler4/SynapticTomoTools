@@ -218,6 +218,44 @@ class ResultsManager:
         
         return flattened
     
+    def export_activezone_per_zone_csv(self) -> Optional[Path]:
+        """Export active zone results as one row per tomogram + active zone."""
+        rows: List[Dict[str, Any]] = []
+        for results_key, analyses in self.results.items():
+            if "activezone" not in analyses or "results" not in analyses["activezone"]:
+                continue
+            data = analyses["activezone"]
+            results = data["results"]
+            set_name = data.get("set_name", "") or ""
+            alignment_dir = data.get("alignment_dir", "") or ""
+            if "__" in results_key:
+                tomogram_name, key_alignment = results_key.split("__", 1)
+                if not alignment_dir:
+                    alignment_dir = key_alignment
+            else:
+                tomogram_name = results_key
+
+            from .activezone import build_activezone_per_zone_rows
+
+            rows.extend(
+                build_activezone_per_zone_rows(
+                    tomogram_name=tomogram_name,
+                    set_name=set_name,
+                    alignment_dir=alignment_dir,
+                    az_results=results.get("active_zone", {}),
+                    cleft_results=results.get("cleft_width", {}),
+                )
+            )
+
+        if not rows:
+            return None
+
+        csv_path = self.results_dir / "activezone" / "activezone_results.csv"
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(rows).to_csv(csv_path, index=False)
+        print(f"Exported activezone results to {csv_path} ({len(rows)} zone rows)")
+        return csv_path
+
     def export_to_csv(self, output_file: Optional[str] = None):
         """Export results to separate CSV files for each analysis type."""
         # Group results by analysis type
@@ -225,6 +263,8 @@ class ResultsManager:
         
         for tomogram_name, analyses in self.results.items():
             for analysis_type, data in analyses.items():
+                if analysis_type == "activezone":
+                    continue
                 if 'results' in data:
                     if analysis_type not in analysis_groups:
                         analysis_groups[analysis_type] = []
@@ -248,6 +288,10 @@ class ResultsManager:
         
         # Export each analysis type to its own CSV file in step-specific subdirectories
         exported_files = []
+        activezone_csv = self.export_activezone_per_zone_csv()
+        if activezone_csv is not None:
+            exported_files.append(activezone_csv)
+
         for analysis_type, rows in analysis_groups.items():
             if rows:
                 try:

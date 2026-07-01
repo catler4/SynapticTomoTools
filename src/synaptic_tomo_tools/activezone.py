@@ -841,6 +841,36 @@ def define_active_zone(
         active_zone_max_distance = (
             float(np.max(active_zone_max_distances_nm)) if active_zone_max_distances_nm else 0.0
         )
+
+        if az_mapping:
+            az_index_by_zone = {zone_name: int(idx) for idx, zone_name in az_mapping.items()}
+        else:
+            az_index_by_zone = {
+                zone_name: i
+                for i, zone_name in enumerate(sorted(active_zones['active_zones'].keys()))
+            }
+
+        individual_zone_results: Dict[str, Dict[str, Any]] = {}
+        for zone_name, zone_data in active_zones['active_zones'].items():
+            individual_zone_results[zone_name] = {
+                'active_zone_index': az_index_by_zone.get(zone_name),
+                'active_presynaptic_area': float(zone_data['active_presynaptic_area']),
+                'active_postsynaptic_area': float(zone_data['active_postsynaptic_area']),
+                'active_zone_max_distance_nm': float(zone_data['active_zone_max_distance_nm']),
+                'active_pre_count': int(zone_data['active_pre_count']),
+                'active_post_count': int(zone_data['active_post_count']),
+                'az_min_distance_nm': float(zone_data['min_distance']),
+                'az_max_distance_nm': float(zone_data['max_distance']),
+                'az_avg_distance_nm': float(zone_data['avg_distance']),
+                'presynaptic_membrane_index': int(zone_data.get('presynaptic_membrane_index', 0)),
+                'postsynaptic_membrane_index': int(zone_data.get('postsynaptic_membrane_index', 0)),
+                'pre_total_faces': int(zone_data.get('total_faces', 0)),
+                'pre_front_facing_faces': int(zone_data.get('front_facing_faces', 0)),
+                'pre_back_facing_faces': int(zone_data.get('back_facing_faces', 0)),
+                'post_total_faces': int(zone_data.get('postsynaptic_total_faces', 0)),
+                'post_front_facing_faces': int(zone_data.get('postsynaptic_front_facing_faces', 0)),
+                'post_back_facing_faces': int(zone_data.get('postsynaptic_back_facing_faces', 0)),
+            }
         
         # Load membrane volumes
         volumes_data = load_membrane_volumes(tomogram_path, alignment_dir=alignment_dir)
@@ -857,6 +887,7 @@ def define_active_zone(
             'active_zone_max_distance': active_zone_max_distance,  # Max span (nm) across zones; exported as *_nm in CSV
             'distance_range': active_zones['distance_range'],
             'active_zone_names': list(active_zones['active_zones'].keys()),
+            'individual_zone_results': individual_zone_results,
             'membrane_volumes': volumes_data,
             'status': 'completed'
         }
@@ -875,12 +906,101 @@ def define_active_zone(
             'active_zone_max_distance': 0.0,
             'distance_range': (10.0, 40.0),
             'active_zone_names': [],
+            'individual_zone_results': {},
             'membrane_volumes': {},
             'status': 'error',
             'error_message': str(e)
         }
     
     return results
+
+
+ACTIVEZONE_RESULTS_CSV = Path("results/activezone/activezone_results.csv")
+
+
+def build_activezone_per_zone_rows(
+    *,
+    tomogram_name: str,
+    set_name: str,
+    alignment_dir: str,
+    az_results: Dict[str, Any],
+    cleft_results: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Build one CSV row per active zone from define_active_zone + calculate_cleft_width results."""
+    az_zones = az_results.get("individual_zone_results") or {}
+    cleft_zones = cleft_results.get("individual_zone_results") or {}
+    az_status = az_results.get("status", "")
+    cleft_status = cleft_results.get("status", "")
+
+    rows: List[Dict[str, Any]] = []
+    for zone_name in sorted(set(az_zones) | set(cleft_zones)):
+        z = az_zones.get(zone_name, {})
+        c = cleft_zones.get(zone_name, {})
+        rows.append({
+            "tomogram_name": tomogram_name,
+            "set_name": set_name or "",
+            "alignment_dir": alignment_dir,
+            "active_zone": zone_name,
+            "active_zone_index": z.get("active_zone_index"),
+            "az_status": az_status,
+            "cleft_status": cleft_status,
+            "active_presynaptic_area_um2": z.get("active_presynaptic_area"),
+            "active_postsynaptic_area_um2": z.get("active_postsynaptic_area"),
+            "active_zone_max_distance_nm": z.get("active_zone_max_distance_nm"),
+            "active_pre_count": z.get("active_pre_count"),
+            "active_post_count": z.get("active_post_count"),
+            "az_min_distance_nm": z.get("az_min_distance_nm"),
+            "az_max_distance_nm": z.get("az_max_distance_nm"),
+            "az_avg_distance_nm": z.get("az_avg_distance_nm"),
+            "presynaptic_membrane_index": z.get("presynaptic_membrane_index"),
+            "postsynaptic_membrane_index": z.get("postsynaptic_membrane_index"),
+            "pre_total_faces": z.get("pre_total_faces"),
+            "pre_front_facing_faces": z.get("pre_front_facing_faces"),
+            "pre_back_facing_faces": z.get("pre_back_facing_faces"),
+            "post_total_faces": z.get("post_total_faces"),
+            "post_front_facing_faces": z.get("post_front_facing_faces"),
+            "post_back_facing_faces": z.get("post_back_facing_faces"),
+            "average_cleft_width_nm": c.get("average_cleft_width"),
+            "cleft_width_std_nm": c.get("cleft_width_std"),
+            "min_cleft_width_nm": c.get("min_cleft_width"),
+            "max_cleft_width_nm": c.get("max_cleft_width"),
+            "cleft_n_measurements": c.get("measurement_count"),
+        })
+    return rows
+
+
+def upsert_activezone_per_zone_csv(
+    rows: List[Dict[str, Any]],
+    tomogram_name: str,
+    alignment_dir: str,
+    results_dir: str = "results",
+) -> Path:
+    """Upsert per-zone active zone rows for one tomogram into the global CSV."""
+    import pandas as pd
+
+    csv_path = Path(results_dir) / "activezone" / "activezone_results.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    df_new = pd.DataFrame(rows)
+    if csv_path.exists():
+        try:
+            df_existing = pd.read_csv(csv_path)
+            if "alignment_dir" not in df_existing.columns:
+                df_existing["alignment_dir"] = ""
+            df_existing = df_existing[
+                ~(
+                    (df_existing["tomogram_name"] == tomogram_name)
+                    & (df_existing["alignment_dir"] == alignment_dir)
+                )
+            ]
+            df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+            df_combined.to_csv(csv_path, index=False)
+        except Exception as e:
+            print(f"Error updating {csv_path}: {e}")
+            df_new.to_csv(csv_path, index=False)
+    else:
+        df_new.to_csv(csv_path, index=False)
+    print(f"Saved {len(rows)} active zone result row(s) for {tomogram_name} to {csv_path}")
+    return csv_path
 
 
 def import_active_zone_segmentations(tomogram_path, alignment_dir: str) -> Dict[str, Any]:
@@ -1135,22 +1255,25 @@ def calculate_cleft_width(
             }
             
             # --- Append to global results/all_cleft_distances.csv ---
-            # Prepare average cleft distance data for CSV (one row per tomogram)
+            # One row per tomogram + active zone (unique tomogram+AZ).
             import pandas as pd
-            
-            # Calculate average cleft width for this tomogram
-            avg_cleft_width = np.mean(all_distances) if all_distances else np.nan
-            
-            cleft_row = {
-                'tomogram_name': tomogram_name,
-                'set_name': set_name,
-                'alignment_dir': alignment_dir,
-                'average_cleft_width_nm': avg_cleft_width,
-                'n_measurements': len(all_distances)
-            }
-            
+
+            cleft_rows = []
+            for zone_name, zone_stats in cleft_results.items():
+                cleft_rows.append({
+                    'tomogram_name': tomogram_name,
+                    'set_name': set_name,
+                    'alignment_dir': alignment_dir,
+                    'active_zone': zone_name,
+                    'average_cleft_width_nm': zone_stats['average_cleft_width'],
+                    'cleft_width_std_nm': zone_stats['cleft_width_std'],
+                    'min_cleft_width_nm': zone_stats['min_cleft_width'],
+                    'max_cleft_width_nm': zone_stats['max_cleft_width'],
+                    'n_measurements': zone_stats['measurement_count'],
+                })
+
             # Save to global CSV
-            df_cleft = pd.DataFrame([cleft_row])
+            df_cleft = pd.DataFrame(cleft_rows)
             global_csv = Path("results/activezone/all_cleft_distances.csv")
             global_csv.parent.mkdir(parents=True, exist_ok=True)
             if global_csv.exists():
@@ -1158,7 +1281,7 @@ def calculate_cleft_width(
                     df_existing = pd.read_csv(global_csv)
                     if 'alignment_dir' not in df_existing.columns:
                         df_existing['alignment_dir'] = ''
-                    # Remove existing data for this tomogram+alignment pair
+                    # Remove existing rows for this tomogram+alignment pair
                     df_existing = df_existing[
                         ~(
                             (df_existing['tomogram_name'] == tomogram_name) &
@@ -1172,7 +1295,10 @@ def calculate_cleft_width(
                     df_cleft.to_csv(global_csv, index=False)
             else:
                 df_cleft.to_csv(global_csv, index=False)
-            print(f"Saved average cleft width for {tomogram_name} to {global_csv}")
+            print(
+                f"Saved cleft width for {len(cleft_rows)} active zone(s) in "
+                f"{tomogram_name} to {global_csv}"
+            )
             
             meas_csv = Path("results/activezone/all_cleft_measurements.csv")
             df_meas = pd.DataFrame(measurement_rows)
