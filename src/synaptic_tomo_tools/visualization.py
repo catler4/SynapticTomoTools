@@ -2133,7 +2133,9 @@ def select_aunps_with_distances_findingampa_style(active_zone_data, aunp_data, t
                 "aunp_clusters.star (re-run AuNP analysis to compute active-zone center distances)"
             )
             return {'positions': np.array([]), 'distances': np.array([])}
-        post_distances = aunp_df[dist_col].values
+        # Coerce to float so downstream np.isnan works even if the STAR column
+        # was read as object dtype (e.g. empty/non-numeric entries -> NaN).
+        post_distances = pd.to_numeric(aunp_df[dist_col], errors='coerce').to_numpy(dtype=float)
 
     except Exception as e:
         print(f"Error loading AuNPs with distances in select_aunps_with_distances_findingampa_style: {e}")

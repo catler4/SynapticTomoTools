@@ -21,7 +21,6 @@ import pandas as pd
 from .alignment_utils import require_alignment_dir
 from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
     DEFAULT_ANALYSIS_SEED,
-    DEFAULT_RIPLEY_R_MAX_NM,
     DEFAULT_RIPLEY_R_STEP_NM,
     _prism_sd_envelope_columns,
     _ripley_r_grid,
@@ -38,8 +37,16 @@ def _prism_long_to_wide(prism_long: pd.DataFrame, id_cols: Sequence[str]) -> pd.
     value_cols = [c for c in prism_long.columns if c not in id_cols and c != "r_nm"]
     return prism_long[list(id_cols) + ["r_nm"] + value_cols].copy()
 
+
+def _safe_name(name: str) -> str:
+    safe = str(name).strip().replace(" ", "_")
+    for ch in '<>:"/\\|?*':
+        safe = safe.replace(ch, "_")
+    return safe
+
 WINDOW_MODE = "synaptic_cleft_az_hull"
 MIN_AUNP_PARTNERS = 3
+AZ_CENTER_RIPLEY_R_MAX_NM = 500.0
 
 POOLED_CURVES_CSV = Path("results/aunps/aunp_vs_az_center_ripley_l12_curves.csv")
 POOLED_PRISM_CSV = Path("results/aunps/aunp_vs_az_center_ripley_l12_prism_pooled.csv")
@@ -122,35 +129,42 @@ def build_aunp_vs_az_center_prism_table(
 
 
 def build_pooled_aunp_vs_az_center_prism_table(df: pd.DataFrame) -> pd.DataFrame:
-    """Pooled mean ± SD of L₁₂ across all tomogram-zone curves at each r."""
+    """Pooled mean ± SD of L₁₂ across tomogram-zone curves at each r, per tomogram set."""
     if df.empty:
         return pd.DataFrame()
 
-    r_vals, curves = _extract_zone_l12_curves_matrix(df)
-    if len(curves) == 0:
-        return pd.DataFrame()
-
-    sd = _prism_sd_envelope_columns(curves, r_vals, prefix="center_L12")
-    n_tomograms = int(df["tomogram_name"].nunique()) if "tomogram_name" in df.columns else 0
-    n_zones = int(
-        df[["tomogram_name", "alignment_dir", "active_zone_name"]].drop_duplicates().shape[0]
-    )
+    df = df.copy()
+    if "set_name" not in df.columns:
+        df["set_name"] = ""
+    df["set_name"] = df["set_name"].fillna("").astype(str)
 
     rows: list[dict] = []
-    for i, r_nm in enumerate(r_vals):
-        rows.append(
-            {
-                "window_mode": WINDOW_MODE,
-                "r_nm": float(r_nm),
-                "center_L12_mean": float(sd["center_L12_mean"][i]),
-                "center_L12_sd": float(sd["center_L12_sd"][i]),
-                "center_L12_sd_envelope_lo": float(sd["center_L12_sd_envelope_lo"][i]),
-                "center_L12_sd_envelope_hi": float(sd["center_L12_sd_envelope_hi"][i]),
-                "n_zone_curves": int(len(curves)),
-                "n_tomograms": n_tomograms,
-                "n_active_zones": n_zones,
-            }
+    for set_name, sub in df.groupby("set_name", sort=False):
+        r_vals, curves = _extract_zone_l12_curves_matrix(sub)
+        if len(curves) == 0:
+            continue
+
+        sd = _prism_sd_envelope_columns(curves, r_vals, prefix="center_L12")
+        n_tomograms = int(sub["tomogram_name"].nunique()) if "tomogram_name" in sub.columns else 0
+        n_zones = int(
+            sub[["tomogram_name", "alignment_dir", "active_zone_name"]].drop_duplicates().shape[0]
         )
+
+        for i, r_nm in enumerate(r_vals):
+            rows.append(
+                {
+                    "set_name": set_name,
+                    "window_mode": WINDOW_MODE,
+                    "r_nm": float(r_nm),
+                    "center_L12_mean": float(sd["center_L12_mean"][i]),
+                    "center_L12_sd": float(sd["center_L12_sd"][i]),
+                    "center_L12_sd_envelope_lo": float(sd["center_L12_sd_envelope_lo"][i]),
+                    "center_L12_sd_envelope_hi": float(sd["center_L12_sd_envelope_hi"][i]),
+                    "n_zone_curves": int(len(curves)),
+                    "n_tomograms": n_tomograms,
+                    "n_active_zones": n_zones,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -162,7 +176,7 @@ def run_aunp_vs_az_center_ripley_for_zone(
     *,
     aunp_coords: np.ndarray,
     az_segmentation: dict,
-    r_max_nm: float = DEFAULT_RIPLEY_R_MAX_NM,
+    r_max_nm: float = AZ_CENTER_RIPLEY_R_MAX_NM,
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
@@ -290,7 +304,7 @@ def run_aunp_vs_az_center_ripley_for_tomogram(
     active_zone_indices: Sequence[int] | None,
     df_valid: pd.DataFrame,
     az_segmentations: dict,
-    r_max_nm: float = DEFAULT_RIPLEY_R_MAX_NM,
+    r_max_nm: float = AZ_CENTER_RIPLEY_R_MAX_NM,
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
@@ -379,32 +393,41 @@ def plot_pooled_aunp_vs_az_center_ripley_visualizations(
 
     prism_csv.parent.mkdir(parents=True, exist_ok=True)
     prism_long.to_csv(prism_csv, index=False)
-    _prism_long_to_wide(prism_long, id_cols=["window_mode"]).to_csv(prism_wide_csv, index=False)
+    _prism_long_to_wide(prism_long, id_cols=["set_name", "window_mode"]).to_csv(
+        prism_wide_csv, index=False
+    )
     print(f"Pooled AuNP vs AZ-center Ripley Prism table ({len(prism_long)} rows) -> {prism_csv}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    r_vals = prism_long["r_nm"].to_numpy(dtype=float)
-    mean = prism_long["center_L12_mean"].to_numpy(dtype=float)
-    lo = prism_long["center_L12_sd_envelope_lo"].to_numpy(dtype=float)
-    hi = prism_long["center_L12_sd_envelope_hi"].to_numpy(dtype=float)
-    meta = prism_long.iloc[0]
+    written: list[Path] = [prism_csv, prism_wide_csv]
 
-    fig, ax = plt.subplots(figsize=(6.5, 4.5))
-    ax.plot(r_vals, mean, color="C0", lw=2, label="Mean L₁₂")
-    ax.fill_between(r_vals, lo, hi, color="C0", alpha=0.25, label="Mean ± SD")
-    ax.axhline(0.0, color="0.5", ls="--", lw=0.8)
-    ax.set_xlabel("r (nm)")
-    ax.set_ylabel("Ripley L₁₂(r) = (3K₁₂/4π)^(1/3) − r")
-    ax.set_title(
-        "Pooled AuNP vs active zone center\n"
-        f"{int(meta['n_tomograms'])} tomogram(s), {int(meta['n_active_zones'])} zone(s), "
-        f"{int(meta['n_zone_curves'])} curves"
-    )
-    ax.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else DEFAULT_RIPLEY_R_MAX_NM)
-    ax.legend(loc="best", fontsize=8)
-    fig.tight_layout()
-    out_path = output_dir / "ripley_l12_pooled_mean_sd.png"
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"Pooled AuNP vs AZ-center Ripley figure -> {out_path}")
-    return [prism_csv, prism_wide_csv, out_path]
+    for set_name, grp in prism_long.groupby("set_name", sort=False):
+        grp = grp.sort_values("r_nm")
+        r_vals = grp["r_nm"].to_numpy(dtype=float)
+        mean = grp["center_L12_mean"].to_numpy(dtype=float)
+        lo = grp["center_L12_sd_envelope_lo"].to_numpy(dtype=float)
+        hi = grp["center_L12_sd_envelope_hi"].to_numpy(dtype=float)
+        meta = grp.iloc[0]
+
+        set_tag = _safe_name(str(set_name)) or "unspecified"
+        fig, ax = plt.subplots(figsize=(6.5, 4.5))
+        ax.plot(r_vals, mean, color="C0", lw=2, label="Mean L₁₂")
+        ax.fill_between(r_vals, lo, hi, color="C0", alpha=0.25, label="Mean ± SD")
+        ax.axhline(0.0, color="0.5", ls="--", lw=0.8)
+        ax.set_xlabel("r (nm)")
+        ax.set_ylabel("Ripley L₁₂(r) = (3K₁₂/4π)^(1/3) − r")
+        ax.set_title(
+            f"Pooled AuNP vs active zone center — set: {set_name}\n"
+            f"{int(meta['n_tomograms'])} tomogram(s), {int(meta['n_active_zones'])} zone(s), "
+            f"{int(meta['n_zone_curves'])} curves"
+        )
+        ax.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else AZ_CENTER_RIPLEY_R_MAX_NM)
+        ax.legend(loc="best", fontsize=8)
+        fig.tight_layout()
+        out_path = output_dir / f"ripley_l12_pooled_mean_sd_{set_tag}.png"
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Pooled AuNP vs AZ-center Ripley figure (set {set_name}) -> {out_path}")
+        written.append(out_path)
+
+    return written

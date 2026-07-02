@@ -88,6 +88,7 @@ class AnalysisPipelineGUI(tk.Tk):
         self.aunp_pick_star_pattern = tk.StringVar(value="")
         self.run_fusion_point_aunp_analyses = tk.BooleanVar(value=False)
         self.run_aunp_vs_az_center_ripley = tk.BooleanVar(value=False)
+        self.run_aunp_monomer_dimer_ripley = tk.BooleanVar(value=False)
         self.monomer_star_pattern = tk.StringVar(value="")
         self.dimer_star_pattern = tk.StringVar(value="")
         
@@ -302,7 +303,7 @@ class AnalysisPipelineGUI(tk.Tk):
             aunp_frame,
             text="Run fusion-point vs monomer/dimer AuNP analyses (Ripley L₁₂ + distances)",
             variable=self.run_fusion_point_aunp_analyses,
-            command=self._toggle_fusion_point_aunp_entries,
+            command=self._toggle_monomer_dimer_star_entries,
         )
         fusion_aunp_cb.grid(row=7, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(4, 0))
         ttk.Label(aunp_frame, text="Monomer STAR filename pattern:").grid(
@@ -332,7 +333,14 @@ class AnalysisPipelineGUI(tk.Tk):
             variable=self.run_aunp_vs_az_center_ripley,
         )
         aunp_az_center_cb.grid(row=11, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(4, 0))
-        self._toggle_fusion_point_aunp_entries()
+        monomer_dimer_cb = ttk.Checkbutton(
+            aunp_frame,
+            text="Run monomer vs dimer AuNP Ripley L₁₂ (label-permutation control)",
+            variable=self.run_aunp_monomer_dimer_ripley,
+            command=self._toggle_monomer_dimer_star_entries,
+        )
+        monomer_dimer_cb.grid(row=12, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(4, 0))
+        self._toggle_monomer_dimer_star_entries()
         
         # Visualization parameters
         viz_frame = ttk.LabelFrame(self.custom_params_frame, text="Visualization Parameters", padding=5)
@@ -421,6 +429,11 @@ class AnalysisPipelineGUI(tk.Tk):
             aunp_az_center_cb,
             "3D bivariate Ripley L₁₂ of AuNP positions relative to each active zone center "
             "(uses existing pick STAR files; no null model).",
+        )
+        ToolTip(
+            monomer_dimer_cb,
+            "3D bivariate Ripley L₁₂ of monomer vs dimer AuNP positions with a label-permutation "
+            "control (1000 replicates). Uses the monomer/dimer STAR patterns above.",
         )
         ToolTip(sphere_size_entry, "Marker size for visualization sphere overlays (default 36).")
         ToolTip(self.sphere_color_combo, "Marker color for visualization sphere overlays (default gold).")
@@ -814,6 +827,22 @@ Do you want to continue?"""
             self._img_refs.append(img)
         if step == "Full Pipeline":
             ttk.Label(controls_frame, text="Active Zone -> Vesicles -> AuNPs -> Visualization").pack(anchor=tk.W, pady=(0, 10))
+            ttk.Label(controls_frame, text="Steps to run:").pack(anchor=tk.W, pady=(0, 2))
+            # (cli_step_name, display_label)
+            pipeline_step_defs = [
+                ("activezone", "Active Zone"),
+                ("vesicles", "Vesicles"),
+                ("aunps", "AuNPs"),
+                ("visualizations", "Visualization"),
+            ]
+            tab._pipeline_step_vars = {}
+            for cli_name, label in pipeline_step_defs:
+                var = tk.BooleanVar(value=True)
+                cb = ttk.Checkbutton(controls_frame, text=label, variable=var)
+                cb.pack(anchor=tk.W)
+                ToolTip(cb, f"Include the {label} step when running the full pipeline. Uncheck to skip it (e.g. run all except Visualization).")
+                tab._pipeline_step_vars[cli_name] = var
+            ttk.Label(controls_frame, text="").pack(anchor=tk.W, pady=(0, 4))
         run_btn = ttk.Button(controls_frame, text=f"Run {step}", command=lambda s=step: self._run_analysis(s, tab))
         run_btn.pack(anchor=tk.W, pady=5)
         # Add checkboxes for rerun, check-files
@@ -942,9 +971,21 @@ Do you want to continue?"""
             return ["--aunp-vs-az-center-ripley"]
         return []
 
-    def _toggle_fusion_point_aunp_entries(self):
-        """Enable monomer/dimer STAR pattern fields only when analyses are enabled."""
-        state = "normal" if self.run_fusion_point_aunp_analyses.get() else "disabled"
+    def _cli_aunp_monomer_dimer_ripley_args(self):
+        """CLI flag for optional monomer vs dimer AuNP Ripley L₁₂."""
+        if not self.use_custom_params.get():
+            return []
+        if self.run_aunp_monomer_dimer_ripley.get():
+            return ["--aunp-monomer-dimer-ripley"]
+        return []
+
+    def _toggle_monomer_dimer_star_entries(self):
+        """Enable monomer/dimer STAR fields when any analysis using them is enabled."""
+        uses_star = (
+            self.run_fusion_point_aunp_analyses.get()
+            or self.run_aunp_monomer_dimer_ripley.get()
+        )
+        state = "normal" if uses_star else "disabled"
         if hasattr(self, "_monomer_star_entry"):
             self._monomer_star_entry.configure(state=state)
             self._dimer_star_entry.configure(state=state)
@@ -1174,6 +1215,18 @@ Do you want to continue?"""
             cli += ["--analysis", "visualizations"]
         elif step == "Full Pipeline":
             cli += ["--analysis", "all"]
+            step_vars = getattr(tab, "_pipeline_step_vars", None)
+            if step_vars:
+                selected_steps = [name for name, var in step_vars.items() if var.get()]
+                if not selected_steps:
+                    messagebox.showwarning(
+                        "No steps selected",
+                        "Please select at least one pipeline step to run.",
+                    )
+                    return
+                # Only pass --steps when running a subset; omit to keep default (all).
+                if len(selected_steps) < len(step_vars):
+                    cli += ["--steps", ",".join(selected_steps)]
             if generate_pdf:
                 cli += ["--generate-pdf-summary"]
         # Add custom parameters if custom mode is selected
@@ -1231,6 +1284,7 @@ Do you want to continue?"""
             cli += self._cli_aunp_pick_star_pattern_args()
             cli += self._cli_fusion_point_aunp_analyses_args()
             cli += self._cli_aunp_vs_az_center_ripley_args()
+            cli += self._cli_aunp_monomer_dimer_ripley_args()
             
             # Visualization parameters
             if self.sphere_size.get():

@@ -453,6 +453,10 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
         import traceback
         traceback.print_exc()
 
+# Canonical order of pipeline steps for `--analysis all`.
+PIPELINE_STEPS = ("activezone", "vesicles", "aunps", "visualizations")
+
+
 def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None, 
                      az_distance_min=None, az_distance_max=None, vesicle_distance_threshold=None,
                      dbscan_eps=None, dbscan_min_samples=None, sphere_size=None, sphere_color=None,
@@ -465,70 +469,85 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
                      aunp_pick_star_pattern=None,
                      run_fusion_point_aunp_analyses=False,
                      run_aunp_vs_az_center_ripley=False,
+                     run_aunp_monomer_dimer_ripley=False,
                      monomer_star_pattern=None,
-                     dimer_star_pattern=None):
-    """Run all analyses in the correct order: activezone, vesicles, aunps, visualizations."""
+                     dimer_star_pattern=None,
+                     steps=None):
+    """Run selected pipeline steps in canonical order: activezone, vesicles, aunps, visualizations.
+
+    steps: iterable of step names to run (subset of PIPELINE_STEPS). None = all steps.
+    """
+    if steps is None:
+        steps_to_run = list(PIPELINE_STEPS)
+    else:
+        requested = {str(s).strip().lower() for s in steps}
+        steps_to_run = [s for s in PIPELINE_STEPS if s in requested]
+    if not steps_to_run:
+        print("No valid pipeline steps selected; nothing to run.")
+        return
+
     print_synapse_ascii_art()
     print("="*80)
-    print("RUNNING ALL ANALYSES")
+    print("RUNNING PIPELINE STEPS")
     print("="*80)
-    print("Order: activezone → vesicles → aunps → visualizations")
+    print("Selected steps (canonical order): " + " → ".join(steps_to_run))
     print("="*80)
+
+    if "activezone" in steps_to_run:
+        print("\n" + "="*80)
+        print("STEP: ACTIVE ZONE ANALYSIS")
+        print("="*80)
+        run_activezone(tomo_paths, results_manager, rerun, print_ascii=False, 
+                       az_distance_min=az_distance_min, az_distance_max=az_distance_max,
+                       aunp_pick_star_pattern=aunp_pick_star_pattern)
     
-    # Step 1: Active Zone Analysis
-    print("\n" + "="*80)
-    print("STEP 1: ACTIVE ZONE ANALYSIS")
-    print("="*80)
-    run_activezone(tomo_paths, results_manager, rerun, print_ascii=False, 
-                   az_distance_min=az_distance_min, az_distance_max=az_distance_max,
-                   aunp_pick_star_pattern=aunp_pick_star_pattern)
+    if "vesicles" in steps_to_run:
+        print("\n" + "="*80)
+        print("STEP: VESICLE ANALYSIS")
+        print("="*80)
+        run_vesicles(
+            tomo_paths,
+            results_manager,
+            rerun,
+            print_ascii=False,
+            vesicle_distance_threshold=vesicle_distance_threshold,
+            fusing_perimeter_threshold=fusing_perimeter_threshold,
+        )
     
-    # Step 2: Vesicle Analysis
-    print("\n" + "="*80)
-    print("STEP 2: VESICLE ANALYSIS")
-    print("="*80)
-    run_vesicles(
-        tomo_paths,
-        results_manager,
-        rerun,
-        print_ascii=False,
-        vesicle_distance_threshold=vesicle_distance_threshold,
-        fusing_perimeter_threshold=fusing_perimeter_threshold,
-    )
+    if "aunps" in steps_to_run:
+        print("\n" + "="*80)
+        print("STEP: AUNP ANALYSIS")
+        print("="*80)
+        run_aunps(tomo_paths, results_manager, rerun, print_ascii=False, 
+                  vesicle_distance_threshold=vesicle_distance_threshold,
+                  dbscan_eps=dbscan_eps, dbscan_min_samples=dbscan_min_samples,
+                  cylinder_radius=cylinder_radius, receptor_crosssection=receptor_crosssection,
+                  aunps_per_receptor=aunps_per_receptor,
+                  vertex_sampling_step=vertex_sampling_step,
+                  synaptic_designation_cutoff=synaptic_designation_cutoff,
+                  min_cluster_size=min_cluster_size, fusion_point_threshold=fusion_point_threshold,
+                  fusing_perimeter_threshold=fusing_perimeter_threshold,
+                  aunp_pick_star_pattern=aunp_pick_star_pattern,
+                  run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
+                  run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
+                  run_aunp_monomer_dimer_ripley=run_aunp_monomer_dimer_ripley,
+                  monomer_star_pattern=monomer_star_pattern,
+                  dimer_star_pattern=dimer_star_pattern)
     
-    # Step 3: AuNP Analysis
-    print("\n" + "="*80)
-    print("STEP 3: AUNP ANALYSIS")
-    print("="*80)
-    run_aunps(tomo_paths, results_manager, rerun, print_ascii=False, 
-              vesicle_distance_threshold=vesicle_distance_threshold,
-              dbscan_eps=dbscan_eps, dbscan_min_samples=dbscan_min_samples,
-              cylinder_radius=cylinder_radius, receptor_crosssection=receptor_crosssection,
-              aunps_per_receptor=aunps_per_receptor,
-              vertex_sampling_step=vertex_sampling_step,
-              synaptic_designation_cutoff=synaptic_designation_cutoff,
-              min_cluster_size=min_cluster_size, fusion_point_threshold=fusion_point_threshold,
-              fusing_perimeter_threshold=fusing_perimeter_threshold,
-              aunp_pick_star_pattern=aunp_pick_star_pattern,
-              run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
-              run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
-              monomer_star_pattern=monomer_star_pattern,
-              dimer_star_pattern=dimer_star_pattern)
-    
-    # Step 4: Visualizations
-    print("\n" + "="*80)
-    print("STEP 4: VISUALIZATION GENERATION")
-    print("="*80)
-    generate_visualizations(tomo_paths, results_manager, rerun, print_ascii=False, csv_path=csv_path,
-                            sphere_size=sphere_size, sphere_color=sphere_color,
-                            aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
-                            aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
-                            aunp_distance_cutoff_value=aunp_distance_cutoff_value,
-                            vesicle_distance_threshold=vesicle_distance_threshold,
-                            fusing_perimeter_threshold=fusing_perimeter_threshold)
+    if "visualizations" in steps_to_run:
+        print("\n" + "="*80)
+        print("STEP: VISUALIZATION GENERATION")
+        print("="*80)
+        generate_visualizations(tomo_paths, results_manager, rerun, print_ascii=False, csv_path=csv_path,
+                                sphere_size=sphere_size, sphere_color=sphere_color,
+                                aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
+                                aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
+                                aunp_distance_cutoff_value=aunp_distance_cutoff_value,
+                                vesicle_distance_threshold=vesicle_distance_threshold,
+                                fusing_perimeter_threshold=fusing_perimeter_threshold)
     
     print("\n" + "="*80)
-    print("ALL ANALYSES COMPLETED!")
+    print("SELECTED ANALYSES COMPLETED!")
     print("="*80)
 
 def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True, 
@@ -540,6 +559,7 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
               aunp_pick_star_pattern=None,
               run_fusion_point_aunp_analyses=False,
               run_aunp_vs_az_center_ripley=False,
+              run_aunp_monomer_dimer_ripley=False,
               monomer_star_pattern=None,
               dimer_star_pattern=None):
     if print_ascii:
@@ -610,6 +630,7 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
                                          aunp_pick_star_pattern=aunp_pick_star_pattern,
                                          run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
                                          run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
+                                         run_aunp_monomer_dimer_ripley=run_aunp_monomer_dimer_ripley,
                                          monomer_star_pattern=monomer_star_pattern,
                                          dimer_star_pattern=dimer_star_pattern)
             
@@ -807,6 +828,14 @@ def main():
         help="Which analysis to run. Use 'all' to run activezone, vesicles, aunps, and visualizations in sequence. Use 'visualizations' to generate images from existing analysis results."
     )
     parser.add_argument(
+        "--steps", default=None,
+        help=(
+            "Only used with --analysis all. Comma-separated subset of pipeline steps to run "
+            "(choices: activezone, vesicles, aunps, visualizations). Steps always run in canonical "
+            "order regardless of listing order. Default: all four steps."
+        ),
+    )
+    parser.add_argument(
         "--set", default=None,
         help="(Optional) Filter tomograms by experimental set name (e.g., 15F1, unlabeled)."
     )
@@ -963,6 +992,17 @@ def main():
             "(default: disabled). Use --aunp-vs-az-center-ripley to enable."
         ),
     )
+    parser.add_argument(
+        "--aunp-monomer-dimer-ripley",
+        dest="run_aunp_monomer_dimer_ripley",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Run 3D bivariate Ripley L₁₂ of monomer vs dimer AuNP positions with a "
+            "label-permutation control (default: disabled). Uses the monomer/dimer STAR "
+            "patterns. Use --aunp-monomer-dimer-ripley to enable."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -1093,6 +1133,7 @@ def main():
     aunp_pick_star_pattern = args.aunp_pick_star_pattern
     run_fusion_point_aunp_analyses = args.run_fusion_point_aunp_analyses
     run_aunp_vs_az_center_ripley = args.run_aunp_vs_az_center_ripley
+    run_aunp_monomer_dimer_ripley = args.run_aunp_monomer_dimer_ripley
     monomer_star_pattern = args.monomer_star_pattern
     dimer_star_pattern = args.dimer_star_pattern
     
@@ -1121,6 +1162,7 @@ def main():
                   aunp_pick_star_pattern=aunp_pick_star_pattern,
                   run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
                   run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
+                  run_aunp_monomer_dimer_ripley=run_aunp_monomer_dimer_ripley,
                   monomer_star_pattern=monomer_star_pattern,
                   dimer_star_pattern=dimer_star_pattern)
     elif args.analysis == "visualizations":
@@ -1132,6 +1174,13 @@ def main():
                                 vesicle_distance_threshold=vesicle_distance_threshold,
                                 fusing_perimeter_threshold=fusing_perimeter_threshold)
     elif args.analysis == "all":
+        selected_steps = None
+        if getattr(args, "steps", None):
+            requested = [s.strip().lower() for s in args.steps.split(",") if s.strip()]
+            invalid = [s for s in requested if s not in PIPELINE_STEPS]
+            if invalid:
+                print(f"Warning: ignoring unknown --steps values: {', '.join(invalid)}")
+            selected_steps = [s for s in requested if s in PIPELINE_STEPS]
         run_all_analyses(tomos, results_manager, rerun=args.rerun, csv_path=args.csv,
                          az_distance_min=az_distance_min, az_distance_max=az_distance_max,
                          vesicle_distance_threshold=vesicle_distance_threshold,
@@ -1150,8 +1199,10 @@ def main():
                          aunp_pick_star_pattern=aunp_pick_star_pattern,
                          run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
                          run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
+                         run_aunp_monomer_dimer_ripley=run_aunp_monomer_dimer_ripley,
                          monomer_star_pattern=monomer_star_pattern,
-                         dimer_star_pattern=dimer_star_pattern)
+                         dimer_star_pattern=dimer_star_pattern,
+                         steps=selected_steps)
 
     # Always export summary CSVs at the end
     print("\nExporting all summary CSVs from stored results...")
