@@ -442,7 +442,7 @@ def compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0, fusion
     return pts
 
 
-def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, vesicle_distance_threshold=20.0,
+def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, vesicle_distance_threshold=20.0, 
                                                   fusion_point_threshold=20.0, max_distance=500.0, bin_width=5.0,
                                                   fusing_only=False, fusing_perimeter_threshold=1.0,
                                                   *, alignment_dir: str):
@@ -578,7 +578,7 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
     
     return pd.DataFrame(results), pd.DataFrame(long_rows)
 
-def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
+def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, 
                   *,
                   alignment_dir: str,
                   vesicle_distance_threshold=20.0, dbscan_eps=16.0, dbscan_min_samples=1,
@@ -1110,7 +1110,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         # --- Per-vesicle AuNP distance histogram (bin 5 nm only) + pairwise fusion distances ---
         print("Computing AuNP distance histograms for close vesicles (bin5)...")
         df_vesicle_aunp_hist_bin5, df_close_fusion_aunp_long = compute_aunp_distance_histograms_per_vesicle(
-            tomogram_path, coords,
+            tomogram_path, coords, 
             vesicle_distance_threshold=vesicle_distance_threshold,
             fusion_point_threshold=fusion_point_threshold,
             max_distance=500.0,
@@ -1134,7 +1134,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             f"(distance <= {fusing_perimeter_threshold} nm to AZ, bin5)..."
         )
         df_fusing_vesicle_aunp_hist_bin5, df_fusing_fusion_aunp_long = compute_aunp_distance_histograms_per_vesicle(
-            tomogram_path, coords,
+            tomogram_path, coords, 
             vesicle_distance_threshold=vesicle_distance_threshold,
             fusion_point_threshold=fusion_point_threshold,
             max_distance=500.0,
@@ -1172,7 +1172,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                     Path(tomogram_path),
                     alignment_dir,
                     active_zone_indices=az_indices_for_analysis,
-                    vesicle_distance_threshold=vesicle_distance_threshold,
+            vesicle_distance_threshold=vesicle_distance_threshold,
                     fusion_point_threshold=fusion_point_threshold,
                     write_figures=True,
                     monomer_star_pattern=monomer_star_pattern,
@@ -1328,7 +1328,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                         if az_idx != -1:
                             az_df = df_valid[df_valid['active_zone'] == az_idx]
                             aunps_by_az[az_idx] = az_df[coord_cols].values
-
+                    
                     fusion_point_rows = enumerate_close_vesicle_fusion_points(
                         tomogram_path,
                         alignment_dir=alignment_dir,
@@ -1341,27 +1341,27 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                     for zone_name, zone_data in active_zones_glb['active_zones'].items():
                         if 'active_postsynaptic_mesh' not in zone_data:
                             continue
-
+                        
                         zone_aunps = None
                         for az_idx, aunp_coords in aunps_by_az.items():
                             if zone_aunps is None:
                                 zone_aunps = aunp_coords
-
+                        
                         if zone_aunps is None or len(zone_aunps) == 0:
                             print(f"  No AuNPs found for {zone_name}, skipping packing density calculation")
                             continue
-
+                        
                         if zone_name not in zonogram_results['zonogram_data']:
                             print(f"  No zonogram data found for {zone_name}, skipping packing density calculation")
                             continue
-
+                        
                         zonogram_data = zonogram_results['zonogram_data'][zone_name]
-
+                        
                         try:
                             v_array, num_aunps_in_cylinder, aunp_density_per_nm2, packing_coefficient = (
                                 calculate_packing_density_using_sliding_cylinder(
-                                    zone_data,
-                                    zonogram_data,
+                                zone_data,
+                                zonogram_data,
                                     zone_aunps,
                                     cylinder_radius=cylinder_radius,
                                     receptor_crosssection_nm_squared=receptor_crosssection,
@@ -1418,7 +1418,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                         except Exception as e:
                             print(f"  Error calculating packing density for {zone_name}: {e}")
                             continue
-
+                    
                     if packing_density_results:
                         packing_density_file = aunps_results_dir / "packing_density_results.json"
                         with open(packing_density_file, 'w') as f:

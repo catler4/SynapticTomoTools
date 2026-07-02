@@ -91,6 +91,7 @@ class AnalysisPipelineGUI(tk.Tk):
         self.run_aunp_monomer_dimer_ripley = tk.BooleanVar(value=False)
         self.monomer_star_pattern = tk.StringVar(value="")
         self.dimer_star_pattern = tk.StringVar(value="")
+        self.generate_combined_pdf = tk.BooleanVar(value=False)
         
         self._build_tabs()
         self.protocol("WM_DELETE_WINDOW", self._on_app_close)
@@ -391,6 +392,18 @@ class AnalysisPipelineGUI(tk.Tk):
         vertex_sampling_step_entry = ttk.Entry(viz_frame, textvariable=self.vertex_sampling_step, width=8)
         vertex_sampling_step_entry.grid(row=7, column=1, padx=5)
         ttk.Label(viz_frame, text="(default: 50)").grid(row=7, column=2, padx=5, sticky=tk.W)
+        combined_pdf_cb = ttk.Checkbutton(
+            viz_frame,
+            text="Generate combined PDF summary (combine all figures into a single PDF)",
+            variable=self.generate_combined_pdf,
+        )
+        combined_pdf_cb.grid(row=8, column=0, columnspan=4, sticky=tk.W, padx=5, pady=(6, 0))
+        ToolTip(
+            combined_pdf_cb,
+            "After the visualization step finishes, combine all per-tomogram figures into the "
+            "combined visualization/zonogram PDF summaries. Off by default (this step is slow "
+            "and runs at the very end).",
+        )
 
         # Tooltips for custom parameters
         ToolTip(az_min_entry, "Active-zone minimum pre/post membrane distance in nm (default 10.0).")
@@ -1333,6 +1346,8 @@ Do you want to continue?"""
                     cli += ["--vertex-sampling-step", str(int(self.vertex_sampling_step.get()))]
                 except ValueError:
                     pass
+            if self.generate_combined_pdf.get():
+                cli += ["--generate-combined-pdf"]
         
         # Add flags from checkboxes
         rerun_var, checkfiles_var = getattr(tab, '_flag_vars', (None, None))

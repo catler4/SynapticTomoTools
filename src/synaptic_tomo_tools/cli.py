@@ -290,7 +290,8 @@ def run_vesicles(
 def generate_visualizations(tomo_paths, results_manager, rerun=False, print_ascii=True, csv_path=None, 
                             sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None,
                             aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None,
-                            vesicle_distance_threshold=None, fusing_perimeter_threshold=None):
+                            vesicle_distance_threshold=None, fusing_perimeter_threshold=None,
+                            generate_combined_pdf=False):
     """Generate visualization images for each tomogram after analysis is complete."""
     if print_ascii:
         print_synapse_ascii_art()
@@ -423,35 +424,42 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
     print(f"  Individual tomogram directories: {viz_output_dir}")
     print(f"  Organized results directory: {base_viz_dir}")
 
-    # Per-tomogram active zonogram analysis runs in the loop above. PDF summaries are generated once here.
-    print("\n" + "="*60)
-    print("GENERATING VISUALIZATION PDF SUMMARIES")
-    print("="*60)
-    try:
-        from .visualization import (
-            unpack_tomo_csv_row,
-            generate_default_visualization_pdf_summary,
-            generate_zonogram_pdf_summaries,
+    # Per-tomogram active zonogram analysis runs in the loop above. Combined PDF
+    # summaries are generated once here, only when explicitly requested.
+    if not generate_combined_pdf:
+        print(
+            "\nSkipping combined visualization PDF generation "
+            "(disabled by default; enable via --generate-combined-pdf or the GUI toggle)."
         )
+    else:
+        print("\n" + "="*60)
+        print("GENERATING VISUALIZATION PDF SUMMARIES")
+        print("="*60)
+        try:
+            from .visualization import (
+                unpack_tomo_csv_row,
+                generate_default_visualization_pdf_summary,
+                generate_zonogram_pdf_summaries,
+            )
 
-        root_dir = None
-        data_dir = None
-        if tomo_paths:
-            first_path, _, _, _ = unpack_tomo_csv_row(tomo_paths[0])
-            first_tomo_path = Path(first_path)
-            if first_tomo_path.parent.name == "TOP_TOMOS":
-                root_dir = str(first_tomo_path.parent.parent.parent)
-                data_dir = root_dir
+            root_dir = None
+            data_dir = None
+            if tomo_paths:
+                first_path, _, _, _ = unpack_tomo_csv_row(tomo_paths[0])
+                first_tomo_path = Path(first_path)
+                if first_tomo_path.parent.name == "TOP_TOMOS":
+                    root_dir = str(first_tomo_path.parent.parent.parent)
+                    data_dir = root_dir
 
-        print("\nGenerating PDF summary...")
-        generate_default_visualization_pdf_summary(tomo_paths, csv_path, root_dir)
-        print("\nGenerating zonogram PDF summaries...")
-        generate_zonogram_pdf_summaries(None, tomo_paths, data_dir)
-        print("Visualization PDF summaries completed successfully!")
-    except Exception as e:
-        print(f"Error generating visualization PDF summaries (tomogram results unchanged): {e}")
-        import traceback
-        traceback.print_exc()
+            print("\nGenerating PDF summary...")
+            generate_default_visualization_pdf_summary(tomo_paths, csv_path, root_dir)
+            print("\nGenerating zonogram PDF summaries...")
+            generate_zonogram_pdf_summaries(None, tomo_paths, data_dir)
+            print("Visualization PDF summaries completed successfully!")
+        except Exception as e:
+            print(f"Error generating visualization PDF summaries (tomogram results unchanged): {e}")
+            import traceback
+            traceback.print_exc()
 
 # Canonical order of pipeline steps for `--analysis all`.
 PIPELINE_STEPS = ("activezone", "vesicles", "aunps", "visualizations")
@@ -472,7 +480,8 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
                      run_aunp_monomer_dimer_ripley=False,
                      monomer_star_pattern=None,
                      dimer_star_pattern=None,
-                     steps=None):
+                     steps=None,
+                     generate_combined_pdf=False):
     """Run selected pipeline steps in canonical order: activezone, vesicles, aunps, visualizations.
 
     steps: iterable of step names to run (subset of PIPELINE_STEPS). None = all steps.
@@ -544,7 +553,8 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
                                 aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
                                 aunp_distance_cutoff_value=aunp_distance_cutoff_value,
                                 vesicle_distance_threshold=vesicle_distance_threshold,
-                                fusing_perimeter_threshold=fusing_perimeter_threshold)
+                                fusing_perimeter_threshold=fusing_perimeter_threshold,
+                                generate_combined_pdf=generate_combined_pdf)
     
     print("\n" + "="*80)
     print("SELECTED ANALYSES COMPLETED!")
@@ -833,6 +843,13 @@ def main():
             "Only used with --analysis all. Comma-separated subset of pipeline steps to run "
             "(choices: activezone, vesicles, aunps, visualizations). Steps always run in canonical "
             "order regardless of listing order. Default: all four steps."
+        ),
+    )
+    parser.add_argument(
+        "--generate-combined-pdf", action="store_true",
+        help=(
+            "At the end of the visualization step, combine all per-tomogram figures into the "
+            "combined visualization/zonogram PDF summaries. Off by default."
         ),
     )
     parser.add_argument(
@@ -1172,7 +1189,8 @@ def main():
                                 aunp_distance_cutoff_direction=aunp_distance_cutoff_direction,
                                 aunp_distance_cutoff_value=aunp_distance_cutoff_value,
                                 vesicle_distance_threshold=vesicle_distance_threshold,
-                                fusing_perimeter_threshold=fusing_perimeter_threshold)
+                                fusing_perimeter_threshold=fusing_perimeter_threshold,
+                                generate_combined_pdf=args.generate_combined_pdf)
     elif args.analysis == "all":
         selected_steps = None
         if getattr(args, "steps", None):
@@ -1202,7 +1220,8 @@ def main():
                          run_aunp_monomer_dimer_ripley=run_aunp_monomer_dimer_ripley,
                          monomer_star_pattern=monomer_star_pattern,
                          dimer_star_pattern=dimer_star_pattern,
-                         steps=selected_steps)
+                         steps=selected_steps,
+                         generate_combined_pdf=args.generate_combined_pdf)
 
     # Always export summary CSVs at the end
     print("\nExporting all summary CSVs from stored results...")
