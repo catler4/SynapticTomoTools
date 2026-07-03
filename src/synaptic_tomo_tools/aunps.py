@@ -1213,7 +1213,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         if run_aunp_vs_az_center_ripley:
             print("Running AuNP vs active zone center Ripley L₁₂ analyses...")
             try:
-                from .activezone import import_active_zone_segmentations, load_active_zone_mapping
+                from .activezone import load_active_zone_mapping
                 from .aunp_ripley_vs_active_zone_center import (
                     POOLED_CURVES_CSV,
                     plot_pooled_aunp_vs_az_center_ripley_visualizations,
