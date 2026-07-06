@@ -16,12 +16,14 @@ Pooled output is grouped per tomogram set.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 from .alignment_utils import require_alignment_dir
 from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
@@ -99,6 +101,7 @@ def _label_permutation_l12_curves(
     rng: np.random.Generator,
     *,
     n_perm: int,
+    pbar: Optional[tqdm] = None,
 ) -> np.ndarray:
     """
     Label-permutation null L₁₂ curves.
@@ -119,6 +122,9 @@ def _label_permutation_l12_curves(
         mask = np.zeros(n_pool, dtype=bool)
         mask[class1_idx] = True
         curves[perm_id] = ripley_l12_from_points(pool[mask], pool[~mask], r_vals, window, rng)
+        if pbar is not None:
+            pbar.set_postfix_str(f"perm {perm_id + 1}/{int(n_perm)}", refresh=False)
+            pbar.update(1)
     return curves
 
 
@@ -278,10 +284,33 @@ def run_monomer_dimer_ripley_for_zone(
 
     r_vals = _ripley_r_grid(r_max_nm, r_step_nm)
     rng = np.random.default_rng(seed)
-    observed_l12 = ripley_l12_from_points(monomer_coords, dimer_coords, r_vals, window, rng)
-    perm_curves = _label_permutation_l12_curves(
-        monomer_coords, dimer_coords, r_vals, window, rng, n_perm=n_perm
+    n_perm_int = int(n_perm)
+    progress_total = 1 + max(n_perm_int, 0)
+    pbar = tqdm(
+        total=progress_total,
+        desc=f"{zone_name} monomer/dimer Ripley",
+        unit="eval",
+        file=sys.stdout,
+        dynamic_ncols=True,
+        leave=False,
     )
+    try:
+        pbar.set_postfix_str("observed", refresh=False)
+        observed_l12 = ripley_l12_from_points(
+            monomer_coords, dimer_coords, r_vals, window, rng
+        )
+        pbar.update(1)
+        perm_curves = _label_permutation_l12_curves(
+            monomer_coords,
+            dimer_coords,
+            r_vals,
+            window,
+            rng,
+            n_perm=n_perm_int,
+            pbar=pbar if n_perm_int > 0 else None,
+        )
+    finally:
+        pbar.close()
     _, perm_mean, _ = _percentile_band(perm_curves)
     if len(perm_mean) != len(r_vals):
         perm_mean = np.full(len(r_vals), np.nan)
@@ -417,16 +446,27 @@ def run_monomer_dimer_ripley_for_tomogram(
     curve_frames: list[pd.DataFrame] = []
     prism_frames: list[pd.DataFrame] = []
 
+    zone_tasks = [
+        (int(az_idx), az_mapping[az_idx])
+        for az_idx in indices
+        if int(az_idx) in az_mapping
+    ]
     for az_idx in indices:
-        if az_idx not in az_mapping:
+        if int(az_idx) not in az_mapping:
             print(f"  Active zone index {az_idx} not in mapping, skipping monomer/dimer Ripley")
-            continue
-        zone_name = az_mapping[az_idx]
+    for az_idx, zone_name in tqdm(
+        zone_tasks,
+        desc=f"{tomogram_path.name} monomer/dimer Ripley zones",
+        unit="zone",
+        file=sys.stdout,
+        dynamic_ncols=True,
+        leave=True,
+    ):
         result = run_monomer_dimer_ripley_for_zone(
             tomogram_path,
             alignment_dir,
             zone_name,
-            int(az_idx),
+            az_idx,
             monomer_star_pattern=monomer_star_pattern,
             dimer_star_pattern=dimer_star_pattern,
             n_perm=n_perm,
