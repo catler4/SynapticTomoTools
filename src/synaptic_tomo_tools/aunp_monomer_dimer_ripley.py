@@ -32,10 +32,12 @@ from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
     DEFAULT_RIPLEY_R_STEP_NM,
     RIPLEY_PERCENTILE_HI,
     RIPLEY_PERCENTILE_LO,
+    _default_ripley_perm_workers,
     _percentile_band,
     _prism_sd_envelope_columns,
     _ripley_r_grid,
     build_ripley_window_3d,
+    label_permutation_l12_curves,
     load_monomer_dimer_aunps_for_zone,
     load_synaptic_cleft_active_zone_points,
     ripley_l12_from_points,
@@ -91,41 +93,6 @@ def _extract_curves_matrix(df: pd.DataFrame, value_col: str) -> tuple[np.ndarray
     if not curves:
         return r_vals, np.empty((0, n_r))
     return r_vals, np.vstack(curves)
-
-
-def _label_permutation_l12_curves(
-    monomer_coords: np.ndarray,
-    dimer_coords: np.ndarray,
-    r_vals: np.ndarray,
-    window,
-    rng: np.random.Generator,
-    *,
-    n_perm: int,
-    pbar: Optional[tqdm] = None,
-) -> np.ndarray:
-    """
-    Label-permutation null L₁₂ curves.
-
-    Pool all monomer + dimer points, then for each replicate randomly relabel exactly
-    ``n_monomer`` points as class 1 (monomer) and the rest as class 2 (dimer), preserving
-    the per-zone class counts. Returns an ``(n_perm, len(r_vals))`` array.
-    """
-    pool = np.vstack([np.atleast_2d(monomer_coords), np.atleast_2d(dimer_coords)])
-    n_pool = len(pool)
-    n_monomer = len(monomer_coords)
-    curves = np.full((int(n_perm), len(r_vals)), np.nan, dtype=float)
-    if n_pool == 0 or n_monomer == 0 or n_monomer >= n_pool:
-        return curves
-
-    for perm_id in range(int(n_perm)):
-        class1_idx = rng.choice(n_pool, n_monomer, replace=False)
-        mask = np.zeros(n_pool, dtype=bool)
-        mask[class1_idx] = True
-        curves[perm_id] = ripley_l12_from_points(pool[mask], pool[~mask], r_vals, window, rng)
-        if pbar is not None:
-            pbar.set_postfix_str(f"perm {perm_id + 1}/{int(n_perm)}", refresh=False)
-            pbar.update(1)
-    return curves
 
 
 def build_monomer_dimer_prism_table(
@@ -285,6 +252,7 @@ def run_monomer_dimer_ripley_for_zone(
     r_vals = _ripley_r_grid(r_max_nm, r_step_nm)
     rng = np.random.default_rng(seed)
     n_perm_int = int(n_perm)
+    n_perm_workers = _default_ripley_perm_workers(n_perm_int)
     progress_total = 1 + max(n_perm_int, 0)
     pbar = tqdm(
         total=progress_total,
@@ -300,13 +268,14 @@ def run_monomer_dimer_ripley_for_zone(
             monomer_coords, dimer_coords, r_vals, window, rng
         )
         pbar.update(1)
-        perm_curves = _label_permutation_l12_curves(
+        perm_curves = label_permutation_l12_curves(
             monomer_coords,
             dimer_coords,
             r_vals,
             window,
-            rng,
             n_perm=n_perm_int,
+            seed=seed,
+            rng=rng,
             pbar=pbar if n_perm_int > 0 else None,
         )
     finally:
@@ -398,6 +367,7 @@ def run_monomer_dimer_ripley_for_zone(
         "n_monomer": int(n_monomer),
         "n_dimer": int(n_dimer),
         "n_permutations": int(n_perm),
+        "n_perm_workers": int(n_perm_workers),
         "window_volume_nm3": float(window.volume_nm3),
         "control": "label_permutation_preserving_class_counts",
         "ripley_edge_correction": "isotropic_3d_mc",

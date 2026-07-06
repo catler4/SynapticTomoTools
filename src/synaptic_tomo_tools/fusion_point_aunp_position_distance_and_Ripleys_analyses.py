@@ -20,6 +20,8 @@ file exists, analyses run for that kind only.
 from __future__ import annotations
 
 import json
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional, Sequence
@@ -453,6 +455,129 @@ def ripley_l12_from_points(
 def _ripley_r_grid(r_max_nm: float, r_step_nm: float) -> np.ndarray:
     n_steps = max(1, int(np.floor(r_max_nm / r_step_nm)))
     return np.arange(r_step_nm, r_max_nm + 0.5 * r_step_nm, r_step_nm, dtype=float)
+
+
+# Shared context for parallel label-permutation L₁₂ workers (set via pool initializer).
+_PERM_L12_CTX: dict = {}
+
+
+def _default_ripley_perm_workers(n_perm: int) -> int:
+    """Worker count for label-permutation Ripley evals (override via SYNAPTIC_RIPLEY_PERM_WORKERS)."""
+    n_perm = int(n_perm)
+    if n_perm <= 1:
+        return 1
+    env = os.environ.get("SYNAPTIC_RIPLEY_PERM_WORKERS")
+    if env is not None and str(env).strip():
+        try:
+            return max(1, min(int(env), n_perm))
+        except ValueError:
+            pass
+    n_cpu = os.cpu_count() or 1
+    return max(1, min(n_cpu, n_perm))
+
+
+def _init_label_perm_l12_worker(
+    pool: np.ndarray,
+    r_vals: np.ndarray,
+    window: RipleyWindow3D,
+    n_monomer: int,
+) -> None:
+    _PERM_L12_CTX["pool"] = pool
+    _PERM_L12_CTX["r_vals"] = r_vals
+    _PERM_L12_CTX["window"] = window
+    _PERM_L12_CTX["n_monomer"] = int(n_monomer)
+
+
+def _label_perm_l12_worker(task: tuple[int, int]) -> tuple[int, np.ndarray]:
+    """Run one label-permuted L₁₂ curve (perm_id, seed)."""
+    perm_id, seed = task
+    pool = _PERM_L12_CTX["pool"]
+    r_vals = _PERM_L12_CTX["r_vals"]
+    window = _PERM_L12_CTX["window"]
+    n_monomer = _PERM_L12_CTX["n_monomer"]
+    rng = np.random.default_rng(int(seed))
+    class1_idx = rng.choice(len(pool), n_monomer, replace=False)
+    mask = np.zeros(len(pool), dtype=bool)
+    mask[class1_idx] = True
+    curve = ripley_l12_from_points(pool[mask], pool[~mask], r_vals, window, rng)
+    return int(perm_id), curve
+
+
+def _label_permutation_l12_curves_sequential(
+    pool: np.ndarray,
+    n_monomer: int,
+    r_vals: np.ndarray,
+    window: RipleyWindow3D,
+    rng: np.random.Generator,
+    *,
+    n_perm: int,
+    pbar=None,
+) -> np.ndarray:
+    """Sequential label-permutation null L₁₂ curves."""
+    n_pool = len(pool)
+    curves = np.full((int(n_perm), len(r_vals)), np.nan, dtype=float)
+    for perm_id in range(int(n_perm)):
+        class1_idx = rng.choice(n_pool, n_monomer, replace=False)
+        mask = np.zeros(n_pool, dtype=bool)
+        mask[class1_idx] = True
+        curves[perm_id] = ripley_l12_from_points(pool[mask], pool[~mask], r_vals, window, rng)
+        if pbar is not None:
+            pbar.set_postfix_str(f"perm {perm_id + 1}/{int(n_perm)}", refresh=False)
+            pbar.update(1)
+    return curves
+
+
+def label_permutation_l12_curves(
+    monomer_coords: np.ndarray,
+    dimer_coords: np.ndarray,
+    r_vals: np.ndarray,
+    window: RipleyWindow3D,
+    *,
+    n_perm: int,
+    seed: int = DEFAULT_ANALYSIS_SEED,
+    rng: np.random.Generator | None = None,
+    n_workers: int | None = None,
+    pbar=None,
+) -> np.ndarray:
+    """
+    Label-permutation null L₁₂ curves with optional process parallelism.
+
+    Pool monomer + dimer points, then for each replicate randomly relabel exactly
+    ``n_monomer`` points as class 1 (monomer) and the rest as class 2 (dimer).
+    Returns an ``(n_perm, len(r_vals))`` array.
+    """
+    pool = np.vstack([np.atleast_2d(monomer_coords), np.atleast_2d(dimer_coords)])
+    n_pool = len(pool)
+    n_monomer = len(np.atleast_2d(monomer_coords))
+    n_perm_int = int(n_perm)
+    curves = np.full((n_perm_int, len(r_vals)), np.nan, dtype=float)
+    if n_pool == 0 or n_monomer == 0 or n_monomer >= n_pool or n_perm_int == 0:
+        return curves
+
+    if n_workers is None:
+        n_workers = _default_ripley_perm_workers(n_perm_int)
+    n_workers = max(1, min(int(n_workers), n_perm_int))
+
+    if n_workers == 1:
+        perm_rng = rng if rng is not None else np.random.default_rng(int(seed))
+        return _label_permutation_l12_curves_sequential(
+            pool, n_monomer, r_vals, window, perm_rng, n_perm=n_perm_int, pbar=pbar
+        )
+
+    tasks = [(perm_id, int(seed) + 1 + perm_id) for perm_id in range(n_perm_int)]
+    with ProcessPoolExecutor(
+        max_workers=n_workers,
+        initializer=_init_label_perm_l12_worker,
+        initargs=(pool, r_vals, window, n_monomer),
+    ) as executor:
+        futures = [executor.submit(_label_perm_l12_worker, task) for task in tasks]
+        for fut in as_completed(futures):
+            perm_id, curve = fut.result()
+            curves[perm_id] = curve
+            if pbar is not None:
+                pbar.set_postfix_str(f"perm {perm_id + 1}/{n_perm_int}", refresh=False)
+                pbar.update(1)
+    return curves
 
 
 def _fusion_xyz_from_rows(rows: Sequence[dict]) -> np.ndarray:
