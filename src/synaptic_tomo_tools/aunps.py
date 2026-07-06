@@ -591,7 +591,8 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                   run_aunp_vs_az_center_ripley=False,
                   run_aunp_monomer_dimer_ripley=False,
                   monomer_star_pattern=None,
-                  dimer_star_pattern=None):
+                  dimer_star_pattern=None,
+                  monomer_dimer_ripley_n_perm=None):
     """
     Performs analysis of gold nanoparticles (AuNPs) in the tomogram.
 
@@ -623,6 +624,8 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             zone index (default: ``aunp_tm_BP_active_zone_*_manual_refined_monomer.star``).
         dimer_star_pattern (str or None): Per-AZ dimer STAR filename pattern with ``*`` for the active
             zone index (default: ``aunp_tm_BP_active_zone_*_manual_refined_dimer.star``).
+        monomer_dimer_ripley_n_perm (int or None): Label-permutation replicate count for monomer vs
+            dimer Ripley L₁₂ (default: 1000).
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     print(f"Analyzing AuNPs in {Path(tomogram_path).name}")
@@ -1284,6 +1287,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                     active_zone_indices=az_indices_for_md,
                     monomer_star_pattern=monomer_star_pattern,
                     dimer_star_pattern=dimer_star_pattern,
+                    n_perm=monomer_dimer_ripley_n_perm,
                     write_figures=True,
                 )
                 if md_ripley_frames:

@@ -91,6 +91,7 @@ class AnalysisPipelineGUI(tk.Tk):
         self.run_aunp_monomer_dimer_ripley = tk.BooleanVar(value=False)
         self.monomer_star_pattern = tk.StringVar(value="")
         self.dimer_star_pattern = tk.StringVar(value="")
+        self.monomer_dimer_ripley_n_perm = tk.StringVar(value="1000")
         self.generate_combined_pdf = tk.BooleanVar(value=False)
         
         self._build_tabs()
@@ -341,6 +342,16 @@ class AnalysisPipelineGUI(tk.Tk):
             command=self._toggle_monomer_dimer_star_entries,
         )
         monomer_dimer_cb.grid(row=12, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(4, 0))
+        ttk.Label(aunp_frame, text="Monomer/dimer Ripley label-permutation count:").grid(
+            row=13, column=0, sticky=tk.W, padx=5
+        )
+        self._monomer_dimer_ripley_n_perm_entry = ttk.Entry(
+            aunp_frame, textvariable=self.monomer_dimer_ripley_n_perm, width=8
+        )
+        self._monomer_dimer_ripley_n_perm_entry.grid(row=13, column=1, padx=5, sticky=tk.W)
+        ttk.Label(aunp_frame, text="(default: 1000; use 10 for quick tests)").grid(
+            row=13, column=2, padx=5, sticky=tk.W
+        )
         self._toggle_monomer_dimer_star_entries()
         
         # Visualization parameters
@@ -446,7 +457,12 @@ class AnalysisPipelineGUI(tk.Tk):
         ToolTip(
             monomer_dimer_cb,
             "3D bivariate Ripley L₁₂ of monomer vs dimer AuNP positions with a label-permutation "
-            "control (1000 replicates). Uses the monomer/dimer STAR patterns above.",
+            "control. Uses the monomer/dimer STAR patterns above.",
+        )
+        ToolTip(
+            self._monomer_dimer_ripley_n_perm_entry,
+            "Number of label-permutation replicates for the monomer vs dimer Ripley null "
+            "(default 1000). Use a small value (e.g. 10) for quick pipeline tests.",
         )
         ToolTip(sphere_size_entry, "Marker size for visualization sphere overlays (default 36).")
         ToolTip(self.sphere_color_combo, "Marker color for visualization sphere overlays (default gold).")
@@ -985,12 +1001,20 @@ Do you want to continue?"""
         return []
 
     def _cli_aunp_monomer_dimer_ripley_args(self):
-        """CLI flag for optional monomer vs dimer AuNP Ripley L₁₂."""
+        """CLI flags for optional monomer vs dimer AuNP Ripley L₁₂."""
         if not self.use_custom_params.get():
             return []
-        if self.run_aunp_monomer_dimer_ripley.get():
-            return ["--aunp-monomer-dimer-ripley"]
-        return []
+        if not self.run_aunp_monomer_dimer_ripley.get():
+            return []
+        args = ["--aunp-monomer-dimer-ripley"]
+        if self.monomer_dimer_ripley_n_perm.get().strip():
+            try:
+                n_perm = int(self.monomer_dimer_ripley_n_perm.get())
+                if n_perm > 0:
+                    args += ["--monomer-dimer-ripley-n-perm", str(n_perm)]
+            except ValueError:
+                pass
+        return args
 
     def _toggle_monomer_dimer_star_entries(self):
         """Enable monomer/dimer STAR fields when any analysis using them is enabled."""
@@ -1002,6 +1026,9 @@ Do you want to continue?"""
         if hasattr(self, "_monomer_star_entry"):
             self._monomer_star_entry.configure(state=state)
             self._dimer_star_entry.configure(state=state)
+        if hasattr(self, "_monomer_dimer_ripley_n_perm_entry"):
+            perm_state = "normal" if self.run_aunp_monomer_dimer_ripley.get() else "disabled"
+            self._monomer_dimer_ripley_n_perm_entry.configure(state=perm_state)
 
     def _toggle_custom_params(self):
         """Handle custom parameters toggle to show/hide custom parameters frame."""

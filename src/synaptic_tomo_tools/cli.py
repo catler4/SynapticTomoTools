@@ -480,6 +480,7 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
                      run_aunp_monomer_dimer_ripley=False,
                      monomer_star_pattern=None,
                      dimer_star_pattern=None,
+                     monomer_dimer_ripley_n_perm=None,
                      steps=None,
                      generate_combined_pdf=False):
     """Run selected pipeline steps in canonical order: activezone, vesicles, aunps, visualizations.
@@ -541,7 +542,8 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
                   run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
                   run_aunp_monomer_dimer_ripley=run_aunp_monomer_dimer_ripley,
                   monomer_star_pattern=monomer_star_pattern,
-                  dimer_star_pattern=dimer_star_pattern)
+                  dimer_star_pattern=dimer_star_pattern,
+                  monomer_dimer_ripley_n_perm=monomer_dimer_ripley_n_perm)
     
     if "visualizations" in steps_to_run:
         print("\n" + "="*80)
@@ -571,7 +573,8 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
               run_aunp_vs_az_center_ripley=False,
               run_aunp_monomer_dimer_ripley=False,
               monomer_star_pattern=None,
-              dimer_star_pattern=None):
+              dimer_star_pattern=None,
+              monomer_dimer_ripley_n_perm=None):
     if print_ascii:
         print_synapse_ascii_art()
     for i, (tomo, set_name, aunp_active_zones, alignment_dir) in enumerate(tomo_paths):
@@ -642,7 +645,8 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
                                          run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
                                          run_aunp_monomer_dimer_ripley=run_aunp_monomer_dimer_ripley,
                                          monomer_star_pattern=monomer_star_pattern,
-                                         dimer_star_pattern=dimer_star_pattern)
+                                         dimer_star_pattern=dimer_star_pattern,
+                                         monomer_dimer_ripley_n_perm=monomer_dimer_ripley_n_perm)
             
             # Store combined results
             combined_results = {
@@ -1020,6 +1024,15 @@ def main():
             "patterns. Use --aunp-monomer-dimer-ripley to enable."
         ),
     )
+    parser.add_argument(
+        "--monomer-dimer-ripley-n-perm",
+        type=int,
+        default=None,
+        help=(
+            "Label-permutation replicate count for monomer vs dimer Ripley L₁₂ "
+            f"(default: {1000}). Only used with --aunp-monomer-dimer-ripley."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -1153,6 +1166,7 @@ def main():
     run_aunp_monomer_dimer_ripley = args.run_aunp_monomer_dimer_ripley
     monomer_star_pattern = args.monomer_star_pattern
     dimer_star_pattern = args.dimer_star_pattern
+    monomer_dimer_ripley_n_perm = args.monomer_dimer_ripley_n_perm
     
     if args.analysis == "activezone":
         run_activezone(tomos, results_manager, rerun=args.rerun, 
@@ -1181,7 +1195,8 @@ def main():
                   run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
                   run_aunp_monomer_dimer_ripley=run_aunp_monomer_dimer_ripley,
                   monomer_star_pattern=monomer_star_pattern,
-                  dimer_star_pattern=dimer_star_pattern)
+                  dimer_star_pattern=dimer_star_pattern,
+                  monomer_dimer_ripley_n_perm=monomer_dimer_ripley_n_perm)
     elif args.analysis == "visualizations":
         generate_visualizations(tomos, results_manager, rerun=args.rerun, csv_path=args.csv,
                                 sphere_size=sphere_size, sphere_color=sphere_color,
@@ -1220,6 +1235,7 @@ def main():
                          run_aunp_monomer_dimer_ripley=run_aunp_monomer_dimer_ripley,
                          monomer_star_pattern=monomer_star_pattern,
                          dimer_star_pattern=dimer_star_pattern,
+                         monomer_dimer_ripley_n_perm=monomer_dimer_ripley_n_perm,
                          steps=selected_steps,
                          generate_combined_pdf=args.generate_combined_pdf)
 
