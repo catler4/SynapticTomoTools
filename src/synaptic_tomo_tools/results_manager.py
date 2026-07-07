@@ -256,6 +256,52 @@ class ResultsManager:
         print(f"Exported activezone results to {csv_path} ({len(rows)} zone rows)")
         return csv_path
 
+    def export_aunps_per_zone_csv(self) -> Optional[Path]:
+        """Export AuNP results as one row per tomogram + active zone."""
+        rows: List[Dict[str, Any]] = []
+        skipped = 0
+        for results_key, analyses in self.results.items():
+            if "aunps" not in analyses or "results" not in analyses["aunps"]:
+                continue
+            data = analyses["aunps"]
+            results = data["results"]
+            aunp_results = results.get("aunp_analysis", results)
+            zone_results = aunp_results.get("individual_zone_results") or {}
+            if not zone_results:
+                skipped += 1
+                continue
+
+            set_name = data.get("set_name", "") or ""
+            alignment_dir = data.get("alignment_dir", "") or ""
+            if "__" in results_key:
+                tomogram_name, key_alignment = results_key.split("__", 1)
+                if not alignment_dir:
+                    alignment_dir = key_alignment
+            else:
+                tomogram_name = results_key
+
+            for zone_row in zone_results.values():
+                if isinstance(zone_row, dict):
+                    rows.append(dict(zone_row))
+
+        if not rows:
+            if skipped:
+                print(
+                    "No per-zone AuNP rows to export "
+                    f"({skipped} tomogram(s) lack individual_zone_results; re-run AuNP analysis)."
+                )
+            return None
+
+        csv_path = self.results_dir / "aunps" / "aunps_results.csv"
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        df = pd.DataFrame(rows)
+        df.columns = [self._add_units_to_column_name(col) for col in df.columns]
+        df.to_csv(csv_path, index=False)
+        print(f"Exported aunps results to {csv_path} ({len(rows)} zone rows)")
+        if skipped:
+            print(f"  Skipped {skipped} tomogram(s) without per-zone AuNP data (re-run to include).")
+        return csv_path
+
     def export_to_csv(self, output_file: Optional[str] = None):
         """Export results to separate CSV files for each analysis type."""
         # Group results by analysis type
@@ -263,7 +309,7 @@ class ResultsManager:
         
         for tomogram_name, analyses in self.results.items():
             for analysis_type, data in analyses.items():
-                if analysis_type == "activezone":
+                if analysis_type in ("activezone", "aunps"):
                     continue
                 if 'results' in data:
                     if analysis_type not in analysis_groups:
@@ -291,6 +337,9 @@ class ResultsManager:
         activezone_csv = self.export_activezone_per_zone_csv()
         if activezone_csv is not None:
             exported_files.append(activezone_csv)
+        aunps_csv = self.export_aunps_per_zone_csv()
+        if aunps_csv is not None:
+            exported_files.append(aunps_csv)
 
         for analysis_type, rows in analysis_groups.items():
             if rows:

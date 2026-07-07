@@ -578,6 +578,111 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
     
     return pd.DataFrame(results), pd.DataFrame(long_rows)
 
+
+AUNPS_RESULTS_CSV = Path("results/aunps/aunps_results.csv")
+
+
+def build_aunps_per_zone_rows(
+    *,
+    tomogram_name: str,
+    set_name: str,
+    alignment_dir: str,
+    df_valid: pd.DataFrame,
+    az_individual_zone_results: Dict[str, Dict[str, Any]],
+    packing_density_results: Optional[Dict[str, Dict[str, Any]]] = None,
+    status: str = "completed",
+) -> List[Dict[str, Any]]:
+    """Build one CSV row per active zone from AuNP analysis results."""
+    packing_density_results = packing_density_results or {}
+
+    idx_to_name: Dict[int, str] = {}
+    for zone_name, zdata in az_individual_zone_results.items():
+        idx = zdata.get("active_zone_index")
+        if idx is not None:
+            idx_to_name[int(idx)] = zone_name
+
+    zone_names = sorted(set(az_individual_zone_results) | set(idx_to_name.values()))
+    if not zone_names and not df_valid.empty:
+        for idx in sorted(df_valid["active_zone"].unique()):
+            zone_names.append(f"active_zone_{int(idx)}")
+
+    distance_cols = [
+        "nearest_neighbor_distance",
+        "distance_to_presynaptic",
+        "distance_to_postsynaptic",
+        "distance_to_postsynaptic_active_outer",
+        "distance_to_active_zone_center",
+    ]
+
+    rows: List[Dict[str, Any]] = []
+    for zone_name in zone_names:
+        z_az = az_individual_zone_results.get(zone_name, {})
+        zone_idx = z_az.get("active_zone_index")
+        if zone_idx is None:
+            for idx, name in idx_to_name.items():
+                if name == zone_name:
+                    zone_idx = idx
+                    break
+
+        if zone_idx is not None:
+            zone_df = df_valid[df_valid["active_zone"] == int(zone_idx)]
+        else:
+            zone_df = df_valid.iloc[0:0]
+
+        n_aunps = int(len(zone_df))
+        if "synaptic_designation" in zone_df.columns and n_aunps > 0:
+            n_synaptic = int((zone_df["synaptic_designation"] == "synaptic").sum())
+        else:
+            n_synaptic = 0
+        n_extrasynaptic = n_aunps - n_synaptic
+
+        post_area = z_az.get("active_postsynaptic_area")
+        if post_area is not None and float(post_area) > 0:
+            post_area_f = float(post_area)
+            aunp_density = float(n_aunps / post_area_f)
+            synaptic_aunp_density = float(n_synaptic / post_area_f)
+        else:
+            post_area_f = float(post_area) if post_area is not None else np.nan
+            aunp_density = np.nan
+            synaptic_aunp_density = np.nan
+
+        row: Dict[str, Any] = {
+            "tomogram_name": tomogram_name,
+            "set_name": set_name or "",
+            "alignment_dir": alignment_dir,
+            "active_zone": zone_name,
+            "active_zone_index": zone_idx,
+            "status": status,
+            "aunp_count": n_aunps,
+            "synaptic_aunp_count": n_synaptic,
+            "extrasynaptic_aunp_count": n_extrasynaptic,
+            "aunp_density": aunp_density,
+            "synaptic_aunp_density": synaptic_aunp_density,
+            "active_postsynaptic_area_um2": post_area_f,
+        }
+
+        for col in distance_cols:
+            key = f"{col}_mean"
+            if col in zone_df.columns and n_aunps > 0:
+                row[key] = float(zone_df[col].mean())
+            else:
+                row[key] = np.nan
+
+        if "aunp_cluster" in zone_df.columns and n_aunps > 0:
+            clusters = zone_df["aunp_cluster"].unique()
+            row["aunp_cluster_count"] = int(len(clusters) - (1 if -1 in clusters else 0))
+        else:
+            row["aunp_cluster_count"] = 0
+
+        pack = packing_density_results.get(zone_name, {})
+        row["packing_density_max"] = pack.get("max_packing_coefficient", np.nan)
+        row["packing_density_avg"] = pack.get("avg_packing_coefficient", np.nan)
+        row["packing_density_min"] = pack.get("min_packing_coefficient", np.nan)
+
+        rows.append(row)
+    return rows
+
+
 def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, 
                   *,
                   alignment_dir: str,
@@ -1481,8 +1586,20 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         
         # Prepare summary statistics for ResultsManager
         n_aunps = len(df_valid)
+        tomogram_name = Path(tomogram_path).name
+        from .results_manager import ResultsManager
+
+        results_manager = ResultsManager("results")
+        analysis_name = f"{tomogram_name}__{alignment_dir}"
+        active_zone_results = results_manager.get_tomogram_results(analysis_name, "activezone")
+        az_data: Dict[str, Any] = {}
+        az_individual_zone_results: Dict[str, Dict[str, Any]] = {}
+        if active_zone_results and "results" in active_zone_results:
+            az_data = active_zone_results["results"].get("active_zone", {})
+            az_individual_zone_results = az_data.get("individual_zone_results") or {}
+
         summary_stats = {
-            'aunp_count': n_aunps,
+            "aunp_count": n_aunps,
         }
         
         # Calculate statistics for each distance column
@@ -1507,36 +1624,31 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         # Use the saved active zone results which already contain the filtered zones
         if n_aunps > 0:
             try:
-                # Load active zone results (already filtered by active zone analysis step)
-                from .results_manager import ResultsManager
-                results_manager = ResultsManager("results")
-                analysis_name = f"{tomogram_name}__{alignment_dir}"
-                active_zone_results = results_manager.get_tomogram_results(analysis_name, 'activezone')
-                
-                if active_zone_results and 'results' in active_zone_results:
-                    az_data = active_zone_results['results'].get('active_zone', {})
-                    
-                    # Use total postsynaptic active zone area (already filtered to only include zones with AuNPs)
-                    if 'total_active_zone_post_area' not in az_data:
-                        raise ValueError("No total postsynaptic active zone area available. Cannot calculate AuNP density. Active zone analysis must be run with postsynaptic area calculation.")
-                    
-                    total_active_zone_area = az_data['total_active_zone_post_area']
-                    
-                    if total_active_zone_area <= 0:
-                        raise ValueError(f"Invalid total active zone area: {total_active_zone_area}. Area must be positive.")
-                    
-                    summary_stats['aunp_density'] = float(n_aunps / total_active_zone_area)  # AuNPs per µm²
-                else:
+                if not az_data:
                     raise ValueError(
                         f"No active zone results available for '{analysis_name}'. "
                         "Cannot calculate AuNP density. Active zone analysis must be run first for this alignment_dir."
                     )
-                
+
+                if "total_active_zone_post_area" not in az_data:
+                    raise ValueError(
+                        "No total postsynaptic active zone area available. "
+                        "Cannot calculate AuNP density. Active zone analysis must be run with postsynaptic area calculation."
+                    )
+
+                total_active_zone_area = az_data["total_active_zone_post_area"]
+
+                if total_active_zone_area <= 0:
+                    raise ValueError(
+                        f"Invalid total active zone area: {total_active_zone_area}. Area must be positive."
+                    )
+
+                summary_stats["aunp_density"] = float(n_aunps / total_active_zone_area)
             except Exception as e:
                 print(f"Error getting active zone area for density calculation: {e}")
-                raise  # Re-raise the exception instead of silently setting to 0.0
+                raise
         else:
-            summary_stats['aunp_density'] = 0.0
+            summary_stats["aunp_density"] = 0.0
         
         # Add distance to active zone center mean
         if 'distance_to_active_zone_center' in df_valid.columns and n_aunps > 0:
@@ -1565,8 +1677,21 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             summary_stats['packing_density_min'] = 0.0
         
         # Add completion status
-        summary_stats['status'] = 'completed'
-        
+        summary_stats["status"] = "completed"
+
+        per_zone_rows = build_aunps_per_zone_rows(
+            tomogram_name=tomogram_name,
+            set_name=set_name or "",
+            alignment_dir=alignment_dir,
+            df_valid=df_valid,
+            az_individual_zone_results=az_individual_zone_results,
+            packing_density_results=packing_density_results,
+            status="completed",
+        )
+        summary_stats["individual_zone_results"] = {
+            row["active_zone"]: row for row in per_zone_rows
+        }
+
         return summary_stats
         
     except Exception as e:
