@@ -10,6 +10,9 @@ matching the vesicle fusion-site bivariate Ripley setup.
 Control: label permutation — pool all monomer + dimer points, then randomly reassign class
 labels while preserving the per-zone monomer and dimer counts (1000 replicates by default).
 
+Greedy segregation — same pooled points and class counts, but relabel by growing a compact
+spatial cluster (random seed) for monomers or dimers (10 replicates each by default).
+
 Pooled output is grouped per tomogram set.
 """
 
@@ -46,6 +49,7 @@ from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
 
 WINDOW_MODE = "synaptic_cleft_az_hull"
 MONOMER_DIMER_N_PERM = 1000
+MONOMER_DIMER_N_SEGREGATION = 10
 MIN_POINTS_PER_CLASS = 2
 
 POOLED_CURVES_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_curves.csv")
@@ -95,20 +99,141 @@ def _extract_curves_matrix(df: pd.DataFrame, value_col: str) -> tuple[np.ndarray
     return r_vals, np.vstack(curves)
 
 
+def _greedy_segregation_cluster_mask(
+    pool: np.ndarray,
+    n_cluster: int,
+    seed_idx: int,
+) -> np.ndarray:
+    """Greedy nearest-neighbor growth of a compact cluster from a seed point index."""
+    pool = np.atleast_2d(np.asarray(pool, dtype=float))
+    n_pool = len(pool)
+    n_cluster = int(n_cluster)
+    mask = np.zeros(n_pool, dtype=bool)
+    if n_pool == 0 or n_cluster <= 0 or n_cluster > n_pool:
+        return mask
+
+    seed_idx = int(seed_idx) % n_pool
+    cluster: set[int] = {seed_idx}
+    unclustered = set(range(n_pool)) - cluster
+
+    while len(cluster) < n_cluster:
+        cluster_pts = pool[sorted(cluster)]
+        best_idx: int | None = None
+        best_dist = np.inf
+        for idx in unclustered:
+            dist = float(np.min(np.linalg.norm(cluster_pts - pool[idx], axis=1)))
+            if dist < best_dist or (dist == best_dist and (best_idx is None or idx < best_idx)):
+                best_dist = dist
+                best_idx = idx
+        if best_idx is None:
+            break
+        cluster.add(best_idx)
+        unclustered.remove(best_idx)
+
+    mask[sorted(cluster)] = True
+    return mask
+
+
+def _greedy_segregation_l12_curves(
+    pool: np.ndarray,
+    n_monomer: int,
+    n_dimer: int,
+    r_vals: np.ndarray,
+    window,
+    rng: np.random.Generator,
+    *,
+    cluster_class: str,
+    n_rep: int,
+    pbar: Optional[tqdm] = None,
+) -> np.ndarray:
+    """
+    Greedy max-segregation L₁₂ curves for one cluster-class mode.
+
+    ``cluster_class`` is ``"monomer"`` or ``"dimer"``: grow that class into a compact cluster,
+    assign the remaining points to the other class, then compute monomer→dimer L₁₂.
+    """
+    pool = np.atleast_2d(np.asarray(pool, dtype=float))
+    n_pool = len(pool)
+    n_rep_int = int(n_rep)
+    curves = np.full((n_rep_int, len(r_vals)), np.nan, dtype=float)
+    if n_pool == 0 or n_rep_int == 0:
+        return curves
+
+    if cluster_class == "dimer":
+        n_cluster = int(n_dimer)
+        mode_label = "cluster dimer"
+    elif cluster_class == "monomer":
+        n_cluster = int(n_monomer)
+        mode_label = "cluster monomer"
+    else:
+        raise ValueError(f"cluster_class must be 'monomer' or 'dimer', got {cluster_class!r}")
+
+    if n_cluster <= 0 or n_cluster > n_pool:
+        return curves
+
+    for rep_id in range(n_rep_int):
+        seed_idx = int(rng.integers(0, n_pool))
+        cluster_mask = _greedy_segregation_cluster_mask(pool, n_cluster, seed_idx)
+        if cluster_class == "dimer":
+            monomer_coords = pool[~cluster_mask]
+            dimer_coords = pool[cluster_mask]
+        else:
+            monomer_coords = pool[cluster_mask]
+            dimer_coords = pool[~cluster_mask]
+        curves[rep_id] = ripley_l12_from_points(
+            monomer_coords, dimer_coords, r_vals, window, rng
+        )
+        if pbar is not None:
+            pbar.set_postfix_str(f"{mode_label} {rep_id + 1}/{n_rep_int}", refresh=False)
+            pbar.update(1)
+    return curves
+
+
+def _segregation_band_columns(
+    curves: np.ndarray,
+    r_vals: np.ndarray,
+    prefix: str,
+) -> dict[str, np.ndarray]:
+    lo, mean, hi = _percentile_band(curves)
+    sd = _prism_sd_envelope_columns(curves, r_vals, prefix=prefix)
+    n_r = len(r_vals)
+    if len(lo) != n_r:
+        nan = np.full(n_r, np.nan)
+        lo = mean = hi = nan
+    return {
+        f"{prefix}_mean": sd[f"{prefix}_mean"],
+        f"{prefix}_sd": sd[f"{prefix}_sd"],
+        f"{prefix}_sd_envelope_lo": sd[f"{prefix}_sd_envelope_lo"],
+        f"{prefix}_sd_envelope_hi": sd[f"{prefix}_sd_envelope_hi"],
+        f"{prefix}_envelope_lo": lo,
+        f"{prefix}_envelope_hi": hi,
+        f"{prefix}_band_mean": mean,
+    }
+
+
 def build_monomer_dimer_prism_table(
     *,
     zone_name: str,
     r_vals: np.ndarray,
     observed_l12: np.ndarray,
     perm_curves: np.ndarray,
+    seg_cluster_dimer_curves: np.ndarray,
+    seg_cluster_monomer_curves: np.ndarray,
     n_monomer: int,
     n_dimer: int,
     n_perm: int,
+    n_segregation: int,
     window_volume_nm3: float,
 ) -> pd.DataFrame:
-    """Per-zone Prism table: observed L₁₂ plus label-permutation control envelope."""
+    """Per-zone Prism table: observed L₁₂ plus label-permutation and segregation controls."""
     perm_lo, perm_mean, perm_hi = _percentile_band(perm_curves)
     perm_sd = _prism_sd_envelope_columns(perm_curves, r_vals, prefix="control_L12")
+    seg_dimer = _segregation_band_columns(
+        seg_cluster_dimer_curves, r_vals, prefix="segregation_cluster_dimer_L12"
+    )
+    seg_monomer = _segregation_band_columns(
+        seg_cluster_monomer_curves, r_vals, prefix="segregation_cluster_monomer_L12"
+    )
     n_r = len(r_vals)
     if len(perm_lo) != n_r:
         nan = np.full(n_r, np.nan)
@@ -128,9 +253,46 @@ def build_monomer_dimer_prism_table(
                 "control_L12_sd_envelope_hi": float(perm_sd["control_L12_sd_envelope_hi"][i]),
                 "control_L12_envelope_lo": float(perm_lo[i]),
                 "control_L12_envelope_hi": float(perm_hi[i]),
+                "segregation_cluster_dimer_L12_mean": float(
+                    seg_dimer["segregation_cluster_dimer_L12_mean"][i]
+                ),
+                "segregation_cluster_dimer_L12_sd": float(
+                    seg_dimer["segregation_cluster_dimer_L12_sd"][i]
+                ),
+                "segregation_cluster_dimer_L12_sd_envelope_lo": float(
+                    seg_dimer["segregation_cluster_dimer_L12_sd_envelope_lo"][i]
+                ),
+                "segregation_cluster_dimer_L12_sd_envelope_hi": float(
+                    seg_dimer["segregation_cluster_dimer_L12_sd_envelope_hi"][i]
+                ),
+                "segregation_cluster_dimer_L12_envelope_lo": float(
+                    seg_dimer["segregation_cluster_dimer_L12_envelope_lo"][i]
+                ),
+                "segregation_cluster_dimer_L12_envelope_hi": float(
+                    seg_dimer["segregation_cluster_dimer_L12_envelope_hi"][i]
+                ),
+                "segregation_cluster_monomer_L12_mean": float(
+                    seg_monomer["segregation_cluster_monomer_L12_mean"][i]
+                ),
+                "segregation_cluster_monomer_L12_sd": float(
+                    seg_monomer["segregation_cluster_monomer_L12_sd"][i]
+                ),
+                "segregation_cluster_monomer_L12_sd_envelope_lo": float(
+                    seg_monomer["segregation_cluster_monomer_L12_sd_envelope_lo"][i]
+                ),
+                "segregation_cluster_monomer_L12_sd_envelope_hi": float(
+                    seg_monomer["segregation_cluster_monomer_L12_sd_envelope_hi"][i]
+                ),
+                "segregation_cluster_monomer_L12_envelope_lo": float(
+                    seg_monomer["segregation_cluster_monomer_L12_envelope_lo"][i]
+                ),
+                "segregation_cluster_monomer_L12_envelope_hi": float(
+                    seg_monomer["segregation_cluster_monomer_L12_envelope_hi"][i]
+                ),
                 "n_monomer": int(n_monomer),
                 "n_dimer": int(n_dimer),
                 "n_permutations": int(n_perm),
+                "n_segregation_replicates": int(n_segregation),
                 "envelope_percentile_lo": float(RIPLEY_PERCENTILE_LO),
                 "envelope_percentile_hi": float(RIPLEY_PERCENTILE_HI),
                 "window_volume_nm3": float(window_volume_nm3),
@@ -155,6 +317,8 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
         if len(obs_curves) == 0:
             continue
         _, ctrl_curves = _extract_curves_matrix(sub, "perm_l12_mean")
+        _, seg_dimer_curves = _extract_curves_matrix(sub, "seg_cluster_dimer_l12_mean")
+        _, seg_monomer_curves = _extract_curves_matrix(sub, "seg_cluster_monomer_l12_mean")
 
         obs_sd = _prism_sd_envelope_columns(obs_curves, r_vals, prefix="observed_L12")
         if len(ctrl_curves):
@@ -162,6 +326,22 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
         else:
             ctrl_sd = _prism_sd_envelope_columns(
                 np.empty((0, len(r_vals))), r_vals, prefix="control_L12"
+            )
+        if len(seg_dimer_curves):
+            seg_dimer_sd = _prism_sd_envelope_columns(
+                seg_dimer_curves, r_vals, prefix="segregation_cluster_dimer_L12"
+            )
+        else:
+            seg_dimer_sd = _prism_sd_envelope_columns(
+                np.empty((0, len(r_vals))), r_vals, prefix="segregation_cluster_dimer_L12"
+            )
+        if len(seg_monomer_curves):
+            seg_monomer_sd = _prism_sd_envelope_columns(
+                seg_monomer_curves, r_vals, prefix="segregation_cluster_monomer_L12"
+            )
+        else:
+            seg_monomer_sd = _prism_sd_envelope_columns(
+                np.empty((0, len(r_vals))), r_vals, prefix="segregation_cluster_monomer_L12"
             )
 
         n_tomograms = int(sub["tomogram_name"].nunique()) if "tomogram_name" in sub.columns else 0
@@ -183,6 +363,30 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                     "control_L12_sd": float(ctrl_sd["control_L12_sd"][i]),
                     "control_L12_sd_envelope_lo": float(ctrl_sd["control_L12_sd_envelope_lo"][i]),
                     "control_L12_sd_envelope_hi": float(ctrl_sd["control_L12_sd_envelope_hi"][i]),
+                    "segregation_cluster_dimer_L12_mean": float(
+                        seg_dimer_sd["segregation_cluster_dimer_L12_mean"][i]
+                    ),
+                    "segregation_cluster_dimer_L12_sd": float(
+                        seg_dimer_sd["segregation_cluster_dimer_L12_sd"][i]
+                    ),
+                    "segregation_cluster_dimer_L12_sd_envelope_lo": float(
+                        seg_dimer_sd["segregation_cluster_dimer_L12_sd_envelope_lo"][i]
+                    ),
+                    "segregation_cluster_dimer_L12_sd_envelope_hi": float(
+                        seg_dimer_sd["segregation_cluster_dimer_L12_sd_envelope_hi"][i]
+                    ),
+                    "segregation_cluster_monomer_L12_mean": float(
+                        seg_monomer_sd["segregation_cluster_monomer_L12_mean"][i]
+                    ),
+                    "segregation_cluster_monomer_L12_sd": float(
+                        seg_monomer_sd["segregation_cluster_monomer_L12_sd"][i]
+                    ),
+                    "segregation_cluster_monomer_L12_sd_envelope_lo": float(
+                        seg_monomer_sd["segregation_cluster_monomer_L12_sd_envelope_lo"][i]
+                    ),
+                    "segregation_cluster_monomer_L12_sd_envelope_hi": float(
+                        seg_monomer_sd["segregation_cluster_monomer_L12_sd_envelope_hi"][i]
+                    ),
                     "n_zone_curves": int(len(obs_curves)),
                     "n_tomograms": n_tomograms,
                     "n_active_zones": n_zones,
@@ -200,12 +404,13 @@ def run_monomer_dimer_ripley_for_zone(
     monomer_star_pattern: Optional[str] = None,
     dimer_star_pattern: Optional[str] = None,
     n_perm: int = MONOMER_DIMER_N_PERM,
+    n_segregation: int = MONOMER_DIMER_N_SEGREGATION,
     r_max_nm: float = DEFAULT_RIPLEY_R_MAX_NM,
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
 ) -> dict[str, Path] | None:
-    """Observed monomer→dimer L₁₂ with label-permutation control for one active zone."""
+    """Observed monomer→dimer L₁₂ with label-permutation and greedy-segregation controls."""
     tomogram_path = Path(tomogram_path)
     alignment_dir = require_alignment_dir(alignment_dir)
 
@@ -250,10 +455,13 @@ def run_monomer_dimer_ripley_for_zone(
         return None
 
     r_vals = _ripley_r_grid(r_max_nm, r_step_nm)
+    pool = np.vstack([np.atleast_2d(monomer_coords), np.atleast_2d(dimer_coords)])
     rng = np.random.default_rng(seed)
     n_perm_int = int(n_perm)
+    n_segregation_int = int(n_segregation)
     n_perm_workers = _default_ripley_perm_workers(n_perm_int)
-    progress_total = 1 + max(n_perm_int, 0)
+    n_seg_evals = 2 * max(n_segregation_int, 0)
+    progress_total = 1 + max(n_perm_int, 0) + n_seg_evals
     pbar = tqdm(
         total=progress_total,
         desc=f"{zone_name} monomer/dimer Ripley",
@@ -278,11 +486,40 @@ def run_monomer_dimer_ripley_for_zone(
             rng=rng,
             pbar=pbar if n_perm_int > 0 else None,
         )
+        seg_rng = np.random.default_rng(int(seed) + 1_000_000)
+        seg_cluster_dimer_curves = _greedy_segregation_l12_curves(
+            pool,
+            n_monomer,
+            n_dimer,
+            r_vals,
+            window,
+            seg_rng,
+            cluster_class="dimer",
+            n_rep=n_segregation_int,
+            pbar=pbar if n_segregation_int > 0 else None,
+        )
+        seg_cluster_monomer_curves = _greedy_segregation_l12_curves(
+            pool,
+            n_monomer,
+            n_dimer,
+            r_vals,
+            window,
+            seg_rng,
+            cluster_class="monomer",
+            n_rep=n_segregation_int,
+            pbar=pbar if n_segregation_int > 0 else None,
+        )
     finally:
         pbar.close()
     _, perm_mean, _ = _percentile_band(perm_curves)
     if len(perm_mean) != len(r_vals):
         perm_mean = np.full(len(r_vals), np.nan)
+    _, seg_dimer_mean, _ = _percentile_band(seg_cluster_dimer_curves)
+    if len(seg_dimer_mean) != len(r_vals):
+        seg_dimer_mean = np.full(len(r_vals), np.nan)
+    _, seg_monomer_mean, _ = _percentile_band(seg_cluster_monomer_curves)
+    if len(seg_monomer_mean) != len(r_vals):
+        seg_monomer_mean = np.full(len(r_vals), np.nan)
 
     tomogram_name = tomogram_path.name
     out_dir = (
@@ -306,9 +543,12 @@ def run_monomer_dimer_ripley_for_zone(
             "r_nm": r_vals,
             "l12": observed_l12,
             "perm_l12_mean": perm_mean,
+            "seg_cluster_dimer_l12_mean": seg_dimer_mean,
+            "seg_cluster_monomer_l12_mean": seg_monomer_mean,
             "n_monomer": n_monomer,
             "n_dimer": n_dimer,
             "n_permutations": int(n_perm),
+            "n_segregation_replicates": int(n_segregation),
             "window_volume_nm3": float(window.volume_nm3),
         }
     )
@@ -320,9 +560,12 @@ def run_monomer_dimer_ripley_for_zone(
         r_vals=r_vals,
         observed_l12=observed_l12,
         perm_curves=perm_curves,
+        seg_cluster_dimer_curves=seg_cluster_dimer_curves,
+        seg_cluster_monomer_curves=seg_cluster_monomer_curves,
         n_monomer=n_monomer,
         n_dimer=n_dimer,
         n_perm=n_perm,
+        n_segregation=n_segregation,
         window_volume_nm3=float(window.volume_nm3),
     )
     prism_path = out_dir / "ripley_l12_prism.csv"
@@ -333,6 +576,10 @@ def run_monomer_dimer_ripley_for_zone(
 
     if write_figures:
         perm_lo, perm_band_mean, perm_hi = _percentile_band(perm_curves)
+        seg_dimer_lo, seg_dimer_band_mean, seg_dimer_hi = _percentile_band(seg_cluster_dimer_curves)
+        seg_monomer_lo, seg_monomer_band_mean, seg_monomer_hi = _percentile_band(
+            seg_cluster_monomer_curves
+        )
         fig, ax = plt.subplots(figsize=(6.5, 4.5))
         ax.plot(r_vals, observed_l12, color="C0", lw=2, label="Observed monomer→dimer L₁₂")
         if len(perm_band_mean) == len(r_vals):
@@ -343,19 +590,57 @@ def run_monomer_dimer_ripley_for_zone(
                 perm_hi,
                 color="0.8",
                 alpha=0.8,
-                label=f"Null {RIPLEY_PERCENTILE_LO:g}–{RIPLEY_PERCENTILE_HI:g}%",
+                label=f"Label-perm {RIPLEY_PERCENTILE_LO:g}–{RIPLEY_PERCENTILE_HI:g}%",
+            )
+        if len(seg_dimer_band_mean) == len(r_vals):
+            ax.plot(
+                r_vals,
+                seg_dimer_band_mean,
+                color="C3",
+                lw=1.5,
+                label="Greedy cluster-dimer mean",
+            )
+            ax.fill_between(
+                r_vals,
+                seg_dimer_lo,
+                seg_dimer_hi,
+                color="C3",
+                alpha=0.2,
+                label=f"Cluster-dimer {RIPLEY_PERCENTILE_LO:g}–{RIPLEY_PERCENTILE_HI:g}%",
+            )
+        if len(seg_monomer_band_mean) == len(r_vals):
+            ax.plot(
+                r_vals,
+                seg_monomer_band_mean,
+                color="C2",
+                lw=1.5,
+                ls="--",
+                label="Greedy cluster-monomer mean",
+            )
+            ax.fill_between(
+                r_vals,
+                seg_monomer_lo,
+                seg_monomer_hi,
+                color="C2",
+                alpha=0.15,
+                label=f"Cluster-monomer {RIPLEY_PERCENTILE_LO:g}–{RIPLEY_PERCENTILE_HI:g}%",
             )
         ax.axhline(0.0, color="0.5", ls="--", lw=0.8)
         ax.set_xlabel("r (nm)")
         ax.set_ylabel("Ripley L₁₂(r) = (3K₁₂/4π)^(1/3) − r")
         ax.set_title(
             f"{tomogram_name} | {zone_name}\n"
-            f"monomer ({n_monomer}) vs dimer ({n_dimer}) | {int(n_perm)} label perms"
+            f"monomer ({n_monomer}) vs dimer ({n_dimer}) | "
+            f"{int(n_perm)} label perms, {int(n_segregation)} seg reps/class"
         )
         ax.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else r_max_nm)
-        ax.legend(loc="best", fontsize=8)
+        ax.legend(loc="best", fontsize=7)
         fig.tight_layout()
-        fig.savefig(figures_dir / "ripley_l12_observed_vs_label_permutation.png", dpi=150, bbox_inches="tight")
+        fig.savefig(
+            figures_dir / "ripley_l12_observed_vs_controls.png",
+            dpi=150,
+            bbox_inches="tight",
+        )
         plt.close(fig)
 
     meta = {
@@ -368,8 +653,12 @@ def run_monomer_dimer_ripley_for_zone(
         "n_dimer": int(n_dimer),
         "n_permutations": int(n_perm),
         "n_perm_workers": int(n_perm_workers),
+        "n_segregation_replicates": int(n_segregation),
+        "segregation_modes": ["cluster_dimer", "cluster_monomer"],
+        "segregation_seed_strategy": "random_point",
         "window_volume_nm3": float(window.volume_nm3),
-        "control": "label_permutation_preserving_class_counts",
+        "control_label_permutation": "label_permutation_preserving_class_counts",
+        "control_segregation": "greedy_nearest_neighbor_cluster",
         "ripley_edge_correction": "isotropic_3d_mc",
         "seed": int(seed),
     }
@@ -378,7 +667,8 @@ def run_monomer_dimer_ripley_for_zone(
 
     print(
         f"  Monomer/dimer Ripley L₁₂ ({zone_name}): "
-        f"{n_monomer} monomer, {n_dimer} dimer, {int(n_perm)} perms -> {out_dir}"
+        f"{n_monomer} monomer, {n_dimer} dimer, {int(n_perm)} perms, "
+        f"{int(n_segregation)} seg reps/class -> {out_dir}"
     )
     return {
         "curves_path": curves_path,
@@ -395,6 +685,7 @@ def run_monomer_dimer_ripley_for_tomogram(
     monomer_star_pattern: Optional[str] = None,
     dimer_star_pattern: Optional[str] = None,
     n_perm: int = MONOMER_DIMER_N_PERM,
+    n_segregation: int = MONOMER_DIMER_N_SEGREGATION,
     r_max_nm: float = DEFAULT_RIPLEY_R_MAX_NM,
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
     seed: int = DEFAULT_ANALYSIS_SEED,
@@ -440,6 +731,7 @@ def run_monomer_dimer_ripley_for_tomogram(
             monomer_star_pattern=monomer_star_pattern,
             dimer_star_pattern=dimer_star_pattern,
             n_perm=n_perm,
+            n_segregation=n_segregation,
             r_max_nm=r_max_nm,
             r_step_nm=r_step_nm,
             seed=seed,
@@ -502,6 +794,24 @@ def plot_pooled_monomer_dimer_ripley_visualizations(
         ctrl_mean = grp["control_L12_mean"].to_numpy(dtype=float)
         ctrl_lo = grp["control_L12_sd_envelope_lo"].to_numpy(dtype=float)
         ctrl_hi = grp["control_L12_sd_envelope_hi"].to_numpy(dtype=float)
+        seg_dimer_mean = grp.get(
+            "segregation_cluster_dimer_L12_mean", pd.Series(np.nan, index=grp.index)
+        ).to_numpy(dtype=float)
+        seg_dimer_lo = grp.get(
+            "segregation_cluster_dimer_L12_sd_envelope_lo", pd.Series(np.nan, index=grp.index)
+        ).to_numpy(dtype=float)
+        seg_dimer_hi = grp.get(
+            "segregation_cluster_dimer_L12_sd_envelope_hi", pd.Series(np.nan, index=grp.index)
+        ).to_numpy(dtype=float)
+        seg_monomer_mean = grp.get(
+            "segregation_cluster_monomer_L12_mean", pd.Series(np.nan, index=grp.index)
+        ).to_numpy(dtype=float)
+        seg_monomer_lo = grp.get(
+            "segregation_cluster_monomer_L12_sd_envelope_lo", pd.Series(np.nan, index=grp.index)
+        ).to_numpy(dtype=float)
+        seg_monomer_hi = grp.get(
+            "segregation_cluster_monomer_L12_sd_envelope_hi", pd.Series(np.nan, index=grp.index)
+        ).to_numpy(dtype=float)
         meta = grp.iloc[0]
 
         set_tag = _safe_name(str(set_name)) or "unspecified"
@@ -509,7 +819,29 @@ def plot_pooled_monomer_dimer_ripley_visualizations(
         ax.plot(r_vals, obs_mean, color="C0", lw=2, label="Observed monomer→dimer (mean)")
         ax.fill_between(r_vals, obs_lo, obs_hi, color="C0", alpha=0.25, label="Observed mean ± SD")
         ax.plot(r_vals, ctrl_mean, color="0.45", lw=1.5, label="Label-permutation (mean)")
-        ax.fill_between(r_vals, ctrl_lo, ctrl_hi, color="0.7", alpha=0.4, label="Null mean ± SD")
+        ax.fill_between(r_vals, ctrl_lo, ctrl_hi, color="0.7", alpha=0.4, label="Label-perm mean ± SD")
+        if np.isfinite(seg_dimer_mean).any():
+            ax.plot(r_vals, seg_dimer_mean, color="C3", lw=1.5, label="Greedy cluster-dimer (mean)")
+            ax.fill_between(
+                r_vals, seg_dimer_lo, seg_dimer_hi, color="C3", alpha=0.2, label="Cluster-dimer mean ± SD"
+            )
+        if np.isfinite(seg_monomer_mean).any():
+            ax.plot(
+                r_vals,
+                seg_monomer_mean,
+                color="C2",
+                lw=1.5,
+                ls="--",
+                label="Greedy cluster-monomer (mean)",
+            )
+            ax.fill_between(
+                r_vals,
+                seg_monomer_lo,
+                seg_monomer_hi,
+                color="C2",
+                alpha=0.15,
+                label="Cluster-monomer mean ± SD",
+            )
         ax.axhline(0.0, color="0.5", ls="--", lw=0.8)
         ax.set_xlabel("r (nm)")
         ax.set_ylabel("Ripley L₁₂(r) = (3K₁₂/4π)^(1/3) − r")
