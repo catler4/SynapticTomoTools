@@ -15,6 +15,7 @@ spatial cluster (random seed) for monomers or dimers (10 replicates each by defa
 
 MAD tests (Rebola-style max absolute deviation vs 99% CE) are run against label-permutation
 and both segregation extremes when that null has ≥1000 curves; otherwise they are skipped.
+Each MAD is reported for the full r-grid and for the restricted 30–50 nm window.
 
 Pooled output is grouped per tomogram set.
 """
@@ -39,6 +40,7 @@ from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
     DEFAULT_RIPLEY_R_MAX_NM,
     DEFAULT_RIPLEY_R_STEP_NM,
     MAD_MIN_NULL_CURVES,
+    MAD_R_RANGES,
     RIPLEY_PERCENTILE_HI,
     RIPLEY_PERCENTILE_LO,
     _default_ripley_perm_workers,
@@ -53,8 +55,8 @@ from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
     load_synaptic_cleft_active_zone_points,
     mad_result_to_curves_dataframe,
     mad_result_to_summary_row,
-    mad_test_from_curves,
     ripley_l12_from_points,
+    run_mad_tests_over_r_ranges,
     subset_aunps,
 )
 
@@ -204,24 +206,27 @@ def _greedy_segregation_l12_curves(
 
 def _plot_mad_panels(
     *,
-    r_vals: np.ndarray,
-    observed_l12: np.ndarray,
     mad_results: list[dict],
     output_path: Path,
     title: str,
+    observed_color: str = "C0",
+    observed_label: str = "Observed L₁₂",
 ) -> None:
-    """Plot raw + normalized MAD panels for each null that was evaluated (or skipped)."""
+    """Plot raw + normalized MAD panels for each null (uses each result's own r-window)."""
     n_panels = max(1, len(mad_results))
     fig, axes = plt.subplots(2, n_panels, figsize=(4.2 * n_panels, 7.0), squeeze=False)
     for col, mad in enumerate(mad_results):
         ax_raw = axes[0, col]
         ax_norm = axes[1, col]
         null_label = str(mad["null_name"])
-        ax_raw.plot(r_vals, observed_l12, color="C0", lw=2.0, label="Observed L₁₂")
+        r_use = np.asarray(mad.get("r_vals", []), dtype=float)
+        obs_use = np.asarray(mad.get("observed", []), dtype=float).reshape(-1)
+        if len(r_use) and len(obs_use) == len(r_use):
+            ax_raw.plot(r_use, obs_use, color=observed_color, lw=2.0, label=observed_label)
         if mad["status"] == "ok":
-            ax_raw.plot(r_vals, mad["null_mean"], color="0.35", lw=1.5, label="Null mean")
+            ax_raw.plot(r_use, mad["null_mean"], color="0.35", lw=1.5, label="Null mean")
             ax_raw.fill_between(
-                r_vals,
+                r_use,
                 mad["ce_lo"],
                 mad["ce_hi"],
                 color="0.75",
@@ -229,7 +234,7 @@ def _plot_mad_panels(
                 label=f"{100 * float(mad['confidence']):.0f}% CE",
             )
             ax_raw.axvline(mad["r_at_max_nm"], color="C3", ls=":", lw=1.0, alpha=0.8)
-            ax_norm.plot(r_vals, mad["normalized_obs"], color="C0", lw=2.0, label="Normalized obs")
+            ax_norm.plot(r_use, mad["normalized_obs"], color=observed_color, lw=2.0, label="Normalized obs")
             ax_norm.axhline(1.0, color="0.4", ls="--", lw=1.0)
             ax_norm.axhline(-1.0, color="0.4", ls="--", lw=1.0)
             reject_txt = "reject H0" if mad["rejects_null"] else "fail to reject H0"
@@ -252,8 +257,9 @@ def _plot_mad_panels(
         ax_norm.set_xlabel("r (nm)")
         ax_norm.set_ylabel("(L₁₂ − μ_null) / CE half-width")
         ax_norm.legend(fontsize=7, loc="best")
-        for ax in (ax_raw, ax_norm):
-            ax.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else 0.0)
+        if len(r_use):
+            for ax in (ax_raw, ax_norm):
+                ax.set_xlim(float(r_use[0]), float(r_use[-1]))
     fig.suptitle(title, fontsize=11)
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -272,28 +278,29 @@ def _write_mad_outputs(
     write_figures: bool,
     figure_title: str,
 ) -> tuple[Path, Path]:
-    """Run MAD for each null (≥1000 curves), write summary/curves CSVs and optional figure."""
+    """Run MAD for each null × r-range (≥1000 curves), write summary/curves CSVs and figures."""
     summary_rows: list[dict] = []
     curve_frames: list[pd.DataFrame] = []
-    mad_results: list[dict] = []
+    mad_by_range: dict[str, list[dict]] = {label: [] for label, _, _ in MAD_R_RANGES}
+
     for null_name, null_curves in null_named_curves:
-        mad = mad_test_from_curves(
+        for mad in run_mad_tests_over_r_ranges(
             observed_l12,
             null_curves,
             r_vals,
-            min_null_curves=MAD_MIN_NULL_CURVES,
             null_name=null_name,
-        )
-        mad_results.append(mad)
-        summary_rows.append(
-            mad_result_to_summary_row(
-                mad,
-                extra_cols={"active_zone_name": zone_name},
+            min_null_curves=MAD_MIN_NULL_CURVES,
+        ):
+            mad_by_range.setdefault(str(mad["r_range"]), []).append(mad)
+            summary_rows.append(
+                mad_result_to_summary_row(
+                    mad,
+                    extra_cols={"active_zone_name": zone_name},
+                )
             )
-        )
-        curves_df = mad_result_to_curves_dataframe(mad, r_vals, observed=observed_l12)
-        curves_df.insert(0, "active_zone_name", zone_name)
-        curve_frames.append(curves_df)
+            curves_df = mad_result_to_curves_dataframe(mad, r_vals, observed=observed_l12)
+            curves_df.insert(0, "active_zone_name", zone_name)
+            curve_frames.append(curves_df)
 
     summary_path = out_dir / "ripley_l12_mad_summary.csv"
     curves_path = out_dir / "ripley_l12_mad_curves.csv"
@@ -301,13 +308,15 @@ def _write_mad_outputs(
     pd.concat(curve_frames, ignore_index=True).to_csv(curves_path, index=False)
 
     if write_figures and figures_dir is not None:
-        _plot_mad_panels(
-            r_vals=r_vals,
-            observed_l12=observed_l12,
-            mad_results=mad_results,
-            output_path=figures_dir / "ripley_l12_mad_vs_nulls.png",
-            title=figure_title,
-        )
+        for r_range, mad_results in mad_by_range.items():
+            if not mad_results:
+                continue
+            suffix = "" if r_range == "full" else f"_{r_range.replace('-', '_')}"
+            _plot_mad_panels(
+                mad_results=mad_results,
+                output_path=figures_dir / f"ripley_l12_mad_vs_nulls{suffix}.png",
+                title=f"{figure_title} | r-range={r_range}",
+            )
     return summary_path, curves_path
 
 
@@ -933,6 +942,7 @@ def run_monomer_dimer_ripley_for_zone(
             "segregation_cluster_dimer",
             "segregation_cluster_monomer",
         ],
+        "mad_r_ranges": [label for label, _, _ in MAD_R_RANGES],
         "seed": int(seed),
     }
     with open(out_dir / "run_metadata.json", "w") as f:

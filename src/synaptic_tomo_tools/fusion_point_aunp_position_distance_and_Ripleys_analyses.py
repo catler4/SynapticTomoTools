@@ -535,6 +535,11 @@ def ripley_l12_curves_per_focus(
 
 MAD_MIN_NULL_CURVES = 1000
 MAD_CONFIDENCE = 0.99
+# (label, r_min_nm or None, r_max_nm or None). None → use the full Ripley grid.
+MAD_R_RANGES: tuple[tuple[str, float | None, float | None], ...] = (
+    ("full", None, None),
+    ("30-50nm", 30.0, 50.0),
+)
 
 
 def mad_test_from_curves(
@@ -545,16 +550,22 @@ def mad_test_from_curves(
     confidence: float = MAD_CONFIDENCE,
     min_null_curves: int = MAD_MIN_NULL_CURVES,
     null_name: str = "null",
+    r_min_nm: float | None = None,
+    r_max_nm: float | None = None,
+    r_range: str = "full",
 ) -> dict:
     """
     Maximum Absolute Deviation (MAD) test vs a Monte Carlo null (Rebola et al. 2019 style).
 
     Skips (``status='skipped_insufficient_nulls'``) unless ``null_curves`` has at least
     ``min_null_curves`` replicates. Uses a two-sided ``confidence`` envelope (default 99%).
+
+    Optional ``r_min_nm`` / ``r_max_nm`` restrict the max-|diff| search (inclusive) to that
+    radius window; CE / null mean / normalized curves are reported on the same subset.
     """
     observed = np.asarray(observed, dtype=float).reshape(-1)
     null_curves = np.atleast_2d(np.asarray(null_curves, dtype=float))
-    r_vals = np.asarray(r_vals, dtype=float)
+    r_vals_full = np.asarray(r_vals, dtype=float)
     n_null = int(null_curves.shape[0]) if null_curves.size else 0
     alpha = 1.0 - float(confidence)
     lo_pct = 100.0 * (alpha / 2.0)
@@ -562,6 +573,9 @@ def mad_test_from_curves(
 
     result = {
         "null_name": null_name,
+        "r_range": str(r_range),
+        "r_min_nm": float(r_min_nm) if r_min_nm is not None else np.nan,
+        "r_max_nm": float(r_max_nm) if r_max_nm is not None else np.nan,
         "status": "ok",
         "n_null_curves": n_null,
         "confidence": float(confidence),
@@ -572,35 +586,60 @@ def mad_test_from_curves(
         "rejects_null": False,
         "r_at_max_nm": np.nan,
         "signed_diff_at_max": np.nan,
-        "null_mean": np.full(len(r_vals), np.nan),
-        "ce_lo": np.full(len(r_vals), np.nan),
-        "ce_hi": np.full(len(r_vals), np.nan),
-        "abs_diff": np.full(len(r_vals), np.nan),
-        "normalized_obs": np.full(len(r_vals), np.nan),
+        "r_vals": r_vals_full,
+        "null_mean": np.full(len(r_vals_full), np.nan),
+        "ce_lo": np.full(len(r_vals_full), np.nan),
+        "ce_hi": np.full(len(r_vals_full), np.nan),
+        "abs_diff": np.full(len(r_vals_full), np.nan),
+        "normalized_obs": np.full(len(r_vals_full), np.nan),
+        "observed": observed,
     }
-    if n_null < int(min_null_curves) or len(observed) != len(r_vals):
+
+    mask = np.ones(len(r_vals_full), dtype=bool)
+    if r_min_nm is not None:
+        mask &= r_vals_full >= float(r_min_nm)
+    if r_max_nm is not None:
+        mask &= r_vals_full <= float(r_max_nm)
+    if np.any(mask):
+        result["r_vals"] = r_vals_full[mask]
+        result["observed"] = observed[mask] if len(observed) == len(r_vals_full) else observed
+        n_sub = int(mask.sum())
+        result["null_mean"] = np.full(n_sub, np.nan)
+        result["ce_lo"] = np.full(n_sub, np.nan)
+        result["ce_hi"] = np.full(n_sub, np.nan)
+        result["abs_diff"] = np.full(n_sub, np.nan)
+        result["normalized_obs"] = np.full(n_sub, np.nan)
+
+    if n_null < int(min_null_curves) or len(observed) != len(r_vals_full):
         result["status"] = "skipped_insufficient_nulls"
         return result
-    if not np.all(np.isfinite(observed)) or not np.any(np.isfinite(null_curves)):
+    if not np.any(mask):
+        result["status"] = "skipped_empty_r_range"
+        return result
+
+    r_vals = r_vals_full[mask]
+    observed_s = observed[mask]
+    null_s = null_curves[:, mask]
+    if not np.all(np.isfinite(observed_s)) or not np.any(np.isfinite(null_s)):
         result["status"] = "skipped_nonfinite"
         return result
 
-    null_mean = np.nanmean(null_curves, axis=0)
-    ce_lo = np.nanpercentile(null_curves, lo_pct, axis=0)
-    ce_hi = np.nanpercentile(null_curves, hi_pct, axis=0)
-    abs_diff = np.abs(observed - null_mean)
+    null_mean = np.nanmean(null_s, axis=0)
+    ce_lo = np.nanpercentile(null_s, lo_pct, axis=0)
+    ce_hi = np.nanpercentile(null_s, hi_pct, axis=0)
+    abs_diff = np.abs(observed_s - null_mean)
     T_obs = float(np.nanmax(abs_diff))
     r_at_max_idx = int(np.nanargmax(abs_diff))
-    signed = float(observed[r_at_max_idx] - null_mean[r_at_max_idx])
+    signed = float(observed_s[r_at_max_idx] - null_mean[r_at_max_idx])
 
     # MAD for each null replicate vs the same null mean (Baddeley / Rebola).
-    T_null = np.nanmax(np.abs(null_curves - null_mean[None, :]), axis=1)
+    T_null = np.nanmax(np.abs(null_s - null_mean[None, :]), axis=1)
     T_critical = float(np.nanpercentile(T_null, 100.0 * confidence))
     p_mad = float((1 + np.sum(T_null >= T_obs)) / (1 + n_null))
 
     # Scale so the confidence envelope appears as ±1 (Rebola pooling convention).
     half = np.maximum(np.maximum(null_mean - ce_lo, ce_hi - null_mean), 1e-12)
-    normalized = (observed - null_mean) / half
+    normalized = (observed_s - null_mean) / half
 
     result.update(
         {
@@ -610,14 +649,41 @@ def mad_test_from_curves(
             "rejects_null": bool(T_obs > T_critical),
             "r_at_max_nm": float(r_vals[r_at_max_idx]),
             "signed_diff_at_max": signed,
+            "r_vals": r_vals,
             "null_mean": null_mean,
             "ce_lo": ce_lo,
             "ce_hi": ce_hi,
             "abs_diff": abs_diff,
             "normalized_obs": normalized,
+            "observed": observed_s,
         }
     )
     return result
+
+
+def run_mad_tests_over_r_ranges(
+    observed: np.ndarray,
+    null_curves: np.ndarray,
+    r_vals: np.ndarray,
+    *,
+    null_name: str,
+    r_ranges: tuple[tuple[str, float | None, float | None], ...] = MAD_R_RANGES,
+    min_null_curves: int = MAD_MIN_NULL_CURVES,
+) -> list[dict]:
+    """Run MAD for each configured radius window (full + 30–50 nm by default)."""
+    return [
+        mad_test_from_curves(
+            observed,
+            null_curves,
+            r_vals,
+            min_null_curves=min_null_curves,
+            null_name=null_name,
+            r_min_nm=r_min,
+            r_max_nm=r_max,
+            r_range=label,
+        )
+        for label, r_min, r_max in r_ranges
+    ]
 
 
 def mad_result_to_summary_row(
@@ -628,6 +694,9 @@ def mad_result_to_summary_row(
     """Flatten MAD scalar fields into one CSV/JSON-friendly row."""
     row = {
         "null_name": mad["null_name"],
+        "r_range": mad.get("r_range", "full"),
+        "r_min_nm": float(mad["r_min_nm"]) if np.isfinite(mad.get("r_min_nm", np.nan)) else np.nan,
+        "r_max_nm": float(mad["r_max_nm"]) if np.isfinite(mad.get("r_max_nm", np.nan)) else np.nan,
         "status": mad["status"],
         "n_null_curves": int(mad["n_null_curves"]),
         "confidence": float(mad["confidence"]),
@@ -650,20 +719,35 @@ def mad_result_to_summary_row(
     return row
 
 
-def mad_result_to_curves_dataframe(mad: dict, r_vals: np.ndarray, *, observed: np.ndarray) -> pd.DataFrame:
-    """Long/wide hybrid table for MAD graphing: observed, null mean, 99% CE, abs_diff, normalized."""
-    r_vals = np.asarray(r_vals, dtype=float)
-    observed = np.asarray(observed, dtype=float).reshape(-1)
+def mad_result_to_curves_dataframe(
+    mad: dict,
+    r_vals: np.ndarray | None = None,
+    *,
+    observed: np.ndarray | None = None,
+) -> pd.DataFrame:
+    """Long table for MAD graphing on the MAD radius window (full or 30–50 nm)."""
+    r_use = np.asarray(mad.get("r_vals", r_vals if r_vals is not None else []), dtype=float)
+    if "observed" in mad and mad["observed"] is not None:
+        observed_use = np.asarray(mad["observed"], dtype=float).reshape(-1)
+    elif observed is not None:
+        observed_use = np.asarray(observed, dtype=float).reshape(-1)
+        if len(observed_use) != len(r_use) and r_vals is not None:
+            r_full = np.asarray(r_vals, dtype=float)
+            if len(observed_use) == len(r_full):
+                observed_use = observed_use[np.isin(r_full, r_use)]
+    else:
+        observed_use = np.full(len(r_use), np.nan)
     return pd.DataFrame(
         {
-            "r_nm": r_vals,
-            "observed_L12": observed,
+            "r_nm": r_use,
+            "observed_L12": observed_use,
             "null_mean_L12": mad["null_mean"],
             "ce_lo": mad["ce_lo"],
             "ce_hi": mad["ce_hi"],
             "abs_diff": mad["abs_diff"],
             "normalized_obs": mad["normalized_obs"],
             "null_name": mad["null_name"],
+            "r_range": mad.get("r_range", "full"),
             "status": mad["status"],
         }
     )
@@ -1261,6 +1345,7 @@ def run_ripley_for_zone_window(
         )
 
     # MAD of zone-mean fusing L₁₂ vs each control null (only if that null has ≥1000 curves).
+    # Reported for full r-grid and restricted 30–50 nm windows.
     obs_mean = (
         np.nanmean(obs_curves, axis=0)
         if len(obs_curves)
@@ -1268,82 +1353,91 @@ def run_ripley_for_zone_window(
     )
     mad_summary_rows: list[dict] = []
     mad_curve_frames: list[pd.DataFrame] = []
-    mad_results_for_plot: list[dict] = []
+    mad_by_range: dict[str, list[dict]] = {label: [] for label, _, _ in MAD_R_RANGES}
     for null_name, null_curves in (
         ("close", close_curves),
         ("shift_40nm", shift_curves),
         ("label_permutation", perm_curves),
     ):
-        mad = mad_test_from_curves(
+        for mad in run_mad_tests_over_r_ranges(
             obs_mean,
             null_curves,
             r_vals,
-            min_null_curves=MAD_MIN_NULL_CURVES,
             null_name=null_name,
-        )
-        mad_results_for_plot.append(mad)
-        mad_summary_rows.append(
-            mad_result_to_summary_row(
-                mad,
-                extra_cols={
-                    "active_zone_name": zone_name,
-                    "aunp_subset": aunp_subset,
-                    "window_mode": mode_tag,
-                },
+            min_null_curves=MAD_MIN_NULL_CURVES,
+        ):
+            mad_by_range.setdefault(str(mad["r_range"]), []).append(mad)
+            mad_summary_rows.append(
+                mad_result_to_summary_row(
+                    mad,
+                    extra_cols={
+                        "active_zone_name": zone_name,
+                        "aunp_subset": aunp_subset,
+                        "window_mode": mode_tag,
+                    },
+                )
             )
-        )
-        mad_curves = mad_result_to_curves_dataframe(mad, r_vals, observed=obs_mean)
-        mad_curves.insert(0, "active_zone_name", zone_name)
-        mad_curves.insert(1, "aunp_subset", aunp_subset)
-        mad_curves.insert(2, "window_mode", mode_tag)
-        mad_curve_frames.append(mad_curves)
+            mad_curves = mad_result_to_curves_dataframe(mad, r_vals, observed=obs_mean)
+            mad_curves.insert(0, "active_zone_name", zone_name)
+            mad_curves.insert(1, "aunp_subset", aunp_subset)
+            mad_curves.insert(2, "window_mode", mode_tag)
+            mad_curve_frames.append(mad_curves)
 
-    if figures_dir is not None and mad_results_for_plot:
-        n_panels = len(mad_results_for_plot)
-        fig, axes = plt.subplots(2, n_panels, figsize=(4.2 * n_panels, 7.0), squeeze=False)
-        for col, mad in enumerate(mad_results_for_plot):
-            ax_raw = axes[0, col]
-            ax_norm = axes[1, col]
-            null_label = str(mad["null_name"])
-            ax_raw.plot(r_vals, obs_mean, color="C3", lw=2.0, label="Fusing mean L₁₂")
-            if mad["status"] == "ok":
-                ax_raw.plot(r_vals, mad["null_mean"], color="0.35", lw=1.5, label="Null mean")
-                ax_raw.fill_between(
-                    r_vals, mad["ce_lo"], mad["ce_hi"], color="0.75", alpha=0.55, label="99% CE"
-                )
-                ax_norm.plot(r_vals, mad["normalized_obs"], color="C3", lw=2.0)
-                ax_norm.axhline(1.0, color="0.4", ls="--", lw=1.0)
-                ax_norm.axhline(-1.0, color="0.4", ls="--", lw=1.0)
-                reject_txt = "reject H0" if mad["rejects_null"] else "fail to reject H0"
-                ax_raw.set_title(
-                    f"{null_label}\nT={mad['T_obs']:.3g}/Tcrit={mad['T_critical']:.3g} "
-                    f"(p={mad['p_mad']:.3g}; {reject_txt})",
-                    fontsize=9,
-                )
-            else:
-                ax_raw.set_title(
-                    f"{null_label}\nskipped (n={mad['n_null_curves']} < {mad['min_null_curves']})",
-                    fontsize=9,
-                )
-            ax_raw.axhline(0.0, color="0.5", ls="--", lw=0.8)
-            ax_raw.set_xlabel("r (nm)")
-            ax_raw.set_ylabel("L₁₂(r)")
-            ax_raw.legend(fontsize=7, loc="best")
-            ax_norm.set_xlabel("r (nm)")
-            ax_norm.set_ylabel("Normalized L₁₂")
-            ax_raw.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else DEFAULT_RIPLEY_R_MAX_NM)
-            ax_norm.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else DEFAULT_RIPLEY_R_MAX_NM)
-        fig.suptitle(
-            f"{zone_name} | {mode_tag} | {subset_tag} | MAD (n≥{MAD_MIN_NULL_CURVES})",
-            fontsize=11,
-        )
-        fig.tight_layout()
-        fig.savefig(
-            figures_dir / f"ripley_l12_{mode_tag}_{subset_tag}_mad_vs_nulls.png",
-            dpi=150,
-            bbox_inches="tight",
-        )
-        plt.close(fig)
+    if figures_dir is not None:
+        for r_range, mad_results_for_plot in mad_by_range.items():
+            if not mad_results_for_plot:
+                continue
+            suffix = "" if r_range == "full" else f"_{r_range.replace('-', '_')}"
+            n_panels = len(mad_results_for_plot)
+            fig, axes = plt.subplots(2, n_panels, figsize=(4.2 * n_panels, 7.0), squeeze=False)
+            for col, mad in enumerate(mad_results_for_plot):
+                ax_raw = axes[0, col]
+                ax_norm = axes[1, col]
+                null_label = str(mad["null_name"])
+                r_use = np.asarray(mad.get("r_vals", []), dtype=float)
+                obs_use = np.asarray(mad.get("observed", []), dtype=float).reshape(-1)
+                if len(r_use) and len(obs_use) == len(r_use):
+                    ax_raw.plot(r_use, obs_use, color="C3", lw=2.0, label="Fusing mean L₁₂")
+                if mad["status"] == "ok":
+                    ax_raw.plot(r_use, mad["null_mean"], color="0.35", lw=1.5, label="Null mean")
+                    ax_raw.fill_between(
+                        r_use, mad["ce_lo"], mad["ce_hi"], color="0.75", alpha=0.55, label="99% CE"
+                    )
+                    ax_norm.plot(r_use, mad["normalized_obs"], color="C3", lw=2.0)
+                    ax_norm.axhline(1.0, color="0.4", ls="--", lw=1.0)
+                    ax_norm.axhline(-1.0, color="0.4", ls="--", lw=1.0)
+                    reject_txt = "reject H0" if mad["rejects_null"] else "fail to reject H0"
+                    ax_raw.set_title(
+                        f"{null_label}\nT={mad['T_obs']:.3g}/Tcrit={mad['T_critical']:.3g} "
+                        f"(p={mad['p_mad']:.3g}; {reject_txt})",
+                        fontsize=9,
+                    )
+                else:
+                    ax_raw.set_title(
+                        f"{null_label}\nskipped (n={mad['n_null_curves']} < {mad['min_null_curves']})",
+                        fontsize=9,
+                    )
+                ax_raw.axhline(0.0, color="0.5", ls="--", lw=0.8)
+                ax_raw.set_xlabel("r (nm)")
+                ax_raw.set_ylabel("L₁₂(r)")
+                ax_raw.legend(fontsize=7, loc="best")
+                ax_norm.set_xlabel("r (nm)")
+                ax_norm.set_ylabel("Normalized L₁₂")
+                if len(r_use):
+                    ax_raw.set_xlim(float(r_use[0]), float(r_use[-1]))
+                    ax_norm.set_xlim(float(r_use[0]), float(r_use[-1]))
+            fig.suptitle(
+                f"{zone_name} | {mode_tag} | {subset_tag} | MAD {r_range} "
+                f"(n≥{MAD_MIN_NULL_CURVES})",
+                fontsize=11,
+            )
+            fig.tight_layout()
+            fig.savefig(
+                figures_dir / f"ripley_l12_{mode_tag}_{subset_tag}_mad_vs_nulls{suffix}.png",
+                dpi=150,
+                bbox_inches="tight",
+            )
+            plt.close(fig)
 
     prism_df = build_ripley_l12_prism_envelope_table(
         zone_name=zone_name,
@@ -1923,6 +2017,7 @@ def run_fusion_point_aunp_analyses_for_zone(
         "n_label_permutations": int(n_replicates),
         "mad_min_null_curves": int(MAD_MIN_NULL_CURVES),
         "mad_nulls": ["close", "shift_40nm", "label_permutation"],
+        "mad_r_ranges": [label for label, _, _ in MAD_R_RANGES],
         "seed": int(seed),
         "ripley_edge_correction": "isotropic_3d_mc",
         "window_volume_definition": "convex_hull_volume",
