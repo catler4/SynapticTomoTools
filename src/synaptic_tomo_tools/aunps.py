@@ -1375,6 +1375,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                 from .activezone import load_active_zone_mapping
                 from .aunp_monomer_dimer_ripley import (
                     POOLED_CURVES_CSV as MONOMER_DIMER_POOLED_CURVES_CSV,
+                    POOLED_INDIVIDUAL_CURVES_CSV as MONOMER_DIMER_POOLED_INDIVIDUAL_CURVES_CSV,
                     plot_pooled_monomer_dimer_ripley_visualizations,
                     run_monomer_dimer_ripley_for_tomogram,
                 )
@@ -1386,14 +1387,16 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                     ) or {}
                     az_indices_for_md = sorted(int(k) for k in az_mapping_for_md)
 
-                md_ripley_frames, md_prism_frames = run_monomer_dimer_ripley_for_tomogram(
-                    Path(tomogram_path),
-                    alignment_dir,
-                    active_zone_indices=az_indices_for_md,
-                    monomer_star_pattern=monomer_star_pattern,
-                    dimer_star_pattern=dimer_star_pattern,
-                    n_perm=monomer_dimer_ripley_n_perm,
-                    write_figures=True,
+                md_ripley_frames, md_prism_frames, md_individual_frames = (
+                    run_monomer_dimer_ripley_for_tomogram(
+                        Path(tomogram_path),
+                        alignment_dir,
+                        active_zone_indices=az_indices_for_md,
+                        monomer_star_pattern=monomer_star_pattern,
+                        dimer_star_pattern=dimer_star_pattern,
+                        n_perm=monomer_dimer_ripley_n_perm,
+                        write_figures=True,
+                    )
                 )
                 if md_ripley_frames:
                     df_md_ripley = pd.concat(md_ripley_frames, ignore_index=True)
@@ -1402,6 +1405,17 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                     _append_tomogram_results_csv(
                         df_md_ripley,
                         MONOMER_DIMER_POOLED_CURVES_CSV,
+                        tomogram_name=tomogram_name,
+                        alignment_dir=alignment_dir,
+                        set_name=set_name,
+                    )
+                if md_individual_frames:
+                    df_md_individual = pd.concat(md_individual_frames, ignore_index=True)
+                    if "tomogram_name" not in df_md_individual.columns:
+                        df_md_individual.insert(0, "tomogram_name", tomogram_name)
+                    _append_tomogram_results_csv(
+                        df_md_individual,
+                        MONOMER_DIMER_POOLED_INDIVIDUAL_CURVES_CSV,
                         tomogram_name=tomogram_name,
                         alignment_dir=alignment_dir,
                         set_name=set_name,

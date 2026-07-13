@@ -5,7 +5,7 @@ Type-1 foci: one active zone center per zone (mean of presynaptic + postsynaptic
 Type-2 partners: AuNP pick coordinates in that zone.
 
 Window: synaptic_cleft_az_hull (convex hull of presynaptic + postsynaptic AZ surface points).
-No null-model controls — observed L₁₂ curves only, with pooled mean ± SD for Prism.
+No null-model controls — observed L₁₂ curves only, with pooled mean ± SD/SEM for Prism.
 """
 
 from __future__ import annotations
@@ -26,6 +26,8 @@ from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
     _ripley_r_grid,
     build_ripley_window_3d,
     cross_k12_3d_isotropic,
+    curves_matrix_to_long_dataframe,
+    curves_matrix_to_wide_dataframe,
     load_synaptic_cleft_active_zone_points,
     ripley_l12,
 )
@@ -107,7 +109,7 @@ def build_aunp_vs_az_center_prism_table(
     n_aunps: int,
     window_volume_nm3: float,
 ) -> pd.DataFrame:
-    """Per-zone Prism table (one observed curve; SD columns are NaN for a single curve)."""
+    """Per-zone Prism table (one observed curve; SD/SEM columns are NaN for a single curve)."""
     rows: list[dict] = []
     for i, r_nm in enumerate(r_vals):
         rows.append(
@@ -121,6 +123,9 @@ def build_aunp_vs_az_center_prism_table(
                 "center_L12_sd": np.nan,
                 "center_L12_sd_envelope_lo": np.nan,
                 "center_L12_sd_envelope_hi": np.nan,
+                "center_L12_sem": np.nan,
+                "center_L12_sem_envelope_lo": np.nan,
+                "center_L12_sem_envelope_hi": np.nan,
                 "n_aunp_partners": int(n_aunps),
                 "window_volume_nm3": float(window_volume_nm3),
             }
@@ -129,7 +134,7 @@ def build_aunp_vs_az_center_prism_table(
 
 
 def build_pooled_aunp_vs_az_center_prism_table(df: pd.DataFrame) -> pd.DataFrame:
-    """Pooled mean ± SD of L₁₂ across tomogram-zone curves at each r, per tomogram set."""
+    """Pooled mean ± SD/SEM of L₁₂ across tomogram-zone curves at each r, per tomogram set."""
     if df.empty:
         return pd.DataFrame()
 
@@ -160,6 +165,9 @@ def build_pooled_aunp_vs_az_center_prism_table(df: pd.DataFrame) -> pd.DataFrame
                     "center_L12_sd": float(sd["center_L12_sd"][i]),
                     "center_L12_sd_envelope_lo": float(sd["center_L12_sd_envelope_lo"][i]),
                     "center_L12_sd_envelope_hi": float(sd["center_L12_sd_envelope_hi"][i]),
+                    "center_L12_sem": float(sd["center_L12_sem"][i]),
+                    "center_L12_sem_envelope_lo": float(sd["center_L12_sem_envelope_lo"][i]),
+                    "center_L12_sem_envelope_hi": float(sd["center_L12_sem_envelope_hi"][i]),
                     "n_zone_curves": int(len(curves)),
                     "n_tomograms": n_tomograms,
                     "n_active_zones": n_zones,
@@ -244,6 +252,24 @@ def run_aunp_vs_az_center_ripley_for_zone(
     curves_path = out_dir / "ripley_l12_curves.csv"
     curves_df.to_csv(curves_path, index=False)
 
+    individual_df = curves_matrix_to_long_dataframe(
+        np.atleast_2d(l12),
+        r_vals,
+        curve_type="observed",
+        extra_cols={
+            "active_zone_name": zone_name,
+            "active_zone_index": int(active_zone_index),
+            "window_mode": WINDOW_MODE,
+            "n_aunp_partners": int(len(aunp_coords)),
+            "window_volume_nm3": float(window.volume_nm3),
+        },
+    )
+    individual_path = out_dir / "ripley_l12_individual_curves.csv"
+    individual_df.to_csv(individual_path, index=False)
+    curves_matrix_to_wide_dataframe(
+        np.atleast_2d(l12), r_vals, curve_type="observed"
+    ).to_csv(out_dir / "ripley_l12_individual_observed_wide.csv", index=False)
+
     prism_df = build_aunp_vs_az_center_prism_table(
         zone_name=zone_name,
         r_vals=r_vals,
@@ -292,6 +318,7 @@ def run_aunp_vs_az_center_ripley_for_zone(
     )
     return {
         "curves_path": curves_path,
+        "individual_curves_path": individual_path,
         "prism_path": prism_path,
         "output_dir": out_dir,
     }

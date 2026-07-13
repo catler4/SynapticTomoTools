@@ -370,6 +370,20 @@ def _points_inside_hull(pts: np.ndarray, hull: ConvexHull, tol: float = 1e-6) ->
     return np.all(pts @ normals.T + offsets <= tol, axis=1)
 
 
+def _unit_ball_offsets(
+    rng: np.random.Generator,
+    *,
+    n_samples: int = EDGE_MC_SAMPLES,
+) -> np.ndarray:
+    """Uniform samples in the unit ball as (n_samples, 3) offsets."""
+    dirs = rng.normal(size=(n_samples, 3))
+    norms = np.linalg.norm(dirs, axis=1, keepdims=True)
+    norms = np.maximum(norms, 1e-12)
+    dirs /= norms
+    radii = rng.random(n_samples) ** (1.0 / 3.0)
+    return dirs * radii[:, None]
+
+
 def _isotropic_edge_factor_3d(
     center: np.ndarray,
     radius_nm: float,
@@ -377,19 +391,53 @@ def _isotropic_edge_factor_3d(
     rng: np.random.Generator,
     *,
     n_samples: int = EDGE_MC_SAMPLES,
+    unit_offsets: np.ndarray | None = None,
 ) -> float:
     if radius_nm <= 0:
         return 1.0
     center = np.asarray(center, dtype=float).reshape(3)
-    dirs = rng.normal(size=(n_samples, 3))
-    norms = np.linalg.norm(dirs, axis=1, keepdims=True)
-    norms = np.maximum(norms, 1e-12)
-    dirs /= norms
-    radii = rng.random(n_samples) ** (1.0 / 3.0) * float(radius_nm)
-    samples = center + dirs * radii[:, None]
+    if unit_offsets is None:
+        unit_offsets = _unit_ball_offsets(rng, n_samples=n_samples)
+    samples = center + unit_offsets * float(radius_nm)
     inside = _points_inside_hull(samples, hull)
     frac = float(np.mean(inside))
     return max(frac, EDGE_MIN_C)
+
+
+def _isotropic_edge_factors_for_foci(
+    centers: np.ndarray,
+    r_vals: np.ndarray,
+    hull: ConvexHull,
+    rng: np.random.Generator,
+    *,
+    n_samples: int = EDGE_MC_SAMPLES,
+) -> np.ndarray:
+    """
+    Vectorized isotropic edge factors for all foci × all radii.
+
+    Returns array shaped ``(n_foci, n_r)``.
+    """
+    centers = np.atleast_2d(np.asarray(centers, dtype=float))
+    r_vals = np.asarray(r_vals, dtype=float)
+    n1 = len(centers)
+    n_r = len(r_vals)
+    if n1 == 0 or n_r == 0:
+        return np.zeros((n1, n_r), dtype=float)
+
+    unit_offsets = _unit_ball_offsets(rng, n_samples=n_samples)  # (M, 3)
+    # Process per radius to keep memory bounded: (n1, M, 3)
+    factors = np.empty((n1, n_r), dtype=float)
+    for k, r in enumerate(r_vals):
+        r = float(r)
+        if r <= 0:
+            factors[:, k] = 1.0
+            continue
+        samples = centers[:, None, :] + unit_offsets[None, :, :] * r
+        flat = samples.reshape(-1, 3)
+        inside = _points_inside_hull(flat, hull).reshape(n1, n_samples)
+        frac = np.mean(inside, axis=1)
+        factors[:, k] = np.maximum(frac, EDGE_MIN_C)
+    return factors
 
 
 def cross_k12_3d_isotropic(
@@ -403,6 +451,7 @@ def cross_k12_3d_isotropic(
     Edge-corrected bivariate cross-K in 3D.
 
     Type-1 foci ``x`` (fusion / controls); type-2 ``y`` (AuNPs).
+    Neighbor counts are vectorized across radii; edge factors are batched over foci.
     """
     x = np.atleast_2d(np.asarray(x, dtype=float))
     y = np.atleast_2d(np.asarray(y, dtype=float))
@@ -413,24 +462,20 @@ def cross_k12_3d_isotropic(
 
     tree = cKDTree(y)
     r_max = float(r_vals[-1])
-    edge_factors = np.array(
-        [_isotropic_edge_factor_3d(xi, r_max, window.hull, rng) for xi in x],
-        dtype=float,
-    )
+    edge_factors = _isotropic_edge_factors_for_foci(x, r_vals, window.hull, rng)
 
     counts = np.zeros(len(r_vals), dtype=float)
-    for i, xi in enumerate(x):
-        neighbor_idx = tree.query_ball_point(xi, r=r_max)
+    # Batch neighbor queries for all foci at r_max.
+    neighbor_lists = tree.query_ball_point(x, r=r_max)
+    for i, neighbor_idx in enumerate(neighbor_lists):
         if not neighbor_idx:
             continue
-        dists = np.linalg.norm(y[np.asarray(neighbor_idx, dtype=int)] - xi, axis=1)
-        c_max = edge_factors[i]
-        for k, r in enumerate(r_vals):
-            if r >= r_max:
-                c_r = c_max
-            else:
-                c_r = _isotropic_edge_factor_3d(xi, float(r), window.hull, rng)
-            counts[k] += np.sum(dists < r) / c_r
+        dists = np.linalg.norm(y[np.asarray(neighbor_idx, dtype=int)] - x[i], axis=1)
+        # Vectorized cumulative counts over the r grid.
+        # (n_neighbors, n_r)
+        within = dists[:, None] < r_vals[None, :]
+        neighbor_counts = within.sum(axis=0).astype(float)
+        counts += neighbor_counts / edge_factors[i]
 
     return (window.volume_nm3 / (n1 * n2)) * counts
 
@@ -450,6 +495,178 @@ def ripley_l12_from_points(
     rng: np.random.Generator,
 ) -> np.ndarray:
     return ripley_l12(cross_k12_3d_isotropic(x, y, r_vals, window, rng), r_vals)
+
+
+def ripley_l12_curves_per_focus(
+    x: np.ndarray,
+    y: np.ndarray,
+    r_vals: np.ndarray,
+    window: RipleyWindow3D,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """
+    Per-focus L₁₂ curves with shared edge-factor Monte Carlo and batched counts.
+
+    Returns ``(n_foci, n_r)``. Each row is the univariate-focus L₁₂ using partners ``y``.
+    """
+    x = np.atleast_2d(np.asarray(x, dtype=float))
+    y = np.atleast_2d(np.asarray(y, dtype=float))
+    r_vals = np.asarray(r_vals, dtype=float)
+    n1, n2 = len(x), len(y)
+    if n1 == 0:
+        return np.empty((0, len(r_vals)))
+    if n2 == 0 or window.volume_nm3 <= 0:
+        return np.full((n1, len(r_vals)), np.nan)
+
+    tree = cKDTree(y)
+    r_max = float(r_vals[-1])
+    edge_factors = _isotropic_edge_factors_for_foci(x, r_vals, window.hull, rng)
+    neighbor_lists = tree.query_ball_point(x, r=r_max)
+    k12 = np.zeros((n1, len(r_vals)), dtype=float)
+    scale = window.volume_nm3 / float(n2)
+    for i, neighbor_idx in enumerate(neighbor_lists):
+        if not neighbor_idx:
+            continue
+        dists = np.linalg.norm(y[np.asarray(neighbor_idx, dtype=int)] - x[i], axis=1)
+        neighbor_counts = (dists[:, None] < r_vals[None, :]).sum(axis=0).astype(float)
+        k12[i] = scale * (neighbor_counts / edge_factors[i])
+    return ripley_l12(k12, r_vals)
+
+
+MAD_MIN_NULL_CURVES = 1000
+MAD_CONFIDENCE = 0.99
+
+
+def mad_test_from_curves(
+    observed: np.ndarray,
+    null_curves: np.ndarray,
+    r_vals: np.ndarray,
+    *,
+    confidence: float = MAD_CONFIDENCE,
+    min_null_curves: int = MAD_MIN_NULL_CURVES,
+    null_name: str = "null",
+) -> dict:
+    """
+    Maximum Absolute Deviation (MAD) test vs a Monte Carlo null (Rebola et al. 2019 style).
+
+    Skips (``status='skipped_insufficient_nulls'``) unless ``null_curves`` has at least
+    ``min_null_curves`` replicates. Uses a two-sided ``confidence`` envelope (default 99%).
+    """
+    observed = np.asarray(observed, dtype=float).reshape(-1)
+    null_curves = np.atleast_2d(np.asarray(null_curves, dtype=float))
+    r_vals = np.asarray(r_vals, dtype=float)
+    n_null = int(null_curves.shape[0]) if null_curves.size else 0
+    alpha = 1.0 - float(confidence)
+    lo_pct = 100.0 * (alpha / 2.0)
+    hi_pct = 100.0 * (1.0 - alpha / 2.0)
+
+    result = {
+        "null_name": null_name,
+        "status": "ok",
+        "n_null_curves": n_null,
+        "confidence": float(confidence),
+        "min_null_curves": int(min_null_curves),
+        "T_obs": np.nan,
+        "T_critical": np.nan,
+        "p_mad": np.nan,
+        "rejects_null": False,
+        "r_at_max_nm": np.nan,
+        "signed_diff_at_max": np.nan,
+        "null_mean": np.full(len(r_vals), np.nan),
+        "ce_lo": np.full(len(r_vals), np.nan),
+        "ce_hi": np.full(len(r_vals), np.nan),
+        "abs_diff": np.full(len(r_vals), np.nan),
+        "normalized_obs": np.full(len(r_vals), np.nan),
+    }
+    if n_null < int(min_null_curves) or len(observed) != len(r_vals):
+        result["status"] = "skipped_insufficient_nulls"
+        return result
+    if not np.all(np.isfinite(observed)) or not np.any(np.isfinite(null_curves)):
+        result["status"] = "skipped_nonfinite"
+        return result
+
+    null_mean = np.nanmean(null_curves, axis=0)
+    ce_lo = np.nanpercentile(null_curves, lo_pct, axis=0)
+    ce_hi = np.nanpercentile(null_curves, hi_pct, axis=0)
+    abs_diff = np.abs(observed - null_mean)
+    T_obs = float(np.nanmax(abs_diff))
+    r_at_max_idx = int(np.nanargmax(abs_diff))
+    signed = float(observed[r_at_max_idx] - null_mean[r_at_max_idx])
+
+    # MAD for each null replicate vs the same null mean (Baddeley / Rebola).
+    T_null = np.nanmax(np.abs(null_curves - null_mean[None, :]), axis=1)
+    T_critical = float(np.nanpercentile(T_null, 100.0 * confidence))
+    p_mad = float((1 + np.sum(T_null >= T_obs)) / (1 + n_null))
+
+    # Scale so the confidence envelope appears as ±1 (Rebola pooling convention).
+    half = np.maximum(np.maximum(null_mean - ce_lo, ce_hi - null_mean), 1e-12)
+    normalized = (observed - null_mean) / half
+
+    result.update(
+        {
+            "T_obs": T_obs,
+            "T_critical": T_critical,
+            "p_mad": p_mad,
+            "rejects_null": bool(T_obs > T_critical),
+            "r_at_max_nm": float(r_vals[r_at_max_idx]),
+            "signed_diff_at_max": signed,
+            "null_mean": null_mean,
+            "ce_lo": ce_lo,
+            "ce_hi": ce_hi,
+            "abs_diff": abs_diff,
+            "normalized_obs": normalized,
+        }
+    )
+    return result
+
+
+def mad_result_to_summary_row(
+    mad: dict,
+    *,
+    extra_cols: dict | None = None,
+) -> dict:
+    """Flatten MAD scalar fields into one CSV/JSON-friendly row."""
+    row = {
+        "null_name": mad["null_name"],
+        "status": mad["status"],
+        "n_null_curves": int(mad["n_null_curves"]),
+        "confidence": float(mad["confidence"]),
+        "T_obs": float(mad["T_obs"]) if np.isfinite(mad["T_obs"]) else np.nan,
+        "T_critical": float(mad["T_critical"]) if np.isfinite(mad["T_critical"]) else np.nan,
+        "T_obs_over_T_critical": (
+            float(mad["T_obs"] / mad["T_critical"])
+            if np.isfinite(mad["T_obs"]) and np.isfinite(mad["T_critical"]) and mad["T_critical"] > 0
+            else np.nan
+        ),
+        "p_mad": float(mad["p_mad"]) if np.isfinite(mad["p_mad"]) else np.nan,
+        "rejects_null": bool(mad["rejects_null"]),
+        "r_at_max_nm": float(mad["r_at_max_nm"]) if np.isfinite(mad["r_at_max_nm"]) else np.nan,
+        "signed_diff_at_max": (
+            float(mad["signed_diff_at_max"]) if np.isfinite(mad["signed_diff_at_max"]) else np.nan
+        ),
+    }
+    if extra_cols:
+        row.update(extra_cols)
+    return row
+
+
+def mad_result_to_curves_dataframe(mad: dict, r_vals: np.ndarray, *, observed: np.ndarray) -> pd.DataFrame:
+    """Long/wide hybrid table for MAD graphing: observed, null mean, 99% CE, abs_diff, normalized."""
+    r_vals = np.asarray(r_vals, dtype=float)
+    observed = np.asarray(observed, dtype=float).reshape(-1)
+    return pd.DataFrame(
+        {
+            "r_nm": r_vals,
+            "observed_L12": observed,
+            "null_mean_L12": mad["null_mean"],
+            "ce_lo": mad["ce_lo"],
+            "ce_hi": mad["ce_hi"],
+            "abs_diff": mad["abs_diff"],
+            "normalized_obs": mad["normalized_obs"],
+            "null_name": mad["null_name"],
+            "status": mad["status"],
+        }
+    )
 
 
 def _ripley_r_grid(r_max_nm: float, r_step_nm: float) -> np.ndarray:
@@ -725,24 +942,94 @@ def _mean_sd_band(curves: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarra
     return mean - sd, mean, mean + sd, sd
 
 
+def _mean_sem_band(curves: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return (mean − SEM, mean, mean + SEM, SEM) across replicate curves at each r."""
+    if curves.size == 0:
+        empty = np.array([])
+        return empty, empty, empty, empty
+    mean = np.nanmean(curves, axis=0)
+    n = int(np.shape(curves)[0])
+    if n > 1:
+        sd = np.nanstd(curves, axis=0, ddof=1)
+        sem = sd / np.sqrt(float(n))
+    else:
+        sem = np.zeros_like(mean)
+    return mean - sem, mean, mean + sem, sem
+
+
 def _prism_sd_envelope_columns(
     curves: np.ndarray,
     r_vals: np.ndarray,
     *,
     prefix: str,
 ) -> dict[str, np.ndarray]:
-    """SD summary columns for Prism tables (mean ± SD envelope)."""
+    """SD + SEM summary columns for Prism tables (mean ± SD/SEM envelopes)."""
     if len(curves):
         sd_lo, mean, sd_hi, sd = _mean_sd_band(curves)
+        sem_lo, _, sem_hi, sem = _mean_sem_band(curves)
     else:
         nan = np.full(len(r_vals), np.nan)
         sd_lo = mean = sd_hi = sd = nan
+        sem_lo = sem_hi = sem = nan
     return {
         f"{prefix}_mean": mean,
         f"{prefix}_sd": sd,
         f"{prefix}_sd_envelope_lo": sd_lo,
         f"{prefix}_sd_envelope_hi": sd_hi,
+        f"{prefix}_sem": sem,
+        f"{prefix}_sem_envelope_lo": sem_lo,
+        f"{prefix}_sem_envelope_hi": sem_hi,
     }
+
+
+def curves_matrix_to_long_dataframe(
+    curves: np.ndarray,
+    r_vals: np.ndarray,
+    *,
+    curve_type: str,
+    value_col: str = "ripley_l12",
+    extra_cols: dict | None = None,
+) -> pd.DataFrame:
+    """Long table with one row per (replicate_index, r_nm) from an (n_curves, n_r) matrix."""
+    curves = np.atleast_2d(np.asarray(curves, dtype=float))
+    r_vals = np.asarray(r_vals, dtype=float)
+    if curves.size == 0 or curves.shape[0] == 0:
+        return pd.DataFrame(
+            columns=["curve_type", "replicate_index", "r_nm", value_col, *(extra_cols or {})]
+        )
+    rows: list[dict] = []
+    extras = extra_cols or {}
+    for i, curve in enumerate(curves):
+        for r_val, l_val in zip(r_vals, curve):
+            rows.append(
+                {
+                    "curve_type": curve_type,
+                    "replicate_index": int(i),
+                    "r_nm": float(r_val),
+                    value_col: float(l_val),
+                    **extras,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def curves_matrix_to_wide_dataframe(
+    curves: np.ndarray,
+    r_vals: np.ndarray,
+    *,
+    curve_type: str,
+    column_prefix: str | None = None,
+) -> pd.DataFrame:
+    """Wide Prism-friendly table: one row per r_nm, one column per replicate curve."""
+    curves = np.atleast_2d(np.asarray(curves, dtype=float))
+    r_vals = np.asarray(r_vals, dtype=float)
+    prefix = column_prefix or curve_type
+    if curves.size == 0 or curves.shape[0] == 0:
+        return pd.DataFrame({"r_nm": r_vals})
+    data: dict[str, np.ndarray] = {"r_nm": r_vals}
+    for i, curve in enumerate(curves):
+        data[f"{prefix}_{i}"] = np.asarray(curve, dtype=float)
+    return pd.DataFrame(data)
 
 
 def _fusing_mean_curve(obs_curves: np.ndarray, r_vals: np.ndarray) -> np.ndarray:
@@ -765,7 +1052,7 @@ def build_ripley_l12_prism_envelope_table(
     Pre-aggregated mean curves and control envelopes for graphing (e.g. Prism).
 
     Percentile envelopes use 2.5–97.5% across replicate curves. SD envelopes use
-    mean ± 1 sample SD (per-vesicle curves for fusing/close; per-replicate for nulls).
+    mean ± 1 sample SD; SEM envelopes use mean ± SEM (SD / sqrt(n)).
 
     One row per (control_comparison, r_nm). ``fusing_L12_mean`` is identical within
     each comparison group (mean across fusing-vesicle curves).
@@ -793,12 +1080,18 @@ def build_ripley_l12_prism_envelope_table(
                     "fusing_L12_sd": float(fusing_sd["fusing_L12_sd"][i]),
                     "fusing_L12_sd_envelope_lo": float(fusing_sd["fusing_L12_sd_envelope_lo"][i]),
                     "fusing_L12_sd_envelope_hi": float(fusing_sd["fusing_L12_sd_envelope_hi"][i]),
+                    "fusing_L12_sem": float(fusing_sd["fusing_L12_sem"][i]),
+                    "fusing_L12_sem_envelope_lo": float(fusing_sd["fusing_L12_sem_envelope_lo"][i]),
+                    "fusing_L12_sem_envelope_hi": float(fusing_sd["fusing_L12_sem_envelope_hi"][i]),
                     "control_L12_mean": float(ctrl_mean[i]),
                     "control_L12_sd": float(ctrl_sd["control_L12_sd"][i]),
                     "control_L12_envelope_lo": float(ctrl_lo[i]),
                     "control_L12_envelope_hi": float(ctrl_hi[i]),
                     "control_L12_sd_envelope_lo": float(ctrl_sd["control_L12_sd_envelope_lo"][i]),
                     "control_L12_sd_envelope_hi": float(ctrl_sd["control_L12_sd_envelope_hi"][i]),
+                    "control_L12_sem": float(ctrl_sd["control_L12_sem"][i]),
+                    "control_L12_sem_envelope_lo": float(ctrl_sd["control_L12_sem_envelope_lo"][i]),
+                    "control_L12_sem_envelope_hi": float(ctrl_sd["control_L12_sem_envelope_hi"][i]),
                     "n_fusing_curves": int(len(obs_curves)),
                     "n_control_curves": n_control,
                     "n_aunp_partners": int(n_aunp_partners),
@@ -889,9 +1182,7 @@ def _per_point_l12_curves(
     points = np.atleast_2d(np.asarray(points, dtype=float))
     if len(points) == 0:
         return np.empty((0, len(r_vals)))
-    return np.vstack(
-        [ripley_l12_from_points(pt.reshape(1, 3), aunp_coords, r_vals, window, rng) for pt in points]
-    )
+    return ripley_l12_curves_per_focus(points, aunp_coords, r_vals, window, rng)
 
 
 def run_ripley_for_zone_window(
@@ -907,7 +1198,7 @@ def run_ripley_for_zone_window(
     r_vals: np.ndarray,
     rng: np.random.Generator,
     figures_dir: Path | None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     fusing_xyz = _fusion_xyz_from_rows(fusing_rows)
     close_xyz = _fusion_xyz_from_rows(close_rows)
 
@@ -969,6 +1260,91 @@ def run_ripley_for_zone_window(
             ),
         )
 
+    # MAD of zone-mean fusing L₁₂ vs each control null (only if that null has ≥1000 curves).
+    obs_mean = (
+        np.nanmean(obs_curves, axis=0)
+        if len(obs_curves)
+        else np.full(len(r_vals), np.nan)
+    )
+    mad_summary_rows: list[dict] = []
+    mad_curve_frames: list[pd.DataFrame] = []
+    mad_results_for_plot: list[dict] = []
+    for null_name, null_curves in (
+        ("close", close_curves),
+        ("shift_40nm", shift_curves),
+        ("label_permutation", perm_curves),
+    ):
+        mad = mad_test_from_curves(
+            obs_mean,
+            null_curves,
+            r_vals,
+            min_null_curves=MAD_MIN_NULL_CURVES,
+            null_name=null_name,
+        )
+        mad_results_for_plot.append(mad)
+        mad_summary_rows.append(
+            mad_result_to_summary_row(
+                mad,
+                extra_cols={
+                    "active_zone_name": zone_name,
+                    "aunp_subset": aunp_subset,
+                    "window_mode": mode_tag,
+                },
+            )
+        )
+        mad_curves = mad_result_to_curves_dataframe(mad, r_vals, observed=obs_mean)
+        mad_curves.insert(0, "active_zone_name", zone_name)
+        mad_curves.insert(1, "aunp_subset", aunp_subset)
+        mad_curves.insert(2, "window_mode", mode_tag)
+        mad_curve_frames.append(mad_curves)
+
+    if figures_dir is not None and mad_results_for_plot:
+        n_panels = len(mad_results_for_plot)
+        fig, axes = plt.subplots(2, n_panels, figsize=(4.2 * n_panels, 7.0), squeeze=False)
+        for col, mad in enumerate(mad_results_for_plot):
+            ax_raw = axes[0, col]
+            ax_norm = axes[1, col]
+            null_label = str(mad["null_name"])
+            ax_raw.plot(r_vals, obs_mean, color="C3", lw=2.0, label="Fusing mean L₁₂")
+            if mad["status"] == "ok":
+                ax_raw.plot(r_vals, mad["null_mean"], color="0.35", lw=1.5, label="Null mean")
+                ax_raw.fill_between(
+                    r_vals, mad["ce_lo"], mad["ce_hi"], color="0.75", alpha=0.55, label="99% CE"
+                )
+                ax_norm.plot(r_vals, mad["normalized_obs"], color="C3", lw=2.0)
+                ax_norm.axhline(1.0, color="0.4", ls="--", lw=1.0)
+                ax_norm.axhline(-1.0, color="0.4", ls="--", lw=1.0)
+                reject_txt = "reject H0" if mad["rejects_null"] else "fail to reject H0"
+                ax_raw.set_title(
+                    f"{null_label}\nT={mad['T_obs']:.3g}/Tcrit={mad['T_critical']:.3g} "
+                    f"(p={mad['p_mad']:.3g}; {reject_txt})",
+                    fontsize=9,
+                )
+            else:
+                ax_raw.set_title(
+                    f"{null_label}\nskipped (n={mad['n_null_curves']} < {mad['min_null_curves']})",
+                    fontsize=9,
+                )
+            ax_raw.axhline(0.0, color="0.5", ls="--", lw=0.8)
+            ax_raw.set_xlabel("r (nm)")
+            ax_raw.set_ylabel("L₁₂(r)")
+            ax_raw.legend(fontsize=7, loc="best")
+            ax_norm.set_xlabel("r (nm)")
+            ax_norm.set_ylabel("Normalized L₁₂")
+            ax_raw.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else DEFAULT_RIPLEY_R_MAX_NM)
+            ax_norm.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else DEFAULT_RIPLEY_R_MAX_NM)
+        fig.suptitle(
+            f"{zone_name} | {mode_tag} | {subset_tag} | MAD (n≥{MAD_MIN_NULL_CURVES})",
+            fontsize=11,
+        )
+        fig.tight_layout()
+        fig.savefig(
+            figures_dir / f"ripley_l12_{mode_tag}_{subset_tag}_mad_vs_nulls.png",
+            dpi=150,
+            bbox_inches="tight",
+        )
+        plt.close(fig)
+
     prism_df = build_ripley_l12_prism_envelope_table(
         zone_name=zone_name,
         aunp_subset=aunp_subset,
@@ -1005,7 +1381,12 @@ def run_ripley_for_zone_window(
                         "window_volume_nm3": float(window.volume_nm3),
                     }
                 )
-    return pd.DataFrame(rows), prism_df
+    curves_df = pd.DataFrame(rows)
+    mad_summary_df = pd.DataFrame(mad_summary_rows)
+    mad_curves_df = (
+        pd.concat(mad_curve_frames, ignore_index=True) if mad_curve_frames else pd.DataFrame()
+    )
+    return curves_df, prism_df, mad_summary_df, mad_curves_df
 
 
 def _distance_csv_name(stem: str, subset: AunpSubset) -> str:
@@ -1105,6 +1486,13 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
                             "fusing_L12_sd_envelope_hi": float(
                                 fusing_sd["fusing_L12_sd_envelope_hi"][i]
                             ),
+                            "fusing_L12_sem": float(fusing_sd["fusing_L12_sem"][i]),
+                            "fusing_L12_sem_envelope_lo": float(
+                                fusing_sd["fusing_L12_sem_envelope_lo"][i]
+                            ),
+                            "fusing_L12_sem_envelope_hi": float(
+                                fusing_sd["fusing_L12_sem_envelope_hi"][i]
+                            ),
                             "control_L12_mean": float(ctrl_mean[i]),
                             "control_L12_sd": float(ctrl_sd["control_L12_sd"][i]),
                             "control_L12_envelope_lo": float(ctrl_lo[i]),
@@ -1114,6 +1502,13 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
                             ),
                             "control_L12_sd_envelope_hi": float(
                                 ctrl_sd["control_L12_sd_envelope_hi"][i]
+                            ),
+                            "control_L12_sem": float(ctrl_sd["control_L12_sem"][i]),
+                            "control_L12_sem_envelope_lo": float(
+                                ctrl_sd["control_L12_sem_envelope_lo"][i]
+                            ),
+                            "control_L12_sem_envelope_hi": float(
+                                ctrl_sd["control_L12_sem_envelope_hi"][i]
                             ),
                             "n_fusing_curves": int(len(obs_curves)),
                             "n_control_curves": n_control,
@@ -1397,6 +1792,8 @@ def run_fusion_point_aunp_analyses_for_zone(
     # --- Ripley: both window modes × three AuNP partner subsets ---
     ripley_frames: list[pd.DataFrame] = []
     prism_frames: list[pd.DataFrame] = []
+    mad_summary_frames: list[pd.DataFrame] = []
+    mad_curve_frames: list[pd.DataFrame] = []
 
     for window_mode in RIPLEY_WINDOW_MODES:
         window = ripley_windows.get(window_mode)
@@ -1407,7 +1804,7 @@ def run_fusion_point_aunp_analyses_for_zone(
             if len(sub_coords) == 0:
                 print(f"  Skipping Ripley for {zone_name} ({subset}, {window_mode}): no partner AuNPs")
                 continue
-            df_r, df_prism = run_ripley_for_zone_window(
+            df_r, df_prism, df_mad_summary, df_mad_curves = run_ripley_for_zone_window(
                 zone_name=zone_name,
                 aunp_subset=subset,
                 window=window,
@@ -1426,6 +1823,16 @@ def run_fusion_point_aunp_analyses_for_zone(
                 df_prism.insert(0, "tomogram_name", tomogram_name)
                 df_prism.insert(1, "alignment_dir", alignment_dir)
                 prism_frames.append(df_prism)
+            if not df_mad_summary.empty:
+                df_mad_summary = df_mad_summary.copy()
+                df_mad_summary.insert(0, "tomogram_name", tomogram_name)
+                df_mad_summary.insert(1, "alignment_dir", alignment_dir)
+                mad_summary_frames.append(df_mad_summary)
+            if not df_mad_curves.empty:
+                df_mad_curves = df_mad_curves.copy()
+                df_mad_curves.insert(0, "tomogram_name", tomogram_name)
+                df_mad_curves.insert(1, "alignment_dir", alignment_dir)
+                mad_curve_frames.append(df_mad_curves)
 
     if not any(ripley_windows.values()):
         print(f"  Skipping Ripley for {zone_name}: no valid hull windows")
@@ -1435,6 +1842,38 @@ def run_fusion_point_aunp_analyses_for_zone(
         ripley_long.insert(0, "tomogram_name", tomogram_name)
         ripley_long.insert(1, "alignment_dir", alignment_dir)
         ripley_long.to_csv(out_dir / "ripley_l12_curves.csv", index=False)
+        # Explicit individual-curves filename for consistency with other Ripley analyses.
+        ripley_long.to_csv(out_dir / "ripley_l12_individual_curves.csv", index=False)
+        # Prism-friendly wide tables: one column per replicate curve.
+        for (subset, window_mode, curve_type), grp in ripley_long.groupby(
+            ["aunp_subset", "window_mode", "curve_type"], sort=False
+        ):
+            r_vals_g = np.sort(grp["r_nm"].unique())
+            curves_list: list[np.ndarray] = []
+            for _, rep in grp.groupby("replicate_index", sort=True):
+                rep = rep.sort_values("r_nm")
+                if len(rep) != len(r_vals_g):
+                    continue
+                curves_list.append(rep["ripley_l12"].to_numpy(dtype=float))
+            if not curves_list:
+                continue
+            wide = curves_matrix_to_wide_dataframe(
+                np.vstack(curves_list),
+                r_vals_g,
+                curve_type=str(curve_type),
+            )
+            wide_name = (
+                f"ripley_l12_individual_{subset}_{window_mode}_{curve_type}_wide.csv"
+            )
+            wide.to_csv(out_dir / wide_name, index=False)
+    if mad_summary_frames:
+        pd.concat(mad_summary_frames, ignore_index=True).to_csv(
+            out_dir / "ripley_l12_mad_summary.csv", index=False
+        )
+    if mad_curve_frames:
+        pd.concat(mad_curve_frames, ignore_index=True).to_csv(
+            out_dir / "ripley_l12_mad_curves.csv", index=False
+        )
     if prism_frames:
         prism_long = pd.concat(prism_frames, ignore_index=True)
         prism_long.to_csv(out_dir / "ripley_l12_prism_envelopes.csv", index=False)
@@ -1482,6 +1921,8 @@ def run_fusion_point_aunp_analyses_for_zone(
         "n_hull_aunp_monomer_dimer": int(len(aunp_coords_all)),
         "n_shift_replicates": int(n_replicates),
         "n_label_permutations": int(n_replicates),
+        "mad_min_null_curves": int(MAD_MIN_NULL_CURVES),
+        "mad_nulls": ["close", "shift_40nm", "label_permutation"],
         "seed": int(seed),
         "ripley_edge_correction": "isotropic_3d_mc",
         "window_volume_definition": "convex_hull_volume",

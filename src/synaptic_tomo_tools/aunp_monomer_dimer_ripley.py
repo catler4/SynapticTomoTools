@@ -13,6 +13,9 @@ labels while preserving the per-zone monomer and dimer counts (1000 replicates b
 Greedy segregation — same pooled points and class counts, but relabel by growing a compact
 spatial cluster (random seed) for monomers or dimers (10 replicates each by default).
 
+MAD tests (Rebola-style max absolute deviation vs 99% CE) are run against label-permutation
+and both segregation extremes when that null has ≥1000 curves; otherwise they are skipped.
+
 Pooled output is grouped per tomogram set.
 """
 
@@ -28,11 +31,14 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from scipy.spatial.distance import cdist
+
 from .alignment_utils import require_alignment_dir
 from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
     DEFAULT_ANALYSIS_SEED,
     DEFAULT_RIPLEY_R_MAX_NM,
     DEFAULT_RIPLEY_R_STEP_NM,
+    MAD_MIN_NULL_CURVES,
     RIPLEY_PERCENTILE_HI,
     RIPLEY_PERCENTILE_LO,
     _default_ripley_perm_workers,
@@ -40,9 +46,14 @@ from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
     _prism_sd_envelope_columns,
     _ripley_r_grid,
     build_ripley_window_3d,
+    curves_matrix_to_long_dataframe,
+    curves_matrix_to_wide_dataframe,
     label_permutation_l12_curves,
     load_monomer_dimer_aunps_for_zone,
     load_synaptic_cleft_active_zone_points,
+    mad_result_to_curves_dataframe,
+    mad_result_to_summary_row,
+    mad_test_from_curves,
     ripley_l12_from_points,
     subset_aunps,
 )
@@ -53,6 +64,9 @@ MONOMER_DIMER_N_SEGREGATION = 10
 MIN_POINTS_PER_CLASS = 2
 
 POOLED_CURVES_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_curves.csv")
+POOLED_INDIVIDUAL_CURVES_CSV = Path(
+    "results/aunps/aunp_monomer_dimer_ripley_l12_individual_curves.csv"
+)
 POOLED_PRISM_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_prism_pooled.csv")
 POOLED_PRISM_WIDE_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_prism_pooled_wide.csv")
 POOLED_FIGURES_DIR = Path("results/aunps/figures/aunp_monomer_dimer_ripley_l12_pooled")
@@ -103,6 +117,8 @@ def _greedy_segregation_cluster_mask(
     pool: np.ndarray,
     n_cluster: int,
     seed_idx: int,
+    *,
+    pairwise_dist: np.ndarray | None = None,
 ) -> np.ndarray:
     """Greedy nearest-neighbor growth of a compact cluster from a seed point index."""
     pool = np.atleast_2d(np.asarray(pool, dtype=float))
@@ -113,24 +129,18 @@ def _greedy_segregation_cluster_mask(
         return mask
 
     seed_idx = int(seed_idx) % n_pool
-    cluster: set[int] = {seed_idx}
-    unclustered = set(range(n_pool)) - cluster
-
-    while len(cluster) < n_cluster:
-        cluster_pts = pool[sorted(cluster)]
-        best_idx: int | None = None
-        best_dist = np.inf
-        for idx in unclustered:
-            dist = float(np.min(np.linalg.norm(cluster_pts - pool[idx], axis=1)))
-            if dist < best_dist or (dist == best_dist and (best_idx is None or idx < best_idx)):
-                best_dist = dist
-                best_idx = idx
-        if best_idx is None:
+    dist = pairwise_dist if pairwise_dist is not None else cdist(pool, pool)
+    mask[seed_idx] = True
+    for _ in range(n_cluster - 1):
+        # Distance of each point to the nearest already-clustered point.
+        d_to_cluster = dist[:, mask].min(axis=1)
+        d_to_cluster = d_to_cluster.copy()
+        d_to_cluster[mask] = np.inf
+        # argmin breaks ties by lowest index (matches prior set-based growth).
+        best_idx = int(np.argmin(d_to_cluster))
+        if not np.isfinite(d_to_cluster[best_idx]):
             break
-        cluster.add(best_idx)
-        unclustered.remove(best_idx)
-
-    mask[sorted(cluster)] = True
+        mask[best_idx] = True
     return mask
 
 
@@ -171,9 +181,12 @@ def _greedy_segregation_l12_curves(
     if n_cluster <= 0 or n_cluster > n_pool:
         return curves
 
+    pairwise_dist = cdist(pool, pool)
     for rep_id in range(n_rep_int):
         seed_idx = int(rng.integers(0, n_pool))
-        cluster_mask = _greedy_segregation_cluster_mask(pool, n_cluster, seed_idx)
+        cluster_mask = _greedy_segregation_cluster_mask(
+            pool, n_cluster, seed_idx, pairwise_dist=pairwise_dist
+        )
         if cluster_class == "dimer":
             monomer_coords = pool[~cluster_mask]
             dimer_coords = pool[cluster_mask]
@@ -187,6 +200,115 @@ def _greedy_segregation_l12_curves(
             pbar.set_postfix_str(f"{mode_label} {rep_id + 1}/{n_rep_int}", refresh=False)
             pbar.update(1)
     return curves
+
+
+def _plot_mad_panels(
+    *,
+    r_vals: np.ndarray,
+    observed_l12: np.ndarray,
+    mad_results: list[dict],
+    output_path: Path,
+    title: str,
+) -> None:
+    """Plot raw + normalized MAD panels for each null that was evaluated (or skipped)."""
+    n_panels = max(1, len(mad_results))
+    fig, axes = plt.subplots(2, n_panels, figsize=(4.2 * n_panels, 7.0), squeeze=False)
+    for col, mad in enumerate(mad_results):
+        ax_raw = axes[0, col]
+        ax_norm = axes[1, col]
+        null_label = str(mad["null_name"])
+        ax_raw.plot(r_vals, observed_l12, color="C0", lw=2.0, label="Observed L₁₂")
+        if mad["status"] == "ok":
+            ax_raw.plot(r_vals, mad["null_mean"], color="0.35", lw=1.5, label="Null mean")
+            ax_raw.fill_between(
+                r_vals,
+                mad["ce_lo"],
+                mad["ce_hi"],
+                color="0.75",
+                alpha=0.55,
+                label=f"{100 * float(mad['confidence']):.0f}% CE",
+            )
+            ax_raw.axvline(mad["r_at_max_nm"], color="C3", ls=":", lw=1.0, alpha=0.8)
+            ax_norm.plot(r_vals, mad["normalized_obs"], color="C0", lw=2.0, label="Normalized obs")
+            ax_norm.axhline(1.0, color="0.4", ls="--", lw=1.0)
+            ax_norm.axhline(-1.0, color="0.4", ls="--", lw=1.0)
+            reject_txt = "reject H0" if mad["rejects_null"] else "fail to reject H0"
+            ax_raw.set_title(
+                f"{null_label}\n"
+                f"T={mad['T_obs']:.3g} / Tcrit={mad['T_critical']:.3g} "
+                f"(p={mad['p_mad']:.3g}; {reject_txt})",
+                fontsize=9,
+            )
+        else:
+            ax_raw.set_title(
+                f"{null_label}\nskipped (n={mad['n_null_curves']} < {mad['min_null_curves']})",
+                fontsize=9,
+            )
+            ax_norm.set_title("MAD not run", fontsize=9)
+        ax_raw.axhline(0.0, color="0.5", ls="--", lw=0.8)
+        ax_raw.set_xlabel("r (nm)")
+        ax_raw.set_ylabel("L₁₂(r)")
+        ax_raw.legend(fontsize=7, loc="best")
+        ax_norm.set_xlabel("r (nm)")
+        ax_norm.set_ylabel("(L₁₂ − μ_null) / CE half-width")
+        ax_norm.legend(fontsize=7, loc="best")
+        for ax in (ax_raw, ax_norm):
+            ax.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else 0.0)
+    fig.suptitle(title, fontsize=11)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _write_mad_outputs(
+    *,
+    out_dir: Path,
+    figures_dir: Path | None,
+    zone_name: str,
+    r_vals: np.ndarray,
+    observed_l12: np.ndarray,
+    null_named_curves: list[tuple[str, np.ndarray]],
+    write_figures: bool,
+    figure_title: str,
+) -> tuple[Path, Path]:
+    """Run MAD for each null (≥1000 curves), write summary/curves CSVs and optional figure."""
+    summary_rows: list[dict] = []
+    curve_frames: list[pd.DataFrame] = []
+    mad_results: list[dict] = []
+    for null_name, null_curves in null_named_curves:
+        mad = mad_test_from_curves(
+            observed_l12,
+            null_curves,
+            r_vals,
+            min_null_curves=MAD_MIN_NULL_CURVES,
+            null_name=null_name,
+        )
+        mad_results.append(mad)
+        summary_rows.append(
+            mad_result_to_summary_row(
+                mad,
+                extra_cols={"active_zone_name": zone_name},
+            )
+        )
+        curves_df = mad_result_to_curves_dataframe(mad, r_vals, observed=observed_l12)
+        curves_df.insert(0, "active_zone_name", zone_name)
+        curve_frames.append(curves_df)
+
+    summary_path = out_dir / "ripley_l12_mad_summary.csv"
+    curves_path = out_dir / "ripley_l12_mad_curves.csv"
+    pd.DataFrame(summary_rows).to_csv(summary_path, index=False)
+    pd.concat(curve_frames, ignore_index=True).to_csv(curves_path, index=False)
+
+    if write_figures and figures_dir is not None:
+        _plot_mad_panels(
+            r_vals=r_vals,
+            observed_l12=observed_l12,
+            mad_results=mad_results,
+            output_path=figures_dir / "ripley_l12_mad_vs_nulls.png",
+            title=figure_title,
+        )
+    return summary_path, curves_path
 
 
 def _segregation_band_columns(
@@ -205,10 +327,65 @@ def _segregation_band_columns(
         f"{prefix}_sd": sd[f"{prefix}_sd"],
         f"{prefix}_sd_envelope_lo": sd[f"{prefix}_sd_envelope_lo"],
         f"{prefix}_sd_envelope_hi": sd[f"{prefix}_sd_envelope_hi"],
+        f"{prefix}_sem": sd[f"{prefix}_sem"],
+        f"{prefix}_sem_envelope_lo": sd[f"{prefix}_sem_envelope_lo"],
+        f"{prefix}_sem_envelope_hi": sd[f"{prefix}_sem_envelope_hi"],
         f"{prefix}_envelope_lo": lo,
         f"{prefix}_envelope_hi": hi,
         f"{prefix}_band_mean": mean,
     }
+
+
+def build_monomer_dimer_individual_curves_table(
+    *,
+    zone_name: str,
+    r_vals: np.ndarray,
+    observed_l12: np.ndarray,
+    perm_curves: np.ndarray,
+    seg_cluster_dimer_curves: np.ndarray,
+    seg_cluster_monomer_curves: np.ndarray,
+    n_monomer: int,
+    n_dimer: int,
+    window_volume_nm3: float,
+) -> pd.DataFrame:
+    """Long table of every individual L₁₂ curve (observed + all control replicates)."""
+    extras = {
+        "active_zone_name": zone_name,
+        "window_mode": WINDOW_MODE,
+        "n_monomer": int(n_monomer),
+        "n_dimer": int(n_dimer),
+        "window_volume_nm3": float(window_volume_nm3),
+    }
+    frames = [
+        curves_matrix_to_long_dataframe(
+            np.atleast_2d(observed_l12),
+            r_vals,
+            curve_type="observed",
+            extra_cols=extras,
+        ),
+        curves_matrix_to_long_dataframe(
+            perm_curves,
+            r_vals,
+            curve_type="label_permutation",
+            extra_cols=extras,
+        ),
+        curves_matrix_to_long_dataframe(
+            seg_cluster_dimer_curves,
+            r_vals,
+            curve_type="segregation_cluster_dimer",
+            extra_cols=extras,
+        ),
+        curves_matrix_to_long_dataframe(
+            seg_cluster_monomer_curves,
+            r_vals,
+            curve_type="segregation_cluster_monomer",
+            extra_cols=extras,
+        ),
+    ]
+    nonempty = [f for f in frames if not f.empty]
+    if not nonempty:
+        return pd.DataFrame()
+    return pd.concat(nonempty, ignore_index=True)
 
 
 def build_monomer_dimer_prism_table(
@@ -251,6 +428,9 @@ def build_monomer_dimer_prism_table(
                 "control_L12_sd": float(perm_sd["control_L12_sd"][i]),
                 "control_L12_sd_envelope_lo": float(perm_sd["control_L12_sd_envelope_lo"][i]),
                 "control_L12_sd_envelope_hi": float(perm_sd["control_L12_sd_envelope_hi"][i]),
+                "control_L12_sem": float(perm_sd["control_L12_sem"][i]),
+                "control_L12_sem_envelope_lo": float(perm_sd["control_L12_sem_envelope_lo"][i]),
+                "control_L12_sem_envelope_hi": float(perm_sd["control_L12_sem_envelope_hi"][i]),
                 "control_L12_envelope_lo": float(perm_lo[i]),
                 "control_L12_envelope_hi": float(perm_hi[i]),
                 "segregation_cluster_dimer_L12_mean": float(
@@ -264,6 +444,15 @@ def build_monomer_dimer_prism_table(
                 ),
                 "segregation_cluster_dimer_L12_sd_envelope_hi": float(
                     seg_dimer["segregation_cluster_dimer_L12_sd_envelope_hi"][i]
+                ),
+                "segregation_cluster_dimer_L12_sem": float(
+                    seg_dimer["segregation_cluster_dimer_L12_sem"][i]
+                ),
+                "segregation_cluster_dimer_L12_sem_envelope_lo": float(
+                    seg_dimer["segregation_cluster_dimer_L12_sem_envelope_lo"][i]
+                ),
+                "segregation_cluster_dimer_L12_sem_envelope_hi": float(
+                    seg_dimer["segregation_cluster_dimer_L12_sem_envelope_hi"][i]
                 ),
                 "segregation_cluster_dimer_L12_envelope_lo": float(
                     seg_dimer["segregation_cluster_dimer_L12_envelope_lo"][i]
@@ -282,6 +471,15 @@ def build_monomer_dimer_prism_table(
                 ),
                 "segregation_cluster_monomer_L12_sd_envelope_hi": float(
                     seg_monomer["segregation_cluster_monomer_L12_sd_envelope_hi"][i]
+                ),
+                "segregation_cluster_monomer_L12_sem": float(
+                    seg_monomer["segregation_cluster_monomer_L12_sem"][i]
+                ),
+                "segregation_cluster_monomer_L12_sem_envelope_lo": float(
+                    seg_monomer["segregation_cluster_monomer_L12_sem_envelope_lo"][i]
+                ),
+                "segregation_cluster_monomer_L12_sem_envelope_hi": float(
+                    seg_monomer["segregation_cluster_monomer_L12_sem_envelope_hi"][i]
                 ),
                 "segregation_cluster_monomer_L12_envelope_lo": float(
                     seg_monomer["segregation_cluster_monomer_L12_envelope_lo"][i]
@@ -359,10 +557,16 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                     "observed_L12_sd": float(obs_sd["observed_L12_sd"][i]),
                     "observed_L12_sd_envelope_lo": float(obs_sd["observed_L12_sd_envelope_lo"][i]),
                     "observed_L12_sd_envelope_hi": float(obs_sd["observed_L12_sd_envelope_hi"][i]),
+                    "observed_L12_sem": float(obs_sd["observed_L12_sem"][i]),
+                    "observed_L12_sem_envelope_lo": float(obs_sd["observed_L12_sem_envelope_lo"][i]),
+                    "observed_L12_sem_envelope_hi": float(obs_sd["observed_L12_sem_envelope_hi"][i]),
                     "control_L12_mean": float(ctrl_sd["control_L12_mean"][i]),
                     "control_L12_sd": float(ctrl_sd["control_L12_sd"][i]),
                     "control_L12_sd_envelope_lo": float(ctrl_sd["control_L12_sd_envelope_lo"][i]),
                     "control_L12_sd_envelope_hi": float(ctrl_sd["control_L12_sd_envelope_hi"][i]),
+                    "control_L12_sem": float(ctrl_sd["control_L12_sem"][i]),
+                    "control_L12_sem_envelope_lo": float(ctrl_sd["control_L12_sem_envelope_lo"][i]),
+                    "control_L12_sem_envelope_hi": float(ctrl_sd["control_L12_sem_envelope_hi"][i]),
                     "segregation_cluster_dimer_L12_mean": float(
                         seg_dimer_sd["segregation_cluster_dimer_L12_mean"][i]
                     ),
@@ -375,6 +579,15 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                     "segregation_cluster_dimer_L12_sd_envelope_hi": float(
                         seg_dimer_sd["segregation_cluster_dimer_L12_sd_envelope_hi"][i]
                     ),
+                    "segregation_cluster_dimer_L12_sem": float(
+                        seg_dimer_sd["segregation_cluster_dimer_L12_sem"][i]
+                    ),
+                    "segregation_cluster_dimer_L12_sem_envelope_lo": float(
+                        seg_dimer_sd["segregation_cluster_dimer_L12_sem_envelope_lo"][i]
+                    ),
+                    "segregation_cluster_dimer_L12_sem_envelope_hi": float(
+                        seg_dimer_sd["segregation_cluster_dimer_L12_sem_envelope_hi"][i]
+                    ),
                     "segregation_cluster_monomer_L12_mean": float(
                         seg_monomer_sd["segregation_cluster_monomer_L12_mean"][i]
                     ),
@@ -386,6 +599,15 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                     ),
                     "segregation_cluster_monomer_L12_sd_envelope_hi": float(
                         seg_monomer_sd["segregation_cluster_monomer_L12_sd_envelope_hi"][i]
+                    ),
+                    "segregation_cluster_monomer_L12_sem": float(
+                        seg_monomer_sd["segregation_cluster_monomer_L12_sem"][i]
+                    ),
+                    "segregation_cluster_monomer_L12_sem_envelope_lo": float(
+                        seg_monomer_sd["segregation_cluster_monomer_L12_sem_envelope_lo"][i]
+                    ),
+                    "segregation_cluster_monomer_L12_sem_envelope_hi": float(
+                        seg_monomer_sd["segregation_cluster_monomer_L12_sem_envelope_hi"][i]
                     ),
                     "n_zone_curves": int(len(obs_curves)),
                     "n_tomograms": n_tomograms,
@@ -555,6 +777,33 @@ def run_monomer_dimer_ripley_for_zone(
     curves_path = out_dir / "ripley_l12_curves.csv"
     curves_df.to_csv(curves_path, index=False)
 
+    individual_df = build_monomer_dimer_individual_curves_table(
+        zone_name=zone_name,
+        r_vals=r_vals,
+        observed_l12=observed_l12,
+        perm_curves=perm_curves,
+        seg_cluster_dimer_curves=seg_cluster_dimer_curves,
+        seg_cluster_monomer_curves=seg_cluster_monomer_curves,
+        n_monomer=n_monomer,
+        n_dimer=n_dimer,
+        window_volume_nm3=float(window.volume_nm3),
+    )
+    individual_path = out_dir / "ripley_l12_individual_curves.csv"
+    individual_df.to_csv(individual_path, index=False)
+    # Prism-friendly wide tables (one file per curve family).
+    curves_matrix_to_wide_dataframe(
+        np.atleast_2d(observed_l12), r_vals, curve_type="observed"
+    ).to_csv(out_dir / "ripley_l12_individual_observed_wide.csv", index=False)
+    curves_matrix_to_wide_dataframe(
+        perm_curves, r_vals, curve_type="label_permutation"
+    ).to_csv(out_dir / "ripley_l12_individual_label_permutation_wide.csv", index=False)
+    curves_matrix_to_wide_dataframe(
+        seg_cluster_dimer_curves, r_vals, curve_type="segregation_cluster_dimer"
+    ).to_csv(out_dir / "ripley_l12_individual_segregation_cluster_dimer_wide.csv", index=False)
+    curves_matrix_to_wide_dataframe(
+        seg_cluster_monomer_curves, r_vals, curve_type="segregation_cluster_monomer"
+    ).to_csv(out_dir / "ripley_l12_individual_segregation_cluster_monomer_wide.csv", index=False)
+
     prism_df = build_monomer_dimer_prism_table(
         zone_name=zone_name,
         r_vals=r_vals,
@@ -643,6 +892,24 @@ def run_monomer_dimer_ripley_for_zone(
         )
         plt.close(fig)
 
+    mad_summary_path, mad_curves_path = _write_mad_outputs(
+        out_dir=out_dir,
+        figures_dir=figures_dir if write_figures else None,
+        zone_name=zone_name,
+        r_vals=r_vals,
+        observed_l12=observed_l12,
+        null_named_curves=[
+            ("label_permutation", perm_curves),
+            ("segregation_cluster_dimer", seg_cluster_dimer_curves),
+            ("segregation_cluster_monomer", seg_cluster_monomer_curves),
+        ],
+        write_figures=write_figures,
+        figure_title=(
+            f"{tomogram_name} | {zone_name} | MAD vs nulls "
+            f"(run only if n≥{MAD_MIN_NULL_CURVES})"
+        ),
+    )
+
     meta = {
         "tomogram_name": tomogram_name,
         "alignment_dir": alignment_dir,
@@ -660,6 +927,12 @@ def run_monomer_dimer_ripley_for_zone(
         "control_label_permutation": "label_permutation_preserving_class_counts",
         "control_segregation": "greedy_nearest_neighbor_cluster",
         "ripley_edge_correction": "isotropic_3d_mc",
+        "mad_min_null_curves": int(MAD_MIN_NULL_CURVES),
+        "mad_nulls": [
+            "label_permutation",
+            "segregation_cluster_dimer",
+            "segregation_cluster_monomer",
+        ],
         "seed": int(seed),
     }
     with open(out_dir / "run_metadata.json", "w") as f:
@@ -672,7 +945,10 @@ def run_monomer_dimer_ripley_for_zone(
     )
     return {
         "curves_path": curves_path,
+        "individual_curves_path": individual_path,
         "prism_path": prism_path,
+        "mad_summary_path": mad_summary_path,
+        "mad_curves_path": mad_curves_path,
         "output_dir": out_dir,
     }
 
@@ -690,7 +966,7 @@ def run_monomer_dimer_ripley_for_tomogram(
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
-) -> tuple[list[pd.DataFrame], list[pd.DataFrame]]:
+) -> tuple[list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame]]:
     """Run monomer vs dimer Ripley for all mapped active zones in one tomogram."""
     from .activezone import load_active_zone_mapping
 
@@ -699,12 +975,13 @@ def run_monomer_dimer_ripley_for_tomogram(
     az_mapping = load_active_zone_mapping(tomogram_path, alignment_dir) or {}
     if not az_mapping:
         print("No active zone mapping; skipping monomer/dimer Ripley analyses")
-        return [], []
+        return [], [], []
 
     az_mapping = {int(k): v for k, v in az_mapping.items()}
     indices = list(active_zone_indices) if active_zone_indices is not None else sorted(az_mapping)
 
     curve_frames: list[pd.DataFrame] = []
+    individual_frames: list[pd.DataFrame] = []
     prism_frames: list[pd.DataFrame] = []
 
     zone_tasks = [
@@ -740,13 +1017,16 @@ def run_monomer_dimer_ripley_for_tomogram(
         if result is None:
             continue
         curves_path = result["curves_path"]
+        individual_path = result["individual_curves_path"]
         prism_path = result["prism_path"]
         if curves_path.is_file():
             curve_frames.append(pd.read_csv(curves_path))
+        if individual_path.is_file():
+            individual_frames.append(pd.read_csv(individual_path))
         if prism_path.is_file():
             prism_frames.append(pd.read_csv(prism_path))
 
-    return curve_frames, prism_frames
+    return curve_frames, prism_frames, individual_frames
 
 
 def plot_pooled_monomer_dimer_ripley_visualizations(

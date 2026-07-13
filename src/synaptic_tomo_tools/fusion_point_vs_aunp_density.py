@@ -934,6 +934,7 @@ def cross_k12(
     """
     x = np.atleast_2d(np.asarray(x, dtype=float))
     y = np.atleast_2d(np.asarray(y, dtype=float))
+    r_vals = np.asarray(r_vals, dtype=float)
     n1, n2 = len(x), len(y)
     if n1 == 0 or n2 == 0 or window_area_nm2 <= 0:
         return np.full(len(r_vals), np.nan)
@@ -941,13 +942,12 @@ def cross_k12(
     tree = cKDTree(y)
     counts = np.zeros(len(r_vals), dtype=float)
     r_max = float(r_vals[-1])
-    for xi in x:
-        neighbor_idx = tree.query_ball_point(xi, r=r_max)
+    neighbor_lists = tree.query_ball_point(x, r=r_max)
+    for i, neighbor_idx in enumerate(neighbor_lists):
         if not neighbor_idx:
             continue
-        dists = np.linalg.norm(y[np.asarray(neighbor_idx)] - xi, axis=1)
-        for k, r in enumerate(r_vals):
-            counts[k] += np.sum(dists < r)
+        dists = np.linalg.norm(y[np.asarray(neighbor_idx, dtype=int)] - x[i], axis=1)
+        counts += (dists[:, None] < r_vals[None, :]).sum(axis=0).astype(float)
     return (window_area_nm2 / (n1 * n2)) * counts
 
 
