@@ -146,6 +146,169 @@ def load_active_zone_max_distance_nm_from_results(
     return None
 
 
+def _farthest_point_sample_indices(points: np.ndarray, num_samples: int) -> np.ndarray:
+    """
+    Greedily select `num_samples` indices into `points` that are spread as evenly
+    as possible (farthest-point sampling), rather than picking by array order.
+    """
+    n = points.shape[0]
+    if num_samples >= n:
+        return np.arange(n)
+    if num_samples <= 0:
+        return np.empty(0, dtype=int)
+
+    selected = np.empty(num_samples, dtype=int)
+    min_dist_sq = np.full(n, np.inf)
+    farthest = 0
+    for i in range(num_samples):
+        selected[i] = farthest
+        diff = points - points[farthest]
+        dist_sq = np.einsum('ij,ij->i', diff, diff)
+        min_dist_sq = np.minimum(min_dist_sq, dist_sq)
+        farthest = int(np.argmax(min_dist_sq))
+    return selected
+
+
+def _alpha_shape_boundary_edges(points: np.ndarray, alpha: float) -> set:
+    """
+    Return the boundary edges (as a set of index-pairs into ``points``) of the
+    alpha shape of a 2D point cloud: the Delaunay triangulation with any
+    triangle whose circumradius exceeds ``alpha`` removed (those triangles
+    "bridge" gaps where there isn't dense enough point support), followed by
+    keeping only the edges that belong to exactly one surviving triangle.
+    """
+    from scipy.spatial import Delaunay
+
+    tri = Delaunay(points)
+    edge_count: Dict[Tuple[int, int], int] = {}
+
+    def add_edge(i: int, j: int) -> None:
+        key = (i, j) if i < j else (j, i)
+        edge_count[key] = edge_count.get(key, 0) + 1
+
+    for ia, ib, ic in tri.simplices:
+        pa, pb, pc = points[ia], points[ib], points[ic]
+        a = np.linalg.norm(pb - pc)
+        b = np.linalg.norm(pa - pc)
+        c = np.linalg.norm(pa - pb)
+        s = 0.5 * (a + b + c)
+        area = np.sqrt(max(s * (s - a) * (s - b) * (s - c), 0.0))
+        if area < 1e-9:
+            continue
+        circum_r = (a * b * c) / (4.0 * area)
+        if circum_r < alpha:
+            add_edge(ia, ib)
+            add_edge(ib, ic)
+            add_edge(ic, ia)
+
+    return {edge for edge, count in edge_count.items() if count == 1}
+
+
+def _order_boundary_edge_loops(edges: set) -> List[List[int]]:
+    """Group alpha-shape boundary edges into closed vertex-index loops."""
+    import networkx as nx
+
+    graph = nx.Graph()
+    graph.add_edges_from(edges)
+
+    loops = []
+    for component in nx.connected_components(graph):
+        if len(component) < 3:
+            continue
+        subgraph = graph.subgraph(component)
+        try:
+            cycle = nx.find_cycle(subgraph)
+        except nx.NetworkXNoCycle:
+            continue
+        loops.append([u for u, _ in cycle])
+    return loops
+
+
+def compute_concave_hull_polygons(
+    points: np.ndarray,
+    alpha: Optional[float] = None,
+    alpha_multiplier: float = 2.5,
+) -> List[np.ndarray]:
+    """
+    Compute concave hull (alpha-shape) boundary polygon(s) around a 2D point cloud.
+
+    Unlike a convex hull, this follows notches/concavities in the point cloud
+    instead of bridging straight across them, which matters for e.g. sampled
+    membrane-vertex projections whose footprint is rarely convex.
+
+    Args:
+        points: (N, 2) array of point coordinates.
+        alpha: Circumradius cutoff for the alpha shape; Delaunay triangles
+            larger than this are treated as bridging empty space and dropped.
+            If None, derived automatically as ``alpha_multiplier`` times the
+            median nearest-neighbor distance between points.
+        alpha_multiplier: Scale factor used to derive ``alpha`` automatically.
+
+    Returns:
+        List of (M, 2) arrays, each a closed boundary polygon (first point
+        repeated at the end) of one connected region of the alpha shape.
+        Empty if fewer than 3 points are given.
+    """
+    points = np.asarray(points, dtype=float)
+    if len(points) < 3:
+        return []
+
+    if alpha is None:
+        nn_tree = cKDTree(points)
+        nn_dist, _ = nn_tree.query(points, k=2)
+        median_nn_dist = np.median(nn_dist[:, 1])
+        alpha = alpha_multiplier * median_nn_dist
+
+    edges = _alpha_shape_boundary_edges(points, alpha)
+    loops = _order_boundary_edge_loops(edges)
+
+    polygons = []
+    for loop in loops:
+        poly = points[loop]
+        poly = np.vstack([poly, poly[:1]])
+        polygons.append(poly)
+    return polygons
+
+
+def concave_hull_grid_mask(
+    points: np.ndarray,
+    grid_shape: Tuple[int, int],
+    alpha: Optional[float] = None,
+    alpha_multiplier: float = 2.5,
+) -> Tuple[np.ndarray, List[np.ndarray]]:
+    """
+    Boolean mask of shape ``grid_shape`` marking pixels inside the concave
+    hull of a 2D point cloud given in (x, y) image-pixel coordinates.
+
+    Args:
+        points: (N, 2) array of (x, y) point coordinates.
+        grid_shape: (height, width) of the target raster, matching an
+            imshow-style (row, col) = (y, x) array.
+        alpha, alpha_multiplier: see ``compute_concave_hull_polygons``.
+
+    Returns:
+        Tuple of (mask, polygons): ``mask`` is a boolean array of shape
+        ``grid_shape`` (True = inside the hull), and ``polygons`` is the list
+        of boundary polygons from ``compute_concave_hull_polygons`` (handy
+        for drawing the outline).
+    """
+    from matplotlib.path import Path
+
+    polygons = compute_concave_hull_polygons(points, alpha=alpha, alpha_multiplier=alpha_multiplier)
+    height, width = grid_shape
+    if not polygons:
+        return np.ones(grid_shape, dtype=bool), polygons
+
+    grid_y, grid_x = np.mgrid[0:height, 0:width]
+    grid_points = np.column_stack([grid_x.ravel(), grid_y.ravel()])
+
+    inside = np.zeros(len(grid_points), dtype=bool)
+    for poly in polygons:
+        inside |= Path(poly).contains_points(grid_points)
+
+    return inside.reshape(grid_shape), polygons
+
+
 def calculate_packing_density_using_sliding_cylinder(
     active_zone: dict,
     active_zonogram: dict,
@@ -176,8 +339,23 @@ def calculate_packing_density_using_sliding_cylinder(
     """
     ps_mesh = active_zone['active_postsynaptic_mesh']
     step = max(1, int(vertex_sampling_step))
-    subset_vertices = ps_mesh.vertices[::step]
-    
+
+    # active_postsynaptic_mesh includes both outer (cleft-facing) and inner
+    # (back-facing) vertices; only sample from the outer-facing ones, since
+    # those are the ones actually facing the AuNPs.
+    outer_points = active_zone.get('active_postsynaptic_outer_points')
+    if outer_points is not None and len(outer_points) > 0:
+        outer_tree = cKDTree(np.asarray(outer_points))
+        dist_to_outer, _ = outer_tree.query(ps_mesh.vertices)
+        outer_mask = dist_to_outer < 1e-3
+        candidate_vertices = ps_mesh.vertices[outer_mask]
+    else:
+        candidate_vertices = ps_mesh.vertices
+
+    num_samples = max(1, len(candidate_vertices) // step)
+    sample_idxs = _farthest_point_sample_indices(np.asarray(candidate_vertices), num_samples)
+    subset_vertices = candidate_vertices[sample_idxs]
+
     tree = cKDTree(ps_mesh.vertices)
     # Generate a cKDTree of aunps
     tree_aunps = cKDTree(aunp_coordinates)
