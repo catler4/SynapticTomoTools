@@ -446,12 +446,18 @@ def cross_k12_3d_isotropic(
     r_vals: np.ndarray,
     window: RipleyWindow3D,
     rng: np.random.Generator,
+    *,
+    edge_factors: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Edge-corrected bivariate cross-K in 3D.
 
     Type-1 foci ``x`` (fusion / controls); type-2 ``y`` (AuNPs).
     Neighbor counts are vectorized across radii; edge factors are batched over foci.
+
+    ``edge_factors`` may supply a precomputed ``(n1, n_r)`` isotropic edge-correction
+    matrix for the foci (skips the Monte-Carlo estimate); useful when the same physical
+    points are reused across many label permutations.
     """
     x = np.atleast_2d(np.asarray(x, dtype=float))
     y = np.atleast_2d(np.asarray(y, dtype=float))
@@ -462,7 +468,14 @@ def cross_k12_3d_isotropic(
 
     tree = cKDTree(y)
     r_max = float(r_vals[-1])
-    edge_factors = _isotropic_edge_factors_for_foci(x, r_vals, window.hull, rng)
+    if edge_factors is None:
+        edge_factors = _isotropic_edge_factors_for_foci(x, r_vals, window.hull, rng)
+    else:
+        edge_factors = np.asarray(edge_factors, dtype=float)
+        if edge_factors.shape != (n1, len(r_vals)):
+            raise ValueError(
+                f"edge_factors shape {edge_factors.shape} != expected {(n1, len(r_vals))}"
+            )
 
     counts = np.zeros(len(r_vals), dtype=float)
     # Batch neighbor queries for all foci at r_max.
@@ -493,8 +506,13 @@ def ripley_l12_from_points(
     r_vals: np.ndarray,
     window: RipleyWindow3D,
     rng: np.random.Generator,
+    *,
+    edge_factors: np.ndarray | None = None,
 ) -> np.ndarray:
-    return ripley_l12(cross_k12_3d_isotropic(x, y, r_vals, window, rng), r_vals)
+    return ripley_l12(
+        cross_k12_3d_isotropic(x, y, r_vals, window, rng, edge_factors=edge_factors),
+        r_vals,
+    )
 
 
 def ripley_l12_curves_per_focus(
@@ -782,11 +800,13 @@ def _init_label_perm_l12_worker(
     r_vals: np.ndarray,
     window: RipleyWindow3D,
     n_monomer: int,
+    pool_edge_factors: np.ndarray | None = None,
 ) -> None:
     _PERM_L12_CTX["pool"] = pool
     _PERM_L12_CTX["r_vals"] = r_vals
     _PERM_L12_CTX["window"] = window
     _PERM_L12_CTX["n_monomer"] = int(n_monomer)
+    _PERM_L12_CTX["pool_edge_factors"] = pool_edge_factors
 
 
 def _label_perm_l12_worker(task: tuple[int, int]) -> tuple[int, np.ndarray]:
@@ -796,11 +816,15 @@ def _label_perm_l12_worker(task: tuple[int, int]) -> tuple[int, np.ndarray]:
     r_vals = _PERM_L12_CTX["r_vals"]
     window = _PERM_L12_CTX["window"]
     n_monomer = _PERM_L12_CTX["n_monomer"]
+    pool_edge_factors = _PERM_L12_CTX.get("pool_edge_factors")
     rng = np.random.default_rng(int(seed))
     class1_idx = rng.choice(len(pool), n_monomer, replace=False)
     mask = np.zeros(len(pool), dtype=bool)
     mask[class1_idx] = True
-    curve = ripley_l12_from_points(pool[mask], pool[~mask], r_vals, window, rng)
+    focus_edge = pool_edge_factors[mask] if pool_edge_factors is not None else None
+    curve = ripley_l12_from_points(
+        pool[mask], pool[~mask], r_vals, window, rng, edge_factors=focus_edge
+    )
     return int(perm_id), curve
 
 
@@ -812,6 +836,7 @@ def _label_permutation_l12_curves_sequential(
     rng: np.random.Generator,
     *,
     n_perm: int,
+    pool_edge_factors: np.ndarray | None = None,
     pbar=None,
 ) -> np.ndarray:
     """Sequential label-permutation null L₁₂ curves."""
@@ -821,7 +846,10 @@ def _label_permutation_l12_curves_sequential(
         class1_idx = rng.choice(n_pool, n_monomer, replace=False)
         mask = np.zeros(n_pool, dtype=bool)
         mask[class1_idx] = True
-        curves[perm_id] = ripley_l12_from_points(pool[mask], pool[~mask], r_vals, window, rng)
+        focus_edge = pool_edge_factors[mask] if pool_edge_factors is not None else None
+        curves[perm_id] = ripley_l12_from_points(
+            pool[mask], pool[~mask], r_vals, window, rng, edge_factors=focus_edge
+        )
         if pbar is not None:
             pbar.set_postfix_str(f"perm {perm_id + 1}/{int(n_perm)}", refresh=False)
             pbar.update(1)
@@ -846,6 +874,10 @@ def label_permutation_l12_curves(
     Pool monomer + dimer points, then for each replicate randomly relabel exactly
     ``n_monomer`` points as class 1 (monomer) and the rest as class 2 (dimer).
     Returns an ``(n_perm, len(r_vals))`` array.
+
+    Edge-correction factors depend only on the fixed pooled coordinates (not on the
+    label assignment), so they are estimated once for the whole pool and indexed per
+    replicate — this avoids ~``n_perm`` redundant Monte-Carlo edge computations.
     """
     pool = np.vstack([np.atleast_2d(monomer_coords), np.atleast_2d(dimer_coords)])
     n_pool = len(pool)
@@ -859,17 +891,28 @@ def label_permutation_l12_curves(
         n_workers = _default_ripley_perm_workers(n_perm_int)
     n_workers = max(1, min(int(n_workers), n_perm_int))
 
+    # Precompute isotropic edge factors once for every pooled point (reused across perms).
+    edge_rng = np.random.default_rng(int(seed) + 7919)
+    pool_edge_factors = _isotropic_edge_factors_for_foci(pool, r_vals, window.hull, edge_rng)
+
     if n_workers == 1:
         perm_rng = rng if rng is not None else np.random.default_rng(int(seed))
         return _label_permutation_l12_curves_sequential(
-            pool, n_monomer, r_vals, window, perm_rng, n_perm=n_perm_int, pbar=pbar
+            pool,
+            n_monomer,
+            r_vals,
+            window,
+            perm_rng,
+            n_perm=n_perm_int,
+            pool_edge_factors=pool_edge_factors,
+            pbar=pbar,
         )
 
     tasks = [(perm_id, int(seed) + 1 + perm_id) for perm_id in range(n_perm_int)]
     with ProcessPoolExecutor(
         max_workers=n_workers,
         initializer=_init_label_perm_l12_worker,
-        initargs=(pool, r_vals, window, n_monomer),
+        initargs=(pool, r_vals, window, n_monomer, pool_edge_factors),
     ) as executor:
         futures = [executor.submit(_label_perm_l12_worker, task) for task in tasks]
         for fut in as_completed(futures):

@@ -44,6 +44,7 @@ from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
     RIPLEY_PERCENTILE_HI,
     RIPLEY_PERCENTILE_LO,
     _default_ripley_perm_workers,
+    _isotropic_edge_factors_for_foci,
     _percentile_band,
     _prism_sd_envelope_columns,
     _ripley_r_grid,
@@ -184,19 +185,26 @@ def _greedy_segregation_l12_curves(
         return curves
 
     pairwise_dist = cdist(pool, pool)
+    # Edge factors depend only on the fixed pooled coordinates, so estimate once and index.
+    pool_edge_factors = _isotropic_edge_factors_for_foci(pool, r_vals, window.hull, rng)
     for rep_id in range(n_rep_int):
         seed_idx = int(rng.integers(0, n_pool))
         cluster_mask = _greedy_segregation_cluster_mask(
             pool, n_cluster, seed_idx, pairwise_dist=pairwise_dist
         )
         if cluster_class == "dimer":
-            monomer_coords = pool[~cluster_mask]
-            dimer_coords = pool[cluster_mask]
+            monomer_mask = ~cluster_mask
         else:
-            monomer_coords = pool[cluster_mask]
-            dimer_coords = pool[~cluster_mask]
+            monomer_mask = cluster_mask
+        monomer_coords = pool[monomer_mask]
+        dimer_coords = pool[~monomer_mask]
         curves[rep_id] = ripley_l12_from_points(
-            monomer_coords, dimer_coords, r_vals, window, rng
+            monomer_coords,
+            dimer_coords,
+            r_vals,
+            window,
+            rng,
+            edge_factors=pool_edge_factors[monomer_mask],
         )
         if pbar is not None:
             pbar.set_postfix_str(f"{mode_label} {rep_id + 1}/{n_rep_int}", refresh=False)
