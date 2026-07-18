@@ -11,19 +11,21 @@ Control: label permutation — pool all monomer + dimer points, then randomly re
 labels while preserving the per-zone monomer and dimer counts (1000 replicates by default).
 
 Greedy segregation — same pooled points and class counts, but relabel by growing a compact
-spatial cluster (random seed) for monomers or dimers (10 replicates each by default).
+spatial cluster (random seed) for monomers or dimers. Replicate count always matches the
+label-permutation count (``n_perm``, default 1000).
 
 MAD tests (Rebola-style max absolute deviation vs 99% CE) are run against label-permutation
 and both segregation extremes when that null has ≥1000 curves; otherwise they are skipped.
 Each MAD is reported for the full r-grid and for the restricted 30–50 nm window.
 
-Pooled output is grouped per tomogram set.
+Pooled output is grouped per tomogram set (curves, individual curves, and MAD summaries).
 """
 
 from __future__ import annotations
 
 import json
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -63,13 +65,14 @@ from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
 
 WINDOW_MODE = "synaptic_cleft_az_hull"
 MONOMER_DIMER_N_PERM = 1000
-MONOMER_DIMER_N_SEGREGATION = 10
+# Segregation always uses the same replicate count as label permutation (n_perm).
 MIN_POINTS_PER_CLASS = 2
 
 POOLED_CURVES_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_curves.csv")
 POOLED_INDIVIDUAL_CURVES_CSV = Path(
     "results/aunps/aunp_monomer_dimer_ripley_l12_individual_curves.csv"
 )
+POOLED_MAD_SUMMARY_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_mad_summary.csv")
 POOLED_PRISM_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_prism_pooled.csv")
 POOLED_PRISM_WIDE_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_prism_pooled_wide.csv")
 POOLED_FIGURES_DIR = Path("results/aunps/figures/aunp_monomer_dimer_ripley_l12_pooled")
@@ -147,6 +150,55 @@ def _greedy_segregation_cluster_mask(
     return mask
 
 
+# Shared context for parallel greedy-segregation L₁₂ workers.
+_SEG_L12_CTX: dict = {}
+
+
+def _init_greedy_seg_l12_worker(
+    pool: np.ndarray,
+    r_vals: np.ndarray,
+    window,
+    n_cluster: int,
+    cluster_class: str,
+    pairwise_dist: np.ndarray,
+    pool_edge_factors: np.ndarray,
+) -> None:
+    _SEG_L12_CTX["pool"] = pool
+    _SEG_L12_CTX["r_vals"] = r_vals
+    _SEG_L12_CTX["window"] = window
+    _SEG_L12_CTX["n_cluster"] = int(n_cluster)
+    _SEG_L12_CTX["cluster_class"] = cluster_class
+    _SEG_L12_CTX["pairwise_dist"] = pairwise_dist
+    _SEG_L12_CTX["pool_edge_factors"] = pool_edge_factors
+
+
+def _greedy_seg_l12_worker(task: tuple[int, int]) -> tuple[int, np.ndarray]:
+    """Run one greedy-segregation L₁₂ curve (rep_id, seed)."""
+    rep_id, seed = task
+    pool = _SEG_L12_CTX["pool"]
+    r_vals = _SEG_L12_CTX["r_vals"]
+    window = _SEG_L12_CTX["window"]
+    n_cluster = _SEG_L12_CTX["n_cluster"]
+    cluster_class = _SEG_L12_CTX["cluster_class"]
+    pairwise_dist = _SEG_L12_CTX["pairwise_dist"]
+    pool_edge_factors = _SEG_L12_CTX["pool_edge_factors"]
+    rng = np.random.default_rng(int(seed))
+    seed_idx = int(rng.integers(0, len(pool)))
+    cluster_mask = _greedy_segregation_cluster_mask(
+        pool, n_cluster, seed_idx, pairwise_dist=pairwise_dist
+    )
+    monomer_mask = ~cluster_mask if cluster_class == "dimer" else cluster_mask
+    curve = ripley_l12_from_points(
+        pool[monomer_mask],
+        pool[~monomer_mask],
+        r_vals,
+        window,
+        rng,
+        edge_factors=pool_edge_factors[monomer_mask],
+    )
+    return int(rep_id), curve
+
+
 def _greedy_segregation_l12_curves(
     pool: np.ndarray,
     n_monomer: int,
@@ -157,6 +209,9 @@ def _greedy_segregation_l12_curves(
     *,
     cluster_class: str,
     n_rep: int,
+    pool_edge_factors: np.ndarray | None = None,
+    seed: int = DEFAULT_ANALYSIS_SEED,
+    n_workers: int | None = None,
     pbar: Optional[tqdm] = None,
 ) -> np.ndarray:
     """
@@ -164,6 +219,8 @@ def _greedy_segregation_l12_curves(
 
     ``cluster_class`` is ``"monomer"`` or ``"dimer"``: grow that class into a compact cluster,
     assign the remaining points to the other class, then compute monomer→dimer L₁₂.
+
+    Uses the same edge-factor precompute + process-pool pattern as label permutation.
     """
     pool = np.atleast_2d(np.asarray(pool, dtype=float))
     n_pool = len(pool)
@@ -185,30 +242,62 @@ def _greedy_segregation_l12_curves(
         return curves
 
     pairwise_dist = cdist(pool, pool)
-    # Edge factors depend only on the fixed pooled coordinates, so estimate once and index.
-    pool_edge_factors = _isotropic_edge_factors_for_foci(pool, r_vals, window.hull, rng)
-    for rep_id in range(n_rep_int):
-        seed_idx = int(rng.integers(0, n_pool))
-        cluster_mask = _greedy_segregation_cluster_mask(
-            pool, n_cluster, seed_idx, pairwise_dist=pairwise_dist
-        )
-        if cluster_class == "dimer":
-            monomer_mask = ~cluster_mask
-        else:
-            monomer_mask = cluster_mask
-        monomer_coords = pool[monomer_mask]
-        dimer_coords = pool[~monomer_mask]
-        curves[rep_id] = ripley_l12_from_points(
-            monomer_coords,
-            dimer_coords,
+    if pool_edge_factors is None:
+        pool_edge_factors = _isotropic_edge_factors_for_foci(pool, r_vals, window.hull, rng)
+    else:
+        pool_edge_factors = np.asarray(pool_edge_factors, dtype=float)
+        if pool_edge_factors.shape != (n_pool, len(r_vals)):
+            raise ValueError(
+                f"pool_edge_factors shape {pool_edge_factors.shape} != "
+                f"expected {(n_pool, len(r_vals))}"
+            )
+
+    if n_workers is None:
+        n_workers = _default_ripley_perm_workers(n_rep_int)
+    n_workers = max(1, min(int(n_workers), n_rep_int))
+
+    if n_workers == 1:
+        for rep_id in range(n_rep_int):
+            seed_idx = int(rng.integers(0, n_pool))
+            cluster_mask = _greedy_segregation_cluster_mask(
+                pool, n_cluster, seed_idx, pairwise_dist=pairwise_dist
+            )
+            monomer_mask = ~cluster_mask if cluster_class == "dimer" else cluster_mask
+            curves[rep_id] = ripley_l12_from_points(
+                pool[monomer_mask],
+                pool[~monomer_mask],
+                r_vals,
+                window,
+                rng,
+                edge_factors=pool_edge_factors[monomer_mask],
+            )
+            if pbar is not None:
+                pbar.set_postfix_str(f"{mode_label} {rep_id + 1}/{n_rep_int}", refresh=False)
+                pbar.update(1)
+        return curves
+
+    # Deterministic per-replicate seeds (independent of call-order / worker scheduling).
+    tasks = [(rep_id, int(seed) + 17 + rep_id) for rep_id in range(n_rep_int)]
+    with ProcessPoolExecutor(
+        max_workers=n_workers,
+        initializer=_init_greedy_seg_l12_worker,
+        initargs=(
+            pool,
             r_vals,
             window,
-            rng,
-            edge_factors=pool_edge_factors[monomer_mask],
-        )
-        if pbar is not None:
-            pbar.set_postfix_str(f"{mode_label} {rep_id + 1}/{n_rep_int}", refresh=False)
-            pbar.update(1)
+            n_cluster,
+            cluster_class,
+            pairwise_dist,
+            pool_edge_factors,
+        ),
+    ) as executor:
+        futures = [executor.submit(_greedy_seg_l12_worker, task) for task in tasks]
+        for fut in as_completed(futures):
+            rep_id, curve = fut.result()
+            curves[rep_id] = curve
+            if pbar is not None:
+                pbar.set_postfix_str(f"{mode_label} {rep_id + 1}/{n_rep_int}", refresh=False)
+                pbar.update(1)
     return curves
 
 
@@ -643,13 +732,15 @@ def run_monomer_dimer_ripley_for_zone(
     monomer_star_pattern: Optional[str] = None,
     dimer_star_pattern: Optional[str] = None,
     n_perm: int = MONOMER_DIMER_N_PERM,
-    n_segregation: int = MONOMER_DIMER_N_SEGREGATION,
     r_max_nm: float = DEFAULT_RIPLEY_R_MAX_NM,
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
 ) -> dict[str, Path] | None:
-    """Observed monomer→dimer L₁₂ with label-permutation and greedy-segregation controls."""
+    """Observed monomer→dimer L₁₂ with label-permutation and greedy-segregation controls.
+
+    Greedy segregation always uses the same replicate count as label permutation (``n_perm``).
+    """
     tomogram_path = Path(tomogram_path)
     alignment_dir = require_alignment_dir(alignment_dir)
 
@@ -697,7 +788,8 @@ def run_monomer_dimer_ripley_for_zone(
     pool = np.vstack([np.atleast_2d(monomer_coords), np.atleast_2d(dimer_coords)])
     rng = np.random.default_rng(seed)
     n_perm_int = int(n_perm)
-    n_segregation_int = int(n_segregation)
+    # Segregation always matches label-permutation replicate count.
+    n_segregation_int = n_perm_int
     n_perm_workers = _default_ripley_perm_workers(n_perm_int)
     n_seg_evals = 2 * max(n_segregation_int, 0)
     progress_total = 1 + max(n_perm_int, 0) + n_seg_evals
@@ -710,9 +802,20 @@ def run_monomer_dimer_ripley_for_zone(
         leave=False,
     )
     try:
+        # Edge factors depend only on fixed pooled coordinates — estimate once and reuse
+        # for observed + both segregation modes (label-perm estimates its own pool factors).
+        edge_rng = np.random.default_rng(int(seed) + 7919)
+        pool_edge_factors = _isotropic_edge_factors_for_foci(
+            pool, r_vals, window.hull, edge_rng
+        )
         pbar.set_postfix_str("observed", refresh=False)
         observed_l12 = ripley_l12_from_points(
-            monomer_coords, dimer_coords, r_vals, window, rng
+            monomer_coords,
+            dimer_coords,
+            r_vals,
+            window,
+            rng,
+            edge_factors=pool_edge_factors[:n_monomer],
         )
         pbar.update(1)
         perm_curves = label_permutation_l12_curves(
@@ -735,6 +838,9 @@ def run_monomer_dimer_ripley_for_zone(
             seg_rng,
             cluster_class="dimer",
             n_rep=n_segregation_int,
+            pool_edge_factors=pool_edge_factors,
+            seed=int(seed) + 2_000_000,
+            n_workers=n_perm_workers,
             pbar=pbar if n_segregation_int > 0 else None,
         )
         seg_cluster_monomer_curves = _greedy_segregation_l12_curves(
@@ -746,6 +852,9 @@ def run_monomer_dimer_ripley_for_zone(
             seg_rng,
             cluster_class="monomer",
             n_rep=n_segregation_int,
+            pool_edge_factors=pool_edge_factors,
+            seed=int(seed) + 3_000_000,
+            n_workers=n_perm_workers,
             pbar=pbar if n_segregation_int > 0 else None,
         )
     finally:
@@ -786,8 +895,8 @@ def run_monomer_dimer_ripley_for_zone(
             "seg_cluster_monomer_l12_mean": seg_monomer_mean,
             "n_monomer": n_monomer,
             "n_dimer": n_dimer,
-            "n_permutations": int(n_perm),
-            "n_segregation_replicates": int(n_segregation),
+            "n_permutations": int(n_perm_int),
+            "n_segregation_replicates": int(n_segregation_int),
             "window_volume_nm3": float(window.volume_nm3),
         }
     )
@@ -830,8 +939,8 @@ def run_monomer_dimer_ripley_for_zone(
         seg_cluster_monomer_curves=seg_cluster_monomer_curves,
         n_monomer=n_monomer,
         n_dimer=n_dimer,
-        n_perm=n_perm,
-        n_segregation=n_segregation,
+        n_perm=n_perm_int,
+        n_segregation=n_segregation_int,
         window_volume_nm3=float(window.volume_nm3),
     )
     prism_path = out_dir / "ripley_l12_prism.csv"
@@ -897,7 +1006,7 @@ def run_monomer_dimer_ripley_for_zone(
         ax.set_title(
             f"{tomogram_name} | {zone_name}\n"
             f"monomer ({n_monomer}) vs dimer ({n_dimer}) | "
-            f"{int(n_perm)} label perms, {int(n_segregation)} seg reps/class"
+            f"{int(n_perm_int)} label perms, {int(n_segregation_int)} seg reps/class"
         )
         ax.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else r_max_nm)
         ax.legend(loc="best", fontsize=7)
@@ -935,9 +1044,10 @@ def run_monomer_dimer_ripley_for_zone(
         "window_mode": WINDOW_MODE,
         "n_monomer": int(n_monomer),
         "n_dimer": int(n_dimer),
-        "n_permutations": int(n_perm),
+        "n_permutations": int(n_perm_int),
         "n_perm_workers": int(n_perm_workers),
-        "n_segregation_replicates": int(n_segregation),
+        "n_segregation_replicates": int(n_segregation_int),
+        "segregation_matches_n_perm": True,
         "segregation_modes": ["cluster_dimer", "cluster_monomer"],
         "segregation_seed_strategy": "random_point",
         "window_volume_nm3": float(window.volume_nm3),
@@ -958,8 +1068,8 @@ def run_monomer_dimer_ripley_for_zone(
 
     print(
         f"  Monomer/dimer Ripley L₁₂ ({zone_name}): "
-        f"{n_monomer} monomer, {n_dimer} dimer, {int(n_perm)} perms, "
-        f"{int(n_segregation)} seg reps/class -> {out_dir}"
+        f"{n_monomer} monomer, {n_dimer} dimer, {int(n_perm_int)} perms, "
+        f"{int(n_segregation_int)} seg reps/class -> {out_dir}"
     )
     return {
         "curves_path": curves_path,
@@ -979,13 +1089,16 @@ def run_monomer_dimer_ripley_for_tomogram(
     monomer_star_pattern: Optional[str] = None,
     dimer_star_pattern: Optional[str] = None,
     n_perm: int = MONOMER_DIMER_N_PERM,
-    n_segregation: int = MONOMER_DIMER_N_SEGREGATION,
     r_max_nm: float = DEFAULT_RIPLEY_R_MAX_NM,
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
-) -> tuple[list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame]]:
-    """Run monomer vs dimer Ripley for all mapped active zones in one tomogram."""
+) -> tuple[list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame]]:
+    """Run monomer vs dimer Ripley for all mapped active zones in one tomogram.
+
+    Returns ``(curve_frames, prism_frames, individual_frames, mad_summary_frames)``.
+    Segregation replicate count always matches ``n_perm``.
+    """
     from .activezone import load_active_zone_mapping
 
     tomogram_path = Path(tomogram_path)
@@ -993,7 +1106,7 @@ def run_monomer_dimer_ripley_for_tomogram(
     az_mapping = load_active_zone_mapping(tomogram_path, alignment_dir) or {}
     if not az_mapping:
         print("No active zone mapping; skipping monomer/dimer Ripley analyses")
-        return [], [], []
+        return [], [], [], []
 
     az_mapping = {int(k): v for k, v in az_mapping.items()}
     indices = list(active_zone_indices) if active_zone_indices is not None else sorted(az_mapping)
@@ -1001,6 +1114,7 @@ def run_monomer_dimer_ripley_for_tomogram(
     curve_frames: list[pd.DataFrame] = []
     individual_frames: list[pd.DataFrame] = []
     prism_frames: list[pd.DataFrame] = []
+    mad_summary_frames: list[pd.DataFrame] = []
 
     zone_tasks = [
         (int(az_idx), az_mapping[az_idx])
@@ -1026,7 +1140,6 @@ def run_monomer_dimer_ripley_for_tomogram(
             monomer_star_pattern=monomer_star_pattern,
             dimer_star_pattern=dimer_star_pattern,
             n_perm=n_perm,
-            n_segregation=n_segregation,
             r_max_nm=r_max_nm,
             r_step_nm=r_step_nm,
             seed=seed,
@@ -1037,14 +1150,27 @@ def run_monomer_dimer_ripley_for_tomogram(
         curves_path = result["curves_path"]
         individual_path = result["individual_curves_path"]
         prism_path = result["prism_path"]
+        mad_summary_path = result["mad_summary_path"]
         if curves_path.is_file():
             curve_frames.append(pd.read_csv(curves_path))
         if individual_path.is_file():
             individual_frames.append(pd.read_csv(individual_path))
         if prism_path.is_file():
             prism_frames.append(pd.read_csv(prism_path))
+        if mad_summary_path.is_file():
+            mad_df = pd.read_csv(mad_summary_path)
+            mad_df.insert(0, "tomogram_name", tomogram_path.name)
+            mad_df.insert(1, "alignment_dir", alignment_dir)
+            mad_df["active_zone_index"] = int(az_idx)
+            mad_df["n_permutations"] = int(n_perm) if n_perm is not None else MONOMER_DIMER_N_PERM
+            mad_df["n_segregation_replicates"] = (
+                int(n_perm) if n_perm is not None else MONOMER_DIMER_N_PERM
+            )
+            mad_df["seed"] = int(seed)
+            mad_df["window_mode"] = WINDOW_MODE
+            mad_summary_frames.append(mad_df)
 
-    return curve_frames, prism_frames, individual_frames
+    return curve_frames, prism_frames, individual_frames, mad_summary_frames
 
 
 def plot_pooled_monomer_dimer_ripley_visualizations(

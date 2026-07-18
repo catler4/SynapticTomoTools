@@ -907,8 +907,8 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             zone index (default: ``aunp_tm_BP_active_zone_*_manual_refined_monomer.star``).
         dimer_star_pattern (str or None): Per-AZ dimer STAR filename pattern with ``*`` for the active
             zone index (default: ``aunp_tm_BP_active_zone_*_manual_refined_dimer.star``).
-        monomer_dimer_ripley_n_perm (int or None): Label-permutation replicate count for monomer vs
-            dimer Ripley L₁₂ (default: 1000).
+        monomer_dimer_ripley_n_perm (int or None): Null replicate count for monomer vs dimer
+            Ripley L₁₂ label permutation **and** greedy segregation (default: 1000).
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     print(f"Analyzing AuNPs in {Path(tomogram_path).name}")
@@ -1554,6 +1554,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                 from .aunp_monomer_dimer_ripley import (
                     POOLED_CURVES_CSV as MONOMER_DIMER_POOLED_CURVES_CSV,
                     POOLED_INDIVIDUAL_CURVES_CSV as MONOMER_DIMER_POOLED_INDIVIDUAL_CURVES_CSV,
+                    POOLED_MAD_SUMMARY_CSV as MONOMER_DIMER_POOLED_MAD_SUMMARY_CSV,
                     plot_pooled_monomer_dimer_ripley_visualizations,
                     run_monomer_dimer_ripley_for_tomogram,
                 )
@@ -1565,8 +1566,12 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                     ) or {}
                     az_indices_for_md = sorted(int(k) for k in az_mapping_for_md)
 
-                md_ripley_frames, md_prism_frames, md_individual_frames = (
-                    run_monomer_dimer_ripley_for_tomogram(
+                (
+                    md_ripley_frames,
+                    md_prism_frames,
+                    md_individual_frames,
+                    md_mad_summary_frames,
+                ) = run_monomer_dimer_ripley_for_tomogram(
                         Path(tomogram_path),
                         alignment_dir,
                         active_zone_indices=az_indices_for_md,
@@ -1575,7 +1580,6 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                         n_perm=monomer_dimer_ripley_n_perm,
                         write_figures=True,
                     )
-                )
                 if md_ripley_frames:
                     df_md_ripley = pd.concat(md_ripley_frames, ignore_index=True)
                     if "tomogram_name" not in df_md_ripley.columns:
@@ -1597,6 +1601,21 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                         tomogram_name=tomogram_name,
                         alignment_dir=alignment_dir,
                         set_name=set_name,
+                    )
+                if md_mad_summary_frames:
+                    df_md_mad = pd.concat(md_mad_summary_frames, ignore_index=True)
+                    if "tomogram_name" not in df_md_mad.columns:
+                        df_md_mad.insert(0, "tomogram_name", tomogram_name)
+                    _append_tomogram_results_csv(
+                        df_md_mad,
+                        MONOMER_DIMER_POOLED_MAD_SUMMARY_CSV,
+                        tomogram_name=tomogram_name,
+                        alignment_dir=alignment_dir,
+                        set_name=set_name,
+                    )
+                    print(
+                        f"Appended monomer/dimer MAD summary "
+                        f"({len(df_md_mad)} rows) -> {MONOMER_DIMER_POOLED_MAD_SUMMARY_CSV}"
                     )
                 if md_ripley_frames or md_prism_frames:
                     plot_pooled_monomer_dimer_ripley_visualizations()

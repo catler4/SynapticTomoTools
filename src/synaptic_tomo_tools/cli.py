@@ -1029,8 +1029,9 @@ def main():
         type=int,
         default=None,
         help=(
-            "Label-permutation replicate count for monomer vs dimer Ripley L₁₂ "
-            f"(default: {1000}). Only used with --aunp-monomer-dimer-ripley."
+            "Label-permutation (and matching greedy-segregation) replicate count for "
+            f"monomer vs dimer Ripley L₁₂ (default: {1000}). Segregation always uses "
+            "the same count. Only used with --aunp-monomer-dimer-ripley."
         ),
     )
 

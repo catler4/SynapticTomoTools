@@ -337,19 +337,19 @@ class AnalysisPipelineGUI(tk.Tk):
         aunp_az_center_cb.grid(row=11, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(4, 0))
         monomer_dimer_cb = ttk.Checkbutton(
             aunp_frame,
-            text="Run monomer vs dimer AuNP Ripley L₁₂ (label-permutation control)",
+            text="Run monomer vs dimer AuNP Ripley L₁₂ (label-perm + segregation)",
             variable=self.run_aunp_monomer_dimer_ripley,
             command=self._toggle_monomer_dimer_star_entries,
         )
         monomer_dimer_cb.grid(row=12, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(4, 0))
-        ttk.Label(aunp_frame, text="Monomer/dimer Ripley label-permutation count:").grid(
+        ttk.Label(aunp_frame, text="Monomer/dimer Ripley null replicate count:").grid(
             row=13, column=0, sticky=tk.W, padx=5
         )
         self._monomer_dimer_ripley_n_perm_entry = ttk.Entry(
             aunp_frame, textvariable=self.monomer_dimer_ripley_n_perm, width=8
         )
         self._monomer_dimer_ripley_n_perm_entry.grid(row=13, column=1, padx=5, sticky=tk.W)
-        ttk.Label(aunp_frame, text="(default: 1000; use 10 for quick tests)").grid(
+        ttk.Label(aunp_frame, text="(default: 1000; applies to perm + segregation)").grid(
             row=13, column=2, padx=5, sticky=tk.W
         )
         self._toggle_monomer_dimer_star_entries()
@@ -456,13 +456,15 @@ class AnalysisPipelineGUI(tk.Tk):
         )
         ToolTip(
             monomer_dimer_cb,
-            "3D bivariate Ripley L₁₂ of monomer vs dimer AuNP positions with a label-permutation "
-            "control. Uses the monomer/dimer STAR patterns above.",
+            "3D bivariate Ripley L₁₂ of monomer vs dimer AuNP positions with label-permutation "
+            "and greedy-segregation controls (same replicate count). Uses the monomer/dimer "
+            "STAR patterns above. MAD summaries are pooled into results/aunps/.",
         )
         ToolTip(
             self._monomer_dimer_ripley_n_perm_entry,
-            "Number of label-permutation replicates for the monomer vs dimer Ripley null "
-            "(default 1000). Use a small value (e.g. 10) for quick pipeline tests.",
+            "Number of null replicates for both label permutation and greedy segregation "
+            "(default 1000). Use a small value (e.g. 10) for quick pipeline tests; MAD "
+            "requires ≥1000 to run.",
         )
         ToolTip(sphere_size_entry, "Marker size for visualization sphere overlays (default 36).")
         ToolTip(self.sphere_color_combo, "Marker color for visualization sphere overlays (default gold).")
