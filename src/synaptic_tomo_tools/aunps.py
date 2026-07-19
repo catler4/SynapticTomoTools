@@ -309,6 +309,220 @@ def concave_hull_grid_mask(
     return inside.reshape(grid_shape), polygons
 
 
+# Defaults for per-cluster 2D dilated concave-hull area (alongside convex-hull area).
+CLUSTER_CONCAVE_HULL_BUFFER_NM = 5.0
+CLUSTER_CONCAVE_HULL_GRID_RESOLUTION_NM = 1.0
+CLUSTER_CONCAVE_HULL_ALPHA_MULTIPLIER = 2.5
+
+
+def _project_points_to_best_fit_plane(points: np.ndarray) -> np.ndarray:
+    """Project 3D points onto their best-fit 2D plane (top 2 PCA components)."""
+    points = np.atleast_2d(np.asarray(points, dtype=float))
+    if len(points) == 0:
+        return np.zeros((0, 2), dtype=float)
+    if len(points) == 1:
+        return np.zeros((1, 2), dtype=float)
+    centered = points - points.mean(axis=0)
+    _, _, vt = np.linalg.svd(centered, full_matrices=False)
+    return centered @ vt[:2].T
+
+
+def _point_segment_distance_2d(points: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Vectorized distance from each of ``points`` to the segment a→b."""
+    ab = b - a
+    denom = float(np.dot(ab, ab))
+    if denom == 0.0:
+        return np.linalg.norm(points - a, axis=1)
+    t = np.clip(((points - a) @ ab) / denom, 0.0, 1.0)
+    proj = a + np.outer(t, ab)
+    return np.linalg.norm(points - proj, axis=1)
+
+
+def _distance_to_polygon_boundary_2d(points: np.ndarray, polygon: np.ndarray) -> np.ndarray:
+    """Vectorized distance from each of ``points`` to the closed polyline ``polygon``."""
+    dmin = np.full(len(points), np.inf)
+    for i in range(len(polygon) - 1):
+        d = _point_segment_distance_2d(points, polygon[i], polygon[i + 1])
+        dmin = np.minimum(dmin, d)
+    return dmin
+
+
+def _local_nn_distances_2d(points_2d: np.ndarray) -> np.ndarray:
+    """Per-point nearest-neighbor distance (not a single global median)."""
+    tree = cKDTree(points_2d)
+    nn_dist, _ = tree.query(points_2d, k=2)
+    return nn_dist[:, 1]
+
+
+def _locally_adaptive_alpha_boundary_edges(
+    points: np.ndarray,
+    nn_dist: np.ndarray,
+    alpha_multiplier: float,
+) -> set:
+    """
+    Boundary edges of a locally adaptive alpha shape: each Delaunay triangle is
+    kept if its circumradius is ≤ ``alpha_multiplier`` × mean NN distance of its
+    three vertices (local alpha), rather than one global alpha for the whole set.
+    """
+    from scipy.spatial import Delaunay
+
+    tri = Delaunay(points)
+    edge_count: Dict[Tuple[int, int], int] = {}
+
+    def add_edge(i: int, j: int) -> None:
+        key = (i, j) if i < j else (j, i)
+        edge_count[key] = edge_count.get(key, 0) + 1
+
+    for ia, ib, ic in tri.simplices:
+        pa, pb, pc = points[ia], points[ib], points[ic]
+        a = np.linalg.norm(pb - pc)
+        b = np.linalg.norm(pa - pc)
+        c = np.linalg.norm(pa - pb)
+        s = 0.5 * (a + b + c)
+        area = np.sqrt(max(s * (s - a) * (s - b) * (s - c), 0.0))
+        if area < 1e-9:
+            continue
+        circum_r = (a * b * c) / (4.0 * area)
+        local_alpha = alpha_multiplier * float(np.mean([nn_dist[ia], nn_dist[ib], nn_dist[ic]]))
+        if circum_r <= local_alpha:
+            add_edge(ia, ib)
+            add_edge(ib, ic)
+            add_edge(ic, ia)
+
+    return {edge for edge, count in edge_count.items() if count == 1}
+
+
+def compute_locally_adaptive_concave_hull_polygons(
+    points_2d: np.ndarray,
+    alpha_multiplier: float = CLUSTER_CONCAVE_HULL_ALPHA_MULTIPLIER,
+) -> List[np.ndarray]:
+    """Locally adaptive alpha-shape boundary polygon(s) for a 2D point cloud."""
+    points_2d = np.atleast_2d(np.asarray(points_2d, dtype=float))
+    if len(points_2d) < 3:
+        return []
+    nn_dist = _local_nn_distances_2d(points_2d)
+    edges = _locally_adaptive_alpha_boundary_edges(points_2d, nn_dist, alpha_multiplier)
+    loops = _order_boundary_edge_loops(edges)
+    polygons = []
+    for loop in loops:
+        poly = points_2d[loop]
+        poly = np.vstack([poly, poly[:1]])
+        polygons.append(poly)
+    return polygons
+
+
+def compute_full_coverage_concave_hull_polygons(
+    points_2d: np.ndarray,
+    alpha_multiplier: float = CLUSTER_CONCAVE_HULL_ALPHA_MULTIPLIER,
+    growth_factor: float = 1.5,
+    max_iterations: int = 25,
+) -> List[np.ndarray]:
+    """
+    Locally adaptive alpha-shape polygons grown until every projected point is
+    enclosed; falls back to the 2D convex hull if needed.
+    """
+    from scipy.spatial import ConvexHull
+    from matplotlib.path import Path as MplPath
+
+    points_2d = np.atleast_2d(np.asarray(points_2d, dtype=float))
+    if len(points_2d) < 3:
+        return []
+    current_multiplier = float(alpha_multiplier)
+    for _ in range(max_iterations):
+        polygons = compute_locally_adaptive_concave_hull_polygons(
+            points_2d, alpha_multiplier=current_multiplier
+        )
+        if polygons:
+            inside = np.zeros(len(points_2d), dtype=bool)
+            for poly in polygons:
+                inside |= MplPath(poly).contains_points(points_2d, radius=1e-6)
+            if inside.all():
+                return polygons
+        current_multiplier *= growth_factor
+
+    hull = ConvexHull(points_2d)
+    poly = points_2d[hull.vertices]
+    poly = np.vstack([poly, poly[:1]])
+    return [poly]
+
+
+def compute_dilated_concave_hull_area_nm2(
+    points_2d: np.ndarray,
+    *,
+    buffer_radius_nm: float = CLUSTER_CONCAVE_HULL_BUFFER_NM,
+    grid_resolution_nm: float = CLUSTER_CONCAVE_HULL_GRID_RESOLUTION_NM,
+    alpha_multiplier: float = CLUSTER_CONCAVE_HULL_ALPHA_MULTIPLIER,
+) -> float:
+    """
+    Area (nm²) of the locally adaptive concave hull of ``points_2d``, dilated
+    outward by ``buffer_radius_nm`` (default 5 nm AuNP margin).
+
+    Rasterized at ``grid_resolution_nm`` (default 1 nm/pixel). With fewer than
+    3 points, falls back to the union of ``buffer_radius_nm`` disks around each point.
+    """
+    from matplotlib.path import Path as MplPath
+
+    points_2d = np.atleast_2d(np.asarray(points_2d, dtype=float))
+    if len(points_2d) == 0:
+        return float("nan")
+
+    buffer_radius_nm = float(buffer_radius_nm)
+    grid_resolution_nm = float(grid_resolution_nm)
+    pad = buffer_radius_nm + grid_resolution_nm
+    min_xy = points_2d.min(axis=0) - pad
+    max_xy = points_2d.max(axis=0) + pad
+    xs = np.arange(min_xy[0], max_xy[0] + grid_resolution_nm, grid_resolution_nm)
+    ys = np.arange(min_xy[1], max_xy[1] + grid_resolution_nm, grid_resolution_nm)
+    if len(xs) == 0 or len(ys) == 0:
+        return float("nan")
+    grid_x, grid_y = np.meshgrid(xs, ys)
+    grid_pts = np.column_stack([grid_x.ravel(), grid_y.ravel()])
+
+    polygons = compute_full_coverage_concave_hull_polygons(
+        points_2d, alpha_multiplier=alpha_multiplier
+    )
+    if polygons:
+        inside = np.zeros(len(grid_pts), dtype=bool)
+        dist_to_boundary = np.full(len(grid_pts), np.inf)
+        for poly in polygons:
+            inside |= MplPath(poly).contains_points(grid_pts)
+            dist_to_boundary = np.minimum(
+                dist_to_boundary, _distance_to_polygon_boundary_2d(grid_pts, poly)
+            )
+        dilated = inside | (dist_to_boundary <= buffer_radius_nm)
+    else:
+        tree = cKDTree(points_2d)
+        dist_to_points, _ = tree.query(grid_pts, k=1)
+        dilated = dist_to_points <= buffer_radius_nm
+
+    return float(np.count_nonzero(dilated)) * (grid_resolution_nm ** 2)
+
+
+def compute_cluster_concave_hull_2d_area_nm2(
+    cluster_points_3d: np.ndarray,
+    *,
+    buffer_radius_nm: float = CLUSTER_CONCAVE_HULL_BUFFER_NM,
+    grid_resolution_nm: float = CLUSTER_CONCAVE_HULL_GRID_RESOLUTION_NM,
+    alpha_multiplier: float = CLUSTER_CONCAVE_HULL_ALPHA_MULTIPLIER,
+) -> float:
+    """
+    Per-cluster area via 2D PCA projection + locally adaptive concave hull + buffer.
+
+    Projects AuNP coordinates onto their best-fit plane, then computes the dilated
+    concave-hull area in that plane (default 5 nm buffer).
+    """
+    cluster_points_3d = np.atleast_2d(np.asarray(cluster_points_3d, dtype=float))
+    if len(cluster_points_3d) == 0:
+        return float("nan")
+    proj = _project_points_to_best_fit_plane(cluster_points_3d)
+    return compute_dilated_concave_hull_area_nm2(
+        proj,
+        buffer_radius_nm=buffer_radius_nm,
+        grid_resolution_nm=grid_resolution_nm,
+        alpha_multiplier=alpha_multiplier,
+    )
+
+
 def calculate_packing_density_using_sliding_cylinder(
     active_zone: dict,
     active_zonogram: dict,
@@ -1142,6 +1356,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                     continue  # Skip noise
                 cluster_points = coords[df_valid['aunp_cluster'].to_numpy() == label]
                 n_points = len(cluster_points)
+                # Existing method: half of 3D convex-hull surface area.
                 if n_points < 3:
                     area = np.nan
                     max_dim = np.nan
@@ -1157,12 +1372,32 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                     except Exception:
                         max_dim = np.nan
                 density = n_points / area if area and area > 0 else np.nan
+                # Additional method: 2D PCA plane + locally adaptive concave hull
+                # dilated by a 5 nm buffer (rasterized area).
+                try:
+                    area_concave = compute_cluster_concave_hull_2d_area_nm2(cluster_points)
+                except Exception:
+                    area_concave = np.nan
+                density_concave = (
+                    n_points / area_concave
+                    if area_concave is not None and np.isfinite(area_concave) and area_concave > 0
+                    else np.nan
+                )
+                # For n < 3, still report pairwise max dimension when possible.
+                if n_points >= 2 and (max_dim is None or not np.isfinite(max_dim)):
+                    try:
+                        dists = distance_matrix(cluster_points, cluster_points)
+                        max_dim = np.nanmax(dists)
+                    except Exception:
+                        pass
                 cluster_rows.append({
                     'cluster_label': label,
                     'n_aunps': n_points,
                     'cluster_area_nm2': area,
                     'cluster_max_dimension_nm': max_dim,
-                    'cluster_density_aunps_per_nm2': density
+                    'cluster_density_aunps_per_nm2': density,
+                    'cluster_area_concave_hull_2d_nm2': area_concave,
+                    'cluster_density_concave_hull_2d_aunps_per_nm2': density_concave,
                 })
             cluster_df = pd.DataFrame(cluster_rows)
             cluster_csv = aunps_results_dir / "aunp_clusters.csv"
