@@ -1537,14 +1537,68 @@ def _transform_packing_samples_to_zonogram_xy(
     return xy, vals
 
 
+# Packing-density heatmap colormap options (same vmin/vmax for all).
+# - inferno: black/purple → crimson → orange → yellow (high contrast on gray)
+# - viridis: purple → teal → yellow (calmer, colorblind-friendly default-ish)
+# - hot: black → red → yellow → white (legacy / familiar cryo-ET look)
+PACKING_DENSITY_CMAP_OPTIONS: tuple[str, ...] = ("inferno", "viridis", "hot")
+PACKING_DENSITY_CMAP = PACKING_DENSITY_CMAP_OPTIONS[0]  # preferred default label
+PACKING_DENSITY_VMIN = 0.0
+PACKING_DENSITY_VMAX = 1.0
+PACKING_DENSITY_OVERLAY_ALPHA = 0.6
+
+
+def _packing_density_paths_for_cmap(base_overlay_path: Path, cmap: str) -> tuple[Path, Path]:
+    """
+    Overlay and heatmap-only paths for one colormap option.
+
+    ``base_overlay_path`` is the legacy stem without cmap, e.g.
+    ``..._packing_density.png`` → ``..._packing_density_inferno.png`` and
+    ``..._packing_density_inferno_heatmap_only.png``.
+    """
+    overlay = base_overlay_path.with_name(
+        f"{base_overlay_path.stem}_{cmap}{base_overlay_path.suffix}"
+    )
+    heatmap_only = overlay.with_name(f"{overlay.stem}_heatmap_only{overlay.suffix}")
+    return overlay, heatmap_only
+
+
+def _packing_density_heatmap_only_path(overlay_path: Path) -> Path:
+    """Sibling path for the transparent heatmap-only PNG (cmap already in stem)."""
+    return overlay_path.with_name(f"{overlay_path.stem}_heatmap_only{overlay_path.suffix}")
+
+
+def _active_zonogram_figure_layout(active_zone_data):
+    """
+    Figure size and GridSpec ratios matching ``render_active_zonograms_findingampa_style``,
+    so overlay and heatmap-only PNGs share identical canvas geometry.
+    """
+    res_ddw = active_zone_data[2]
+    figsize = (
+        (res_ddw.shape[2] + res_ddw.shape[0]) / 50,
+        (res_ddw.shape[1] + res_ddw.shape[0]) / 50,
+    )
+    gs_kwargs = {
+        "width_ratios": [res_ddw.shape[2], res_ddw.shape[0]],
+        "height_ratios": [res_ddw.shape[1], res_ddw.shape[0]],
+    }
+    return figsize, gs_kwargs
+
+
 def _interpolate_packing_density_on_zonogram_xy(
     xy_points: np.ndarray,
     packing_values: np.ndarray,
     image_shape: tuple[int, int],
 ) -> np.ndarray:
-    """Linear griddata onto the full zonogram XY slice (original Johannes packing overlay)."""
+    """
+    Linear griddata onto the zonogram XY slice, then mask to the concave hull of
+    the projected sample points (same approach as
+    ``scripts/test_sliding_cylinder_packing_density.py``).
+    """
     from scipy.interpolate import griddata
     from scipy.ndimage import zoom
+
+    from .aunps import concave_hull_grid_mask
 
     height, width = image_shape
     grid_y, grid_x = np.mgrid[0:height, 0:width]
@@ -1553,7 +1607,7 @@ def _interpolate_packing_density_on_zonogram_xy(
         packing_values,
         (grid_x, grid_y),
         method="linear",
-        fill_value=0.0,
+        fill_value=np.nan,
     )
     if density_map.shape != image_shape:
         zoom_factors = (
@@ -1561,7 +1615,137 @@ def _interpolate_packing_density_on_zonogram_xy(
             width / density_map.shape[1],
         )
         density_map = zoom(density_map, zoom_factors, order=1)
-    return density_map
+
+    inside_mask, _ = concave_hull_grid_mask(xy_points, density_map.shape)
+    return np.where(inside_mask, density_map, np.nan)
+
+
+def _draw_packing_density_heatmap(
+    ax,
+    density_map: np.ndarray,
+    *,
+    extent,
+    alpha: float,
+    cmap: str,
+):
+    """Draw packing-coefficient heatmap with shared value scale and chosen colormap."""
+    return ax.imshow(
+        density_map,
+        cmap=cmap,
+        alpha=alpha,
+        origin="lower",
+        vmin=PACKING_DENSITY_VMIN,
+        vmax=PACKING_DENSITY_VMAX,
+        extent=extent,
+        interpolation="mitchell",
+        zorder=10,
+    )
+
+
+def _create_packing_density_zonogram_figure(
+    zonogram_findingampa,
+    density_map: np.ndarray,
+    *,
+    probe_radius_nm: float,
+    with_tomogram_underlay: bool,
+    heatmap_alpha: float,
+    cmap: str,
+):
+    """
+    Build overlay or heatmap-only figure with identical figsize / GridSpec / colorbar.
+
+    ``with_tomogram_underlay=True`` draws the usual gray XY/YZ/XZ tomogram slices.
+    ``False`` leaves axes empty/transparent so only the XY heatmap (+ colorbar) shows.
+    """
+    import torch
+    import matplotlib.pyplot as plt
+    from matplotlib import gridspec
+
+    res_ddw = zonogram_findingampa[2]
+    base_image = torch.min(res_ddw, axis=0).values
+    base_extent = [0, base_image.shape[1], 0, base_image.shape[0]]
+    figsize, gs_kwargs = _active_zonogram_figure_layout(zonogram_findingampa)
+
+    fig = plt.figure(figsize=figsize)
+    gs = gridspec.GridSpec(2, 2, **gs_kwargs)
+    axxy = plt.subplot(gs[0, 0])
+    axyz = plt.subplot(gs[0, 1], sharey=axxy)
+    axxz = plt.subplot(gs[1, 0], sharex=axxy)
+
+    if with_tomogram_underlay:
+        vmin = -20 * float(res_ddw.std())
+        axxy.imshow(
+            torch.min(res_ddw, axis=0).values,
+            cmap="gray",
+            interpolation="mitchell",
+            vmax=-0.0,
+            vmin=vmin,
+            origin="lower",
+        )
+        axxy.quiver(
+            0, 0, 0, 50, color="g", angles="xy", scale_units="xy",
+            units="xy", width=1, scale=1, clip_on=False,
+        )
+        axxy.quiver(
+            0, 0, 50, 0, color="r", angles="xy", scale_units="xy",
+            units="xy", width=1, scale=1, clip_on=False,
+        )
+        axyz.imshow(
+            torch.min(res_ddw, axis=2).values.T,
+            cmap="gray",
+            interpolation="mitchell",
+            vmax=-0.0,
+            vmin=vmin,
+            origin="lower",
+        )
+        axyz.quiver(
+            0, 0, 0, 50, color="g", angles="xy", scale_units="xy",
+            units="xy", width=1, scale=1, clip_on=False,
+        )
+        axyz.quiver(
+            0, 0, 50, 0, color="b", angles="xy", scale_units="xy",
+            units="xy", width=1, scale=1, clip_on=False,
+        )
+        axxz.imshow(
+            torch.min(res_ddw, axis=1).values,
+            cmap="gray",
+            interpolation="mitchell",
+            vmax=-0.0,
+            vmin=vmin,
+            origin="lower",
+        )
+        axxz.quiver(
+            0, 0, 0, 50, color="b", angles="xy", scale_units="xy",
+            units="xy", width=1, scale=1, clip_on=False,
+        )
+        axxz.quiver(
+            0, 0, 50, 0, color="r", angles="xy", scale_units="xy",
+            units="xy", width=1, scale=1, clip_on=False,
+        )
+    else:
+        for ax in (axxy, axyz, axxz):
+            ax.set_facecolor("none")
+        axxy.set_xlim(base_extent[0], base_extent[1])
+        axxy.set_ylim(base_extent[2], base_extent[3])
+        # Preserve side-panel aspect slots without drawing content.
+        axyz.set_xlim(0, float(res_ddw.shape[0]))
+        axxz.set_ylim(0, float(res_ddw.shape[0]))
+
+    im = _draw_packing_density_heatmap(
+        axxy, density_map, extent=base_extent, alpha=heatmap_alpha, cmap=cmap
+    )
+    cbar = fig.colorbar(im, ax=axxy, fraction=0.046, pad=0.04)
+    cbar.set_label(
+        f"AMPA packing coeff. (probe r={int(round(probe_radius_nm))} nm; {cmap})",
+        rotation=270,
+        labelpad=15,
+    )
+
+    axxy.axis("off")
+    axyz.axis("off")
+    axxz.axis("off")
+    plt.tight_layout()
+    return fig
 
 
 def save_packing_density_zonogram_overlay(
@@ -1573,13 +1757,24 @@ def save_packing_density_zonogram_overlay(
     packing_path_results_organized: Path,
     packing_path_tomogram: Path,
     rerun: bool,
-) -> bool:
+    cmaps: tuple[str, ...] | None = None,
+) -> list[str]:
     """
-    Render and save one packing-density heatmap PNG for a given probe radius.
-    Returns True if a new file was written.
+    Render and save packing-density heatmaps for a given probe radius.
+
+    For each colormap in ``cmaps`` (default: inferno, viridis, hot), writes two
+    matched PNGs (identical figure size / color scale) to both the
+    organized-results and tomogram viz folders:
+
+    - ``*_packing_density_<cmap>*.png`` — heatmap overlaid on the active zonogram
+    - ``*_packing_density_<cmap>*_heatmap_only.png`` — heatmap alone, transparent bg
+
+    The density field is masked to the concave hull of projected sample vertices.
+    Returns the list of filenames written or already present under the results path.
     """
-    import torch
     import matplotlib.pyplot as plt
+
+    cmaps = tuple(cmaps) if cmaps is not None else PACKING_DENSITY_CMAP_OPTIONS
 
     v_array = np.array(zone_packing_data["v_array"])
     packing_coefficient = np.array(zone_packing_data["packing_coefficient"])
@@ -1598,54 +1793,73 @@ def save_packing_density_zonogram_overlay(
         original_zone_data,
     )
     if len(xy_points) < 3:
-        return False
-
-    fig_packing = render_active_zonograms_findingampa_style(zonogram_findingampa)
-    axxy_packing, _, _ = fig_packing.get_axes()
+        return []
 
     res_ddw = zonogram_findingampa[2]
-    base_image = torch.min(res_ddw, axis=0).values
-    base_image_shape = base_image.shape
-    base_extent = [0, base_image_shape[1], 0, base_image_shape[0]]
-
+    # XY slice shape is (Y, X) = (shape[1], shape[2]) for a (Z, Y, X) volume.
+    base_image_shape = (int(res_ddw.shape[1]), int(res_ddw.shape[2]))
     density_map = _interpolate_packing_density_on_zonogram_xy(
         xy_points,
         packing_values,
         base_image_shape,
     )
 
-    im = axxy_packing.imshow(
-        density_map,
-        cmap="hot",
-        alpha=0.6,
-        origin="lower",
-        vmin=0.0,
-        vmax=1.0,
-        extent=base_extent,
-        interpolation="mitchell",
-        zorder=10,
-    )
-
-    cbar = fig_packing.colorbar(im, ax=axxy_packing, fraction=0.046, pad=0.04)
-    cbar.set_label(
-        f"AMPA packing coeff. (probe r={int(round(probe_radius_nm))} nm)",
-        rotation=270,
-        labelpad=15,
-    )
-
-    packing_filename = packing_path_results_organized.name
-    if packing_path_results_organized.exists() and packing_path_tomogram.exists() and not rerun:
-        print(f"    Skipping {packing_filename}, already exists.")
-        plt.close(fig_packing)
-        return False
-
     packing_path_results_organized.parent.mkdir(parents=True, exist_ok=True)
     packing_path_tomogram.parent.mkdir(parents=True, exist_ok=True)
-    fig_packing.savefig(packing_path_results_organized)
-    fig_packing.savefig(packing_path_tomogram)
-    plt.close(fig_packing)
-    print(f"    ✓ Saved PNG: {packing_filename}")
-    return True
+
+    created_or_present: list[str] = []
+    for cmap in cmaps:
+        overlay_results, heatmap_only_results = _packing_density_paths_for_cmap(
+            packing_path_results_organized, cmap
+        )
+        overlay_tomogram, heatmap_only_tomogram = _packing_density_paths_for_cmap(
+            packing_path_tomogram, cmap
+        )
+
+        overlay_exists = overlay_results.exists() and overlay_tomogram.exists()
+        heatmap_only_exists = heatmap_only_results.exists() and heatmap_only_tomogram.exists()
+        if overlay_exists and heatmap_only_exists and not rerun:
+            print(f"    Skipping {overlay_results.name} (+ heatmap-only), already exists.")
+            created_or_present.extend([overlay_results.name, heatmap_only_results.name])
+            continue
+
+        if (not overlay_exists) or rerun:
+            fig_overlay = _create_packing_density_zonogram_figure(
+                zonogram_findingampa,
+                density_map,
+                probe_radius_nm=probe_radius_nm,
+                with_tomogram_underlay=True,
+                heatmap_alpha=PACKING_DENSITY_OVERLAY_ALPHA,
+                cmap=cmap,
+            )
+            fig_overlay.savefig(overlay_results)
+            fig_overlay.savefig(overlay_tomogram)
+            plt.close(fig_overlay)
+            print(f"    ✓ Saved PNG: {overlay_results.name}")
+        else:
+            print(f"    Skipping {overlay_results.name}, already exists.")
+        created_or_present.append(overlay_results.name)
+
+        if (not heatmap_only_exists) or rerun:
+            fig_only = _create_packing_density_zonogram_figure(
+                zonogram_findingampa,
+                density_map,
+                probe_radius_nm=probe_radius_nm,
+                with_tomogram_underlay=False,
+                heatmap_alpha=1.0,
+                cmap=cmap,
+            )
+            fig_only.patch.set_facecolor("none")
+            fig_only.patch.set_alpha(0.0)
+            fig_only.savefig(heatmap_only_results, transparent=True)
+            fig_only.savefig(heatmap_only_tomogram, transparent=True)
+            plt.close(fig_only)
+            print(f"    ✓ Saved PNG: {heatmap_only_results.name}")
+        else:
+            print(f"    Skipping {heatmap_only_results.name}, already exists.")
+        created_or_present.append(heatmap_only_results.name)
+
+    return created_or_present
 
 
 def render_active_zonograms_findingampa_style(active_zone_data):
@@ -3011,26 +3225,16 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                                 packing_path_tomogram = (
                                     tomogram_active_zonograms_dir / packing_filename
                                 )
-
-                                if (
-                                    packing_path_results_organized.exists()
-                                    and packing_path_tomogram.exists()
-                                    and not rerun
-                                ):
-                                    print(f"    Skipping {packing_filename}, already exists.")
-                                    files_created.append(packing_filename)
-                                else:
-                                    saved = save_packing_density_zonogram_overlay(
-                                        zone_packing_data,
-                                        zonogram_findingampa=zonogram_findingampa,
-                                        original_zone_data=original_zone_data,
-                                        probe_radius_nm=probe_radius_nm,
-                                        packing_path_results_organized=packing_path_results_organized,
-                                        packing_path_tomogram=packing_path_tomogram,
-                                        rerun=rerun,
-                                    )
-                                    if saved or packing_path_results_organized.exists():
-                                        files_created.append(packing_filename)
+                                created_names = save_packing_density_zonogram_overlay(
+                                    zone_packing_data,
+                                    zonogram_findingampa=zonogram_findingampa,
+                                    original_zone_data=original_zone_data,
+                                    probe_radius_nm=probe_radius_nm,
+                                    packing_path_results_organized=packing_path_results_organized,
+                                    packing_path_tomogram=packing_path_tomogram,
+                                    rerun=rerun,
+                                )
+                                files_created.extend(created_names)
                         except Exception as e:
                             print(
                                 f"    Warning: Could not create packing density visualization "
