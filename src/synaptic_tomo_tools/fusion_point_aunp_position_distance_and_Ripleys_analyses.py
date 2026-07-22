@@ -573,13 +573,18 @@ def mad_test_from_curves(
     r_range: str = "full",
 ) -> dict:
     """
-    Maximum Absolute Deviation (MAD) test vs a Monte Carlo null (Rebola et al. 2019 style).
+    Maximum Absolute Deviation (MAD) test vs a Monte Carlo null (Rebola / Diggle style).
 
     Skips (``status='skipped_insufficient_nulls'``) unless ``null_curves`` has at least
     ``min_null_curves`` replicates. Uses a two-sided ``confidence`` envelope (default 99%).
 
+    The reference mean μ(r) is the pooled Diggle mean of the observed curve plus all
+    null curves: μ = (L_obs + Σ L_s) / (N + 1). Both T_obs and each null MAD T_s are
+    measured against that same μ (not leave-one-out). Pointwise CE percentiles remain
+    null-only.
+
     Optional ``r_min_nm`` / ``r_max_nm`` restrict the max-|diff| search (inclusive) to that
-    radius window; CE / null mean / normalized curves are reported on the same subset.
+    radius window; CE / pooled mean / normalized curves are reported on the same subset.
     """
     observed = np.asarray(observed, dtype=float).reshape(-1)
     null_curves = np.atleast_2d(np.asarray(null_curves, dtype=float))
@@ -642,22 +647,24 @@ def mad_test_from_curves(
         result["status"] = "skipped_nonfinite"
         return result
 
-    null_mean = np.nanmean(null_s, axis=0)
+    # Diggle pooled mean: μ(r) = (L_obs + Σ L_null) / (N + 1). Same μ for T_obs and all T_s.
+    all_curves = np.vstack([observed_s[None, :], null_s])
+    pooled_mean = np.nanmean(all_curves, axis=0)
+    # Pointwise CE stays null-only (what the null band looks like).
     ce_lo = np.nanpercentile(null_s, lo_pct, axis=0)
     ce_hi = np.nanpercentile(null_s, hi_pct, axis=0)
-    abs_diff = np.abs(observed_s - null_mean)
+    abs_diff = np.abs(observed_s - pooled_mean)
     T_obs = float(np.nanmax(abs_diff))
     r_at_max_idx = int(np.nanargmax(abs_diff))
-    signed = float(observed_s[r_at_max_idx] - null_mean[r_at_max_idx])
+    signed = float(observed_s[r_at_max_idx] - pooled_mean[r_at_max_idx])
 
-    # MAD for each null replicate vs the same null mean (Baddeley / Rebola).
-    T_null = np.nanmax(np.abs(null_s - null_mean[None, :]), axis=1)
+    T_null = np.nanmax(np.abs(null_s - pooled_mean[None, :]), axis=1)
     T_critical = float(np.nanpercentile(T_null, 100.0 * confidence))
     p_mad = float((1 + np.sum(T_null >= T_obs)) / (1 + n_null))
 
     # Scale so the confidence envelope appears as ±1 (Rebola pooling convention).
-    half = np.maximum(np.maximum(null_mean - ce_lo, ce_hi - null_mean), 1e-12)
-    normalized = (observed_s - null_mean) / half
+    half = np.maximum(np.maximum(pooled_mean - ce_lo, ce_hi - pooled_mean), 1e-12)
+    normalized = (observed_s - pooled_mean) / half
 
     result.update(
         {
@@ -668,7 +675,8 @@ def mad_test_from_curves(
             "r_at_max_nm": float(r_vals[r_at_max_idx]),
             "signed_diff_at_max": signed,
             "r_vals": r_vals,
-            "null_mean": null_mean,
+            # Kept as null_mean for downstream CSV/plot compatibility; value is pooled μ.
+            "null_mean": pooled_mean,
             "ce_lo": ce_lo,
             "ce_hi": ce_hi,
             "abs_diff": abs_diff,
