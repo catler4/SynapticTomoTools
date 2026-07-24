@@ -1537,27 +1537,49 @@ def _transform_packing_samples_to_zonogram_xy(
     return xy, vals
 
 
-# Packing-density heatmap colormap options (same vmin/vmax for all).
+# Packing-density heatmap colormap options.
 # - inferno: black/purple → crimson → orange → yellow (high contrast on gray)
-# - viridis: purple → teal → yellow (calmer, colorblind-friendly default-ish)
+# - viridis: purple → teal → yellow (calmer, colorblind-friendly)
 # - hot: black → red → yellow → white (legacy / familiar cryo-ET look)
 PACKING_DENSITY_CMAP_OPTIONS: tuple[str, ...] = ("inferno", "viridis", "hot")
-PACKING_DENSITY_CMAP = PACKING_DENSITY_CMAP_OPTIONS[0]  # preferred default label
-PACKING_DENSITY_VMIN = 0.0
-PACKING_DENSITY_VMAX = 1.0
+PACKING_DENSITY_CMAP = PACKING_DENSITY_CMAP_OPTIONS[0]
 PACKING_DENSITY_OVERLAY_ALPHA = 0.6
 
+# Value metrics written for each cmap (overlay + heatmap-only).
+# packing_coefficient: dimensionless 0–1 receptor packing (fixed vmin/vmax).
+# nm2_per_aunp: linear area per AuNP = 1 / (AuNPs per nm²); dense → low values.
+PACKING_DENSITY_VALUE_METRICS: tuple[str, ...] = ("packing_coefficient", "nm2_per_aunp")
+PACKING_COEFF_VMIN = 0.0
+PACKING_COEFF_VMAX = 1.0
+# Legacy aliases
+PACKING_DENSITY_VMIN = PACKING_COEFF_VMIN
+PACKING_DENSITY_VMAX = PACKING_COEFF_VMAX
+NM2_PER_AUNP_VMIN = 0.0
+NM2_PER_AUNP_VMAX_PERCENTILE = 98.0
 
-def _packing_density_paths_for_cmap(base_overlay_path: Path, cmap: str) -> tuple[Path, Path]:
-    """
-    Overlay and heatmap-only paths for one colormap option.
 
-    ``base_overlay_path`` is the legacy stem without cmap, e.g.
-    ``..._packing_density.png`` → ``..._packing_density_inferno.png`` and
-    ``..._packing_density_inferno_heatmap_only.png``.
+def _packing_density_paths_for_cmap(
+    base_overlay_path: Path,
+    cmap: str,
+    *,
+    value_metric: str = "packing_coefficient",
+) -> tuple[Path, Path]:
     """
+    Overlay and heatmap-only paths for one colormap × value-metric option.
+
+    packing_coefficient:
+      ``..._packing_density.png`` → ``..._packing_density_inferno.png``
+    nm2_per_aunp:
+      ``..._packing_density.png`` → ``..._packing_density_nm2_per_aunp_inferno.png``
+    """
+    if value_metric == "packing_coefficient":
+        tag = cmap
+    elif value_metric == "nm2_per_aunp":
+        tag = f"nm2_per_aunp_{cmap}"
+    else:
+        tag = f"{value_metric}_{cmap}"
     overlay = base_overlay_path.with_name(
-        f"{base_overlay_path.stem}_{cmap}{base_overlay_path.suffix}"
+        f"{base_overlay_path.stem}_{tag}{base_overlay_path.suffix}"
     )
     heatmap_only = overlay.with_name(f"{overlay.stem}_heatmap_only{overlay.suffix}")
     return overlay, heatmap_only
@@ -1620,6 +1642,50 @@ def _interpolate_packing_density_on_zonogram_xy(
     return np.where(inside_mask, density_map, np.nan)
 
 
+def _nm2_per_aunp_from_density(aunp_density_per_nm2: np.ndarray) -> np.ndarray:
+    """Convert AuNP/nm² to linear nm²/AuNP; zero/non-finite density → NaN."""
+    dens = np.asarray(aunp_density_per_nm2, dtype=float)
+    out = np.full(dens.shape, np.nan, dtype=float)
+    valid = np.isfinite(dens) & (dens > 0)
+    out[valid] = 1.0 / dens[valid]
+    return out
+
+
+def _packing_density_scale_and_cmap(
+    value_metric: str,
+    sample_values: np.ndarray,
+    cmap: str,
+) -> tuple[float, float, str, str]:
+    """
+    Return (vmin, vmax, matplotlib_cmap, colorbar_label_suffix) for a value metric.
+
+    For nm²/AuNP the colormap is reversed so dense regions (low nm²/AuNP) stay on the
+    bright end of the same palette family as the packing-coefficient maps.
+    """
+    if value_metric == "packing_coefficient":
+        return (
+            PACKING_COEFF_VMIN,
+            PACKING_COEFF_VMAX,
+            cmap,
+            "AMPA packing coeff.",
+        )
+    if value_metric == "nm2_per_aunp":
+        finite = np.asarray(sample_values, dtype=float)
+        finite = finite[np.isfinite(finite) & (finite > 0)]
+        if len(finite):
+            vmax = float(np.nanpercentile(finite, NM2_PER_AUNP_VMAX_PERCENTILE))
+            vmax = max(vmax, 1.0)
+        else:
+            vmax = 1.0
+        return (
+            NM2_PER_AUNP_VMIN,
+            vmax,
+            f"{cmap}_r",
+            "nm² / AuNP",
+        )
+    raise ValueError(f"Unknown packing-density value metric: {value_metric!r}")
+
+
 def _draw_packing_density_heatmap(
     ax,
     density_map: np.ndarray,
@@ -1627,15 +1693,17 @@ def _draw_packing_density_heatmap(
     extent,
     alpha: float,
     cmap: str,
+    vmin: float,
+    vmax: float,
 ):
-    """Draw packing-coefficient heatmap with shared value scale and chosen colormap."""
+    """Draw packing-density heatmap with the given colormap and linear value scale."""
     return ax.imshow(
         density_map,
         cmap=cmap,
         alpha=alpha,
         origin="lower",
-        vmin=PACKING_DENSITY_VMIN,
-        vmax=PACKING_DENSITY_VMAX,
+        vmin=vmin,
+        vmax=vmax,
         extent=extent,
         interpolation="mitchell",
         zorder=10,
@@ -1650,6 +1718,9 @@ def _create_packing_density_zonogram_figure(
     with_tomogram_underlay: bool,
     heatmap_alpha: float,
     cmap: str,
+    vmin: float,
+    vmax: float,
+    colorbar_quantity: str,
 ):
     """
     Build overlay or heatmap-only figure with identical figsize / GridSpec / colorbar.
@@ -1673,13 +1744,13 @@ def _create_packing_density_zonogram_figure(
     axxz = plt.subplot(gs[1, 0], sharex=axxy)
 
     if with_tomogram_underlay:
-        vmin = -20 * float(res_ddw.std())
+        gray_vmin = -20 * float(res_ddw.std())
         axxy.imshow(
             torch.min(res_ddw, axis=0).values,
             cmap="gray",
             interpolation="mitchell",
             vmax=-0.0,
-            vmin=vmin,
+            vmin=gray_vmin,
             origin="lower",
         )
         axxy.quiver(
@@ -1695,7 +1766,7 @@ def _create_packing_density_zonogram_figure(
             cmap="gray",
             interpolation="mitchell",
             vmax=-0.0,
-            vmin=vmin,
+            vmin=gray_vmin,
             origin="lower",
         )
         axyz.quiver(
@@ -1711,7 +1782,7 @@ def _create_packing_density_zonogram_figure(
             cmap="gray",
             interpolation="mitchell",
             vmax=-0.0,
-            vmin=vmin,
+            vmin=gray_vmin,
             origin="lower",
         )
         axxz.quiver(
@@ -1732,11 +1803,18 @@ def _create_packing_density_zonogram_figure(
         axxz.set_ylim(0, float(res_ddw.shape[0]))
 
     im = _draw_packing_density_heatmap(
-        axxy, density_map, extent=base_extent, alpha=heatmap_alpha, cmap=cmap
+        axxy,
+        density_map,
+        extent=base_extent,
+        alpha=heatmap_alpha,
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
     )
     cbar = fig.colorbar(im, ax=axxy, fraction=0.046, pad=0.04)
+    cmap_label = cmap[:-2] if str(cmap).endswith("_r") else cmap
     cbar.set_label(
-        f"AMPA packing coeff. (probe r={int(round(probe_radius_nm))} nm; {cmap})",
+        f"{colorbar_quantity} (probe r={int(round(probe_radius_nm))} nm; {cmap_label})",
         rotation=270,
         labelpad=15,
     )
@@ -1758,16 +1836,17 @@ def save_packing_density_zonogram_overlay(
     packing_path_tomogram: Path,
     rerun: bool,
     cmaps: tuple[str, ...] | None = None,
+    value_metrics: tuple[str, ...] | None = None,
 ) -> list[str]:
     """
     Render and save packing-density heatmaps for a given probe radius.
 
-    For each colormap in ``cmaps`` (default: inferno, viridis, hot), writes two
-    matched PNGs (identical figure size / color scale) to both the
-    organized-results and tomogram viz folders:
+    For each value metric × colormap, writes two matched PNGs (identical figure size /
+    color scale) to both the organized-results and tomogram viz folders:
 
-    - ``*_packing_density_<cmap>*.png`` — heatmap overlaid on the active zonogram
-    - ``*_packing_density_<cmap>*_heatmap_only.png`` — heatmap alone, transparent bg
+    - packing coefficient (0–1): ``*_packing_density_<cmap>*.png``
+    - linear nm²/AuNP: ``*_packing_density_nm2_per_aunp_<cmap>*.png``
+    - ``*_heatmap_only.png`` sibling — heatmap alone, transparent background
 
     The density field is masked to the concave hull of projected sample vertices.
     Returns the list of filenames written or already present under the results path.
@@ -1775,6 +1854,11 @@ def save_packing_density_zonogram_overlay(
     import matplotlib.pyplot as plt
 
     cmaps = tuple(cmaps) if cmaps is not None else PACKING_DENSITY_CMAP_OPTIONS
+    value_metrics = (
+        tuple(value_metrics)
+        if value_metrics is not None
+        else PACKING_DENSITY_VALUE_METRICS
+    )
 
     v_array = np.array(zone_packing_data["v_array"])
     packing_coefficient = np.array(zone_packing_data["packing_coefficient"])
@@ -1783,81 +1867,116 @@ def save_packing_density_zonogram_overlay(
             [np.nan if x is None else float(x) for x in zone_packing_data["packing_coefficient"]],
             dtype=np.float64,
         )
+    aunp_density = np.array(
+        zone_packing_data.get("aunp_density_per_nm2", [np.nan] * len(packing_coefficient)),
+        dtype=float,
+    )
+    if aunp_density.dtype == object:
+        aunp_density = np.array(
+            [np.nan if x is None else float(x) for x in aunp_density],
+            dtype=np.float64,
+        )
+    if len(aunp_density) != len(packing_coefficient):
+        aunp_density = np.full(len(packing_coefficient), np.nan, dtype=float)
+
     valid = np.isfinite(packing_coefficient)
     v_array = v_array[valid]
     packing_coefficient = packing_coefficient[valid]
+    aunp_density = aunp_density[valid]
+    nm2_per_aunp = _nm2_per_aunp_from_density(aunp_density)
 
-    xy_points, packing_values = _transform_packing_samples_to_zonogram_xy(
-        v_array,
-        packing_coefficient,
-        original_zone_data,
-    )
-    if len(xy_points) < 3:
-        return []
+    metric_sample_values = {
+        "packing_coefficient": packing_coefficient,
+        "nm2_per_aunp": nm2_per_aunp,
+    }
 
     res_ddw = zonogram_findingampa[2]
-    # XY slice shape is (Y, X) = (shape[1], shape[2]) for a (Z, Y, X) volume.
     base_image_shape = (int(res_ddw.shape[1]), int(res_ddw.shape[2]))
-    density_map = _interpolate_packing_density_on_zonogram_xy(
-        xy_points,
-        packing_values,
-        base_image_shape,
-    )
 
     packing_path_results_organized.parent.mkdir(parents=True, exist_ok=True)
     packing_path_tomogram.parent.mkdir(parents=True, exist_ok=True)
 
     created_or_present: list[str] = []
-    for cmap in cmaps:
-        overlay_results, heatmap_only_results = _packing_density_paths_for_cmap(
-            packing_path_results_organized, cmap
+    for value_metric in value_metrics:
+        sample_values = metric_sample_values[value_metric]
+        xy_points, metric_values = _transform_packing_samples_to_zonogram_xy(
+            v_array,
+            sample_values,
+            original_zone_data,
         )
-        overlay_tomogram, heatmap_only_tomogram = _packing_density_paths_for_cmap(
-            packing_path_tomogram, cmap
-        )
-
-        overlay_exists = overlay_results.exists() and overlay_tomogram.exists()
-        heatmap_only_exists = heatmap_only_results.exists() and heatmap_only_tomogram.exists()
-        if overlay_exists and heatmap_only_exists and not rerun:
-            print(f"    Skipping {overlay_results.name} (+ heatmap-only), already exists.")
-            created_or_present.extend([overlay_results.name, heatmap_only_results.name])
+        # Drop non-finite metric samples (e.g. zero AuNP count → undefined nm²/AuNP).
+        finite_metric = np.isfinite(metric_values)
+        xy_points = xy_points[finite_metric]
+        metric_values = metric_values[finite_metric]
+        if len(xy_points) < 3:
+            print(f"    Skipping {value_metric} heatmaps (<3 finite sample points).")
             continue
 
-        if (not overlay_exists) or rerun:
-            fig_overlay = _create_packing_density_zonogram_figure(
-                zonogram_findingampa,
-                density_map,
-                probe_radius_nm=probe_radius_nm,
-                with_tomogram_underlay=True,
-                heatmap_alpha=PACKING_DENSITY_OVERLAY_ALPHA,
-                cmap=cmap,
-            )
-            fig_overlay.savefig(overlay_results)
-            fig_overlay.savefig(overlay_tomogram)
-            plt.close(fig_overlay)
-            print(f"    ✓ Saved PNG: {overlay_results.name}")
-        else:
-            print(f"    Skipping {overlay_results.name}, already exists.")
-        created_or_present.append(overlay_results.name)
+        density_map = _interpolate_packing_density_on_zonogram_xy(
+            xy_points,
+            metric_values,
+            base_image_shape,
+        )
 
-        if (not heatmap_only_exists) or rerun:
-            fig_only = _create_packing_density_zonogram_figure(
-                zonogram_findingampa,
-                density_map,
-                probe_radius_nm=probe_radius_nm,
-                with_tomogram_underlay=False,
-                heatmap_alpha=1.0,
-                cmap=cmap,
+        for cmap in cmaps:
+            vmin, vmax, plot_cmap, quantity = _packing_density_scale_and_cmap(
+                value_metric, metric_values, cmap
             )
-            fig_only.patch.set_facecolor("none")
-            fig_only.patch.set_alpha(0.0)
-            fig_only.savefig(heatmap_only_results, transparent=True)
-            fig_only.savefig(heatmap_only_tomogram, transparent=True)
-            plt.close(fig_only)
-            print(f"    ✓ Saved PNG: {heatmap_only_results.name}")
-        else:
-            print(f"    Skipping {heatmap_only_results.name}, already exists.")
-        created_or_present.append(heatmap_only_results.name)
+            overlay_results, heatmap_only_results = _packing_density_paths_for_cmap(
+                packing_path_results_organized, cmap, value_metric=value_metric
+            )
+            overlay_tomogram, heatmap_only_tomogram = _packing_density_paths_for_cmap(
+                packing_path_tomogram, cmap, value_metric=value_metric
+            )
+
+            overlay_exists = overlay_results.exists() and overlay_tomogram.exists()
+            heatmap_only_exists = heatmap_only_results.exists() and heatmap_only_tomogram.exists()
+            if overlay_exists and heatmap_only_exists and not rerun:
+                print(f"    Skipping {overlay_results.name} (+ heatmap-only), already exists.")
+                created_or_present.extend([overlay_results.name, heatmap_only_results.name])
+                continue
+
+            if (not overlay_exists) or rerun:
+                fig_overlay = _create_packing_density_zonogram_figure(
+                    zonogram_findingampa,
+                    density_map,
+                    probe_radius_nm=probe_radius_nm,
+                    with_tomogram_underlay=True,
+                    heatmap_alpha=PACKING_DENSITY_OVERLAY_ALPHA,
+                    cmap=plot_cmap,
+                    vmin=vmin,
+                    vmax=vmax,
+                    colorbar_quantity=quantity,
+                )
+                fig_overlay.savefig(overlay_results)
+                fig_overlay.savefig(overlay_tomogram)
+                plt.close(fig_overlay)
+                print(f"    ✓ Saved PNG: {overlay_results.name}")
+            else:
+                print(f"    Skipping {overlay_results.name}, already exists.")
+            created_or_present.append(overlay_results.name)
+
+            if (not heatmap_only_exists) or rerun:
+                fig_only = _create_packing_density_zonogram_figure(
+                    zonogram_findingampa,
+                    density_map,
+                    probe_radius_nm=probe_radius_nm,
+                    with_tomogram_underlay=False,
+                    heatmap_alpha=1.0,
+                    cmap=plot_cmap,
+                    vmin=vmin,
+                    vmax=vmax,
+                    colorbar_quantity=quantity,
+                )
+                fig_only.patch.set_facecolor("none")
+                fig_only.patch.set_alpha(0.0)
+                fig_only.savefig(heatmap_only_results, transparent=True)
+                fig_only.savefig(heatmap_only_tomogram, transparent=True)
+                plt.close(fig_only)
+                print(f"    ✓ Saved PNG: {heatmap_only_results.name}")
+            else:
+                print(f"    Skipping {heatmap_only_results.name}, already exists.")
+            created_or_present.append(heatmap_only_results.name)
 
     return created_or_present
 
