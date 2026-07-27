@@ -11,12 +11,17 @@ Control: label permutation — pool all monomer + dimer points, then randomly re
 labels while preserving the per-zone monomer and dimer counts (1000 replicates by default).
 
 Greedy segregation — same pooled points and class counts, but relabel by growing a compact
-spatial cluster (random seed) for monomers or dimers. Replicate count always matches the
-label-permutation count (``n_perm``, default 1000).
+spatial cluster from a random seed. Each replicate randomly chooses whether that compact
+class is monomers or dimers (then the remainder gets the other label). Replicate count
+always matches the label-permutation count (``n_perm``, default 1000).
 
 MAD tests (Rebola-style max absolute deviation vs 99% CE) are run against label-permutation
-and both segregation extremes when that null has ≥1000 curves; otherwise they are skipped.
+and greedy segregation when that null has ≥1000 curves; otherwise they are skipped.
 Each MAD is reported for the full r-grid and for the restricted 30–50 nm window.
+
+Per zone, the first three label-permutation and greedy-segregation point sets are also
+written as monomer/dimer STAR files under ``STT_results/.../simulated_null_stars/``
+(same columns as the input pick STARs).
 
 Pooled output is grouped per tomogram set (curves, individual curves, and MAD summaries).
 """
@@ -37,7 +42,9 @@ from tqdm import tqdm
 from scipy.spatial.distance import cdist
 
 from .alignment_utils import require_alignment_dir
+from .aunps import _read_aunp_pick_star_dataframe
 from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
+    COORD_COLS,
     DEFAULT_ANALYSIS_SEED,
     DEFAULT_RIPLEY_R_MAX_NM,
     DEFAULT_RIPLEY_R_STEP_NM,
@@ -46,6 +53,7 @@ from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
     RIPLEY_PERCENTILE_HI,
     RIPLEY_PERCENTILE_LO,
     _default_ripley_perm_workers,
+    _find_monomer_dimer_star_path,
     _isotropic_edge_factors_for_foci,
     _percentile_band,
     _prism_sd_envelope_columns,
@@ -67,6 +75,15 @@ WINDOW_MODE = "synaptic_cleft_az_hull"
 MONOMER_DIMER_N_PERM = 1000
 # Segregation always uses the same replicate count as label permutation (n_perm).
 MIN_POINTS_PER_CLASS = 2
+# Example null point sets written as STAR files (label-perm + greedy each).
+N_SIMULATED_NULL_STAR_EXAMPLES = 3
+SIMULATED_STAR_COLS = (
+    "faCoordinateX",
+    "faCoordinateY",
+    "faCoordinateZ",
+    "active_zone",
+    "postsynapse",
+)
 
 POOLED_CURVES_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_curves.csv")
 POOLED_INDIVIDUAL_CURVES_CSV = Path(
@@ -158,43 +175,211 @@ def _init_greedy_seg_l12_worker(
     pool: np.ndarray,
     r_vals: np.ndarray,
     window,
-    n_cluster: int,
-    cluster_class: str,
+    n_monomer: int,
+    n_dimer: int,
     pairwise_dist: np.ndarray,
     pool_edge_factors: np.ndarray,
 ) -> None:
     _SEG_L12_CTX["pool"] = pool
     _SEG_L12_CTX["r_vals"] = r_vals
     _SEG_L12_CTX["window"] = window
-    _SEG_L12_CTX["n_cluster"] = int(n_cluster)
-    _SEG_L12_CTX["cluster_class"] = cluster_class
+    _SEG_L12_CTX["n_monomer"] = int(n_monomer)
+    _SEG_L12_CTX["n_dimer"] = int(n_dimer)
     _SEG_L12_CTX["pairwise_dist"] = pairwise_dist
     _SEG_L12_CTX["pool_edge_factors"] = pool_edge_factors
 
 
-def _greedy_seg_l12_worker(task: tuple[int, int]) -> tuple[int, np.ndarray]:
-    """Run one greedy-segregation L₁₂ curve (rep_id, seed)."""
-    rep_id, seed = task
-    pool = _SEG_L12_CTX["pool"]
-    r_vals = _SEG_L12_CTX["r_vals"]
-    window = _SEG_L12_CTX["window"]
-    n_cluster = _SEG_L12_CTX["n_cluster"]
-    cluster_class = _SEG_L12_CTX["cluster_class"]
-    pairwise_dist = _SEG_L12_CTX["pairwise_dist"]
-    pool_edge_factors = _SEG_L12_CTX["pool_edge_factors"]
+def _label_permutation_monomer_mask(
+    n_pool: int,
+    n_monomer: int,
+    seed: int,
+) -> np.ndarray:
+    """Monomer mask for one label-permutation replicate (deterministic seed)."""
     rng = np.random.default_rng(int(seed))
-    seed_idx = int(rng.integers(0, len(pool)))
+    class1_idx = rng.choice(int(n_pool), int(n_monomer), replace=False)
+    mask = np.zeros(int(n_pool), dtype=bool)
+    mask[class1_idx] = True
+    return mask
+
+
+def _greedy_segregation_monomer_mask(
+    pool: np.ndarray,
+    n_monomer: int,
+    n_dimer: int,
+    pairwise_dist: np.ndarray,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """
+    Monomer mask for one greedy-segregation replicate.
+
+    Randomly chooses monomer or dimer as the compact class, grows that class from a
+    random seed, and assigns the remainder to the other class.
+    """
+    pool = np.atleast_2d(np.asarray(pool, dtype=float))
+    n_pool = len(pool)
+    cluster_class = "dimer" if rng.random() < 0.5 else "monomer"
+    n_cluster = int(n_dimer if cluster_class == "dimer" else n_monomer)
+    seed_idx = int(rng.integers(0, n_pool))
     cluster_mask = _greedy_segregation_cluster_mask(
         pool, n_cluster, seed_idx, pairwise_dist=pairwise_dist
     )
-    monomer_mask = ~cluster_mask if cluster_class == "dimer" else cluster_mask
-    curve = ripley_l12_from_points(
+    return ~cluster_mask if cluster_class == "dimer" else cluster_mask
+
+
+def _greedy_seg_l12_one_replicate(
+    *,
+    pool: np.ndarray,
+    r_vals: np.ndarray,
+    window,
+    n_monomer: int,
+    n_dimer: int,
+    pairwise_dist: np.ndarray,
+    pool_edge_factors: np.ndarray,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """
+    One greedy-segregation L₁₂ curve: randomly choose monomer or dimer as the compact
+    class, grow that class from a random seed, assign the remainder to the other class.
+    """
+    monomer_mask = _greedy_segregation_monomer_mask(
+        pool, n_monomer, n_dimer, pairwise_dist, rng
+    )
+    return ripley_l12_from_points(
         pool[monomer_mask],
         pool[~monomer_mask],
         r_vals,
         window,
         rng,
         edge_factors=pool_edge_factors[monomer_mask],
+    )
+
+
+def _load_pool_star_dataframe_for_export(
+    tomogram_path: Path,
+    alignment_dir: str,
+    active_zone_index: int,
+    *,
+    monomer_star_pattern: Optional[str] = None,
+    dimer_star_pattern: Optional[str] = None,
+) -> pd.DataFrame:
+    """Load monomer then dimer STAR rows (same order as the Ripley pool)."""
+    tomogram_path = Path(tomogram_path)
+    alignment_dir = require_alignment_dir(alignment_dir)
+    aunps_dir = tomogram_path / alignment_dir / "aunps"
+    tomogram_name = tomogram_path.name
+    frames: list[pd.DataFrame] = []
+    for kind in ("monomer", "dimer"):
+        path = _find_monomer_dimer_star_path(
+            aunps_dir,
+            tomogram_name,
+            alignment_dir,
+            int(active_zone_index),
+            kind=kind,  # type: ignore[arg-type]
+            pattern=monomer_star_pattern if kind == "monomer" else dimer_star_pattern,
+        )
+        if path is None:
+            raise FileNotFoundError(f"Missing {kind} STAR for zone {active_zone_index}")
+        df = _read_aunp_pick_star_dataframe(path)
+        if df is None or df.empty:
+            raise ValueError(f"Empty or unreadable {kind} STAR: {path}")
+        missing = [c for c in COORD_COLS if c not in df.columns]
+        if missing:
+            raise ValueError(f"{path} missing columns: {missing}")
+        part = df.copy()
+        if "active_zone" not in part.columns:
+            part["active_zone"] = int(active_zone_index)
+        if "postsynapse" not in part.columns:
+            part["postsynapse"] = False
+        frames.append(part)
+    return pd.concat(frames, ignore_index=True)
+
+
+def _star_export_dataframe(pool_df: pd.DataFrame, mask: np.ndarray) -> pd.DataFrame:
+    """Subset pool rows to the example STAR column set."""
+    out = pool_df.loc[np.asarray(mask, dtype=bool), list(SIMULATED_STAR_COLS)].copy()
+    return out.reset_index(drop=True)
+
+
+def _write_simulated_null_star_examples(
+    *,
+    out_dir: Path,
+    pool: np.ndarray,
+    pool_df: pd.DataFrame,
+    n_monomer: int,
+    n_dimer: int,
+    analysis_seed: int,
+    n_examples: int = N_SIMULATED_NULL_STAR_EXAMPLES,
+) -> Path:
+    """
+    Write ``n_examples`` label-permutation and greedy-segregation point sets as STAR files.
+
+    Uses the same deterministic per-replicate seeds as the parallel null workers so the
+    first replicates match those null curves when process parallelism is used.
+    """
+    import starfile
+
+    stars_dir = out_dir / "simulated_null_stars"
+    stars_dir.mkdir(parents=True, exist_ok=True)
+    pool = np.atleast_2d(np.asarray(pool, dtype=float))
+    n_pool = len(pool)
+    n_examples = int(min(max(0, n_examples), n_pool))
+    if n_examples == 0 or n_monomer <= 0 or n_dimer <= 0 or n_monomer + n_dimer != n_pool:
+        return stars_dir
+
+    pairwise_dist = cdist(pool, pool)
+    # Match label_permutation_l12_curves parallel seeds: seed + 1 + perm_id
+    # Match _greedy_segregation_l12_curves parallel seeds: (seed+2e6) + 17 + rep_id
+    greedy_base_seed = int(analysis_seed) + 2_000_000
+
+    for rep in range(n_examples):
+        rep_tag = f"{rep + 1:02d}"
+        perm_mask = _label_permutation_monomer_mask(
+            n_pool, n_monomer, int(analysis_seed) + 1 + rep
+        )
+        starfile.write(
+            _star_export_dataframe(pool_df, perm_mask),
+            stars_dir / f"label_permutation_rep{rep_tag}_monomer.star",
+            overwrite=True,
+        )
+        starfile.write(
+            _star_export_dataframe(pool_df, ~perm_mask),
+            stars_dir / f"label_permutation_rep{rep_tag}_dimer.star",
+            overwrite=True,
+        )
+
+        greedy_mask = _greedy_segregation_monomer_mask(
+            pool,
+            n_monomer,
+            n_dimer,
+            pairwise_dist,
+            np.random.default_rng(greedy_base_seed + 17 + rep),
+        )
+        starfile.write(
+            _star_export_dataframe(pool_df, greedy_mask),
+            stars_dir / f"segregation_greedy_rep{rep_tag}_monomer.star",
+            overwrite=True,
+        )
+        starfile.write(
+            _star_export_dataframe(pool_df, ~greedy_mask),
+            stars_dir / f"segregation_greedy_rep{rep_tag}_dimer.star",
+            overwrite=True,
+        )
+
+    return stars_dir
+
+
+def _greedy_seg_l12_worker(task: tuple[int, int]) -> tuple[int, np.ndarray]:
+    """Run one greedy-segregation L₁₂ curve (rep_id, seed)."""
+    rep_id, seed = task
+    curve = _greedy_seg_l12_one_replicate(
+        pool=_SEG_L12_CTX["pool"],
+        r_vals=_SEG_L12_CTX["r_vals"],
+        window=_SEG_L12_CTX["window"],
+        n_monomer=_SEG_L12_CTX["n_monomer"],
+        n_dimer=_SEG_L12_CTX["n_dimer"],
+        pairwise_dist=_SEG_L12_CTX["pairwise_dist"],
+        pool_edge_factors=_SEG_L12_CTX["pool_edge_factors"],
+        rng=np.random.default_rng(int(seed)),
     )
     return int(rep_id), curve
 
@@ -207,7 +392,6 @@ def _greedy_segregation_l12_curves(
     window,
     rng: np.random.Generator,
     *,
-    cluster_class: str,
     n_rep: int,
     pool_edge_factors: np.ndarray | None = None,
     seed: int = DEFAULT_ANALYSIS_SEED,
@@ -215,30 +399,26 @@ def _greedy_segregation_l12_curves(
     pbar: Optional[tqdm] = None,
 ) -> np.ndarray:
     """
-    Greedy max-segregation L₁₂ curves for one cluster-class mode.
+    Greedy segregation L₁₂ curves with a random clustered class per replicate.
 
-    ``cluster_class`` is ``"monomer"`` or ``"dimer"``: grow that class into a compact cluster,
-    assign the remaining points to the other class, then compute monomer→dimer L₁₂.
+    Each replicate independently chooses monomer or dimer as the compact class
+    (equal probability), grows that class from a random seed via nearest-neighbor
+    expansion to the observed class count, assigns the remaining points to the other
+    class, then computes monomer→dimer L₁₂.
 
     Uses the same edge-factor precompute + process-pool pattern as label permutation.
     """
     pool = np.atleast_2d(np.asarray(pool, dtype=float))
     n_pool = len(pool)
     n_rep_int = int(n_rep)
+    n_monomer = int(n_monomer)
+    n_dimer = int(n_dimer)
     curves = np.full((n_rep_int, len(r_vals)), np.nan, dtype=float)
     if n_pool == 0 or n_rep_int == 0:
         return curves
-
-    if cluster_class == "dimer":
-        n_cluster = int(n_dimer)
-        mode_label = "cluster dimer"
-    elif cluster_class == "monomer":
-        n_cluster = int(n_monomer)
-        mode_label = "cluster monomer"
-    else:
-        raise ValueError(f"cluster_class must be 'monomer' or 'dimer', got {cluster_class!r}")
-
-    if n_cluster <= 0 or n_cluster > n_pool:
+    if n_monomer <= 0 or n_dimer <= 0 or n_monomer + n_dimer != n_pool:
+        return curves
+    if n_monomer > n_pool or n_dimer > n_pool:
         return curves
 
     pairwise_dist = cdist(pool, pool)
@@ -258,21 +438,18 @@ def _greedy_segregation_l12_curves(
 
     if n_workers == 1:
         for rep_id in range(n_rep_int):
-            seed_idx = int(rng.integers(0, n_pool))
-            cluster_mask = _greedy_segregation_cluster_mask(
-                pool, n_cluster, seed_idx, pairwise_dist=pairwise_dist
-            )
-            monomer_mask = ~cluster_mask if cluster_class == "dimer" else cluster_mask
-            curves[rep_id] = ripley_l12_from_points(
-                pool[monomer_mask],
-                pool[~monomer_mask],
-                r_vals,
-                window,
-                rng,
-                edge_factors=pool_edge_factors[monomer_mask],
+            curves[rep_id] = _greedy_seg_l12_one_replicate(
+                pool=pool,
+                r_vals=r_vals,
+                window=window,
+                n_monomer=n_monomer,
+                n_dimer=n_dimer,
+                pairwise_dist=pairwise_dist,
+                pool_edge_factors=pool_edge_factors,
+                rng=rng,
             )
             if pbar is not None:
-                pbar.set_postfix_str(f"{mode_label} {rep_id + 1}/{n_rep_int}", refresh=False)
+                pbar.set_postfix_str(f"greedy seg {rep_id + 1}/{n_rep_int}", refresh=False)
                 pbar.update(1)
         return curves
 
@@ -285,8 +462,8 @@ def _greedy_segregation_l12_curves(
             pool,
             r_vals,
             window,
-            n_cluster,
-            cluster_class,
+            n_monomer,
+            n_dimer,
             pairwise_dist,
             pool_edge_factors,
         ),
@@ -296,7 +473,7 @@ def _greedy_segregation_l12_curves(
             rep_id, curve = fut.result()
             curves[rep_id] = curve
             if pbar is not None:
-                pbar.set_postfix_str(f"{mode_label} {rep_id + 1}/{n_rep_int}", refresh=False)
+                pbar.set_postfix_str(f"greedy seg {rep_id + 1}/{n_rep_int}", refresh=False)
                 pbar.update(1)
     return curves
 
@@ -448,8 +625,7 @@ def build_monomer_dimer_individual_curves_table(
     r_vals: np.ndarray,
     observed_l12: np.ndarray,
     perm_curves: np.ndarray,
-    seg_cluster_dimer_curves: np.ndarray,
-    seg_cluster_monomer_curves: np.ndarray,
+    seg_greedy_curves: np.ndarray,
     n_monomer: int,
     n_dimer: int,
     window_volume_nm3: float,
@@ -476,15 +652,9 @@ def build_monomer_dimer_individual_curves_table(
             extra_cols=extras,
         ),
         curves_matrix_to_long_dataframe(
-            seg_cluster_dimer_curves,
+            seg_greedy_curves,
             r_vals,
-            curve_type="segregation_cluster_dimer",
-            extra_cols=extras,
-        ),
-        curves_matrix_to_long_dataframe(
-            seg_cluster_monomer_curves,
-            r_vals,
-            curve_type="segregation_cluster_monomer",
+            curve_type="segregation_greedy",
             extra_cols=extras,
         ),
     ]
@@ -500,8 +670,7 @@ def build_monomer_dimer_prism_table(
     r_vals: np.ndarray,
     observed_l12: np.ndarray,
     perm_curves: np.ndarray,
-    seg_cluster_dimer_curves: np.ndarray,
-    seg_cluster_monomer_curves: np.ndarray,
+    seg_greedy_curves: np.ndarray,
     n_monomer: int,
     n_dimer: int,
     n_perm: int,
@@ -511,11 +680,8 @@ def build_monomer_dimer_prism_table(
     """Per-zone Prism table: observed L₁₂ plus label-permutation and segregation controls."""
     perm_lo, perm_mean, perm_hi = _percentile_band(perm_curves)
     perm_sd = _prism_sd_envelope_columns(perm_curves, r_vals, prefix="control_L12")
-    seg_dimer = _segregation_band_columns(
-        seg_cluster_dimer_curves, r_vals, prefix="segregation_cluster_dimer_L12"
-    )
-    seg_monomer = _segregation_band_columns(
-        seg_cluster_monomer_curves, r_vals, prefix="segregation_cluster_monomer_L12"
+    seg = _segregation_band_columns(
+        seg_greedy_curves, r_vals, prefix="segregation_greedy_L12"
     )
     n_r = len(r_vals)
     if len(perm_lo) != n_r:
@@ -539,59 +705,26 @@ def build_monomer_dimer_prism_table(
                 "control_L12_sem_envelope_hi": float(perm_sd["control_L12_sem_envelope_hi"][i]),
                 "control_L12_envelope_lo": float(perm_lo[i]),
                 "control_L12_envelope_hi": float(perm_hi[i]),
-                "segregation_cluster_dimer_L12_mean": float(
-                    seg_dimer["segregation_cluster_dimer_L12_mean"][i]
+                "segregation_greedy_L12_mean": float(seg["segregation_greedy_L12_mean"][i]),
+                "segregation_greedy_L12_sd": float(seg["segregation_greedy_L12_sd"][i]),
+                "segregation_greedy_L12_sd_envelope_lo": float(
+                    seg["segregation_greedy_L12_sd_envelope_lo"][i]
                 ),
-                "segregation_cluster_dimer_L12_sd": float(
-                    seg_dimer["segregation_cluster_dimer_L12_sd"][i]
+                "segregation_greedy_L12_sd_envelope_hi": float(
+                    seg["segregation_greedy_L12_sd_envelope_hi"][i]
                 ),
-                "segregation_cluster_dimer_L12_sd_envelope_lo": float(
-                    seg_dimer["segregation_cluster_dimer_L12_sd_envelope_lo"][i]
+                "segregation_greedy_L12_sem": float(seg["segregation_greedy_L12_sem"][i]),
+                "segregation_greedy_L12_sem_envelope_lo": float(
+                    seg["segregation_greedy_L12_sem_envelope_lo"][i]
                 ),
-                "segregation_cluster_dimer_L12_sd_envelope_hi": float(
-                    seg_dimer["segregation_cluster_dimer_L12_sd_envelope_hi"][i]
+                "segregation_greedy_L12_sem_envelope_hi": float(
+                    seg["segregation_greedy_L12_sem_envelope_hi"][i]
                 ),
-                "segregation_cluster_dimer_L12_sem": float(
-                    seg_dimer["segregation_cluster_dimer_L12_sem"][i]
+                "segregation_greedy_L12_envelope_lo": float(
+                    seg["segregation_greedy_L12_envelope_lo"][i]
                 ),
-                "segregation_cluster_dimer_L12_sem_envelope_lo": float(
-                    seg_dimer["segregation_cluster_dimer_L12_sem_envelope_lo"][i]
-                ),
-                "segregation_cluster_dimer_L12_sem_envelope_hi": float(
-                    seg_dimer["segregation_cluster_dimer_L12_sem_envelope_hi"][i]
-                ),
-                "segregation_cluster_dimer_L12_envelope_lo": float(
-                    seg_dimer["segregation_cluster_dimer_L12_envelope_lo"][i]
-                ),
-                "segregation_cluster_dimer_L12_envelope_hi": float(
-                    seg_dimer["segregation_cluster_dimer_L12_envelope_hi"][i]
-                ),
-                "segregation_cluster_monomer_L12_mean": float(
-                    seg_monomer["segregation_cluster_monomer_L12_mean"][i]
-                ),
-                "segregation_cluster_monomer_L12_sd": float(
-                    seg_monomer["segregation_cluster_monomer_L12_sd"][i]
-                ),
-                "segregation_cluster_monomer_L12_sd_envelope_lo": float(
-                    seg_monomer["segregation_cluster_monomer_L12_sd_envelope_lo"][i]
-                ),
-                "segregation_cluster_monomer_L12_sd_envelope_hi": float(
-                    seg_monomer["segregation_cluster_monomer_L12_sd_envelope_hi"][i]
-                ),
-                "segregation_cluster_monomer_L12_sem": float(
-                    seg_monomer["segregation_cluster_monomer_L12_sem"][i]
-                ),
-                "segregation_cluster_monomer_L12_sem_envelope_lo": float(
-                    seg_monomer["segregation_cluster_monomer_L12_sem_envelope_lo"][i]
-                ),
-                "segregation_cluster_monomer_L12_sem_envelope_hi": float(
-                    seg_monomer["segregation_cluster_monomer_L12_sem_envelope_hi"][i]
-                ),
-                "segregation_cluster_monomer_L12_envelope_lo": float(
-                    seg_monomer["segregation_cluster_monomer_L12_envelope_lo"][i]
-                ),
-                "segregation_cluster_monomer_L12_envelope_hi": float(
-                    seg_monomer["segregation_cluster_monomer_L12_envelope_hi"][i]
+                "segregation_greedy_L12_envelope_hi": float(
+                    seg["segregation_greedy_L12_envelope_hi"][i]
                 ),
                 "n_monomer": int(n_monomer),
                 "n_dimer": int(n_dimer),
@@ -621,8 +754,7 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
         if len(obs_curves) == 0:
             continue
         _, ctrl_curves = _extract_curves_matrix(sub, "perm_l12_mean")
-        _, seg_dimer_curves = _extract_curves_matrix(sub, "seg_cluster_dimer_l12_mean")
-        _, seg_monomer_curves = _extract_curves_matrix(sub, "seg_cluster_monomer_l12_mean")
+        _, seg_curves = _extract_curves_matrix(sub, "seg_greedy_l12_mean")
 
         obs_sd = _prism_sd_envelope_columns(obs_curves, r_vals, prefix="observed_L12")
         if len(ctrl_curves):
@@ -631,21 +763,13 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
             ctrl_sd = _prism_sd_envelope_columns(
                 np.empty((0, len(r_vals))), r_vals, prefix="control_L12"
             )
-        if len(seg_dimer_curves):
-            seg_dimer_sd = _prism_sd_envelope_columns(
-                seg_dimer_curves, r_vals, prefix="segregation_cluster_dimer_L12"
+        if len(seg_curves):
+            seg_sd = _prism_sd_envelope_columns(
+                seg_curves, r_vals, prefix="segregation_greedy_L12"
             )
         else:
-            seg_dimer_sd = _prism_sd_envelope_columns(
-                np.empty((0, len(r_vals))), r_vals, prefix="segregation_cluster_dimer_L12"
-            )
-        if len(seg_monomer_curves):
-            seg_monomer_sd = _prism_sd_envelope_columns(
-                seg_monomer_curves, r_vals, prefix="segregation_cluster_monomer_L12"
-            )
-        else:
-            seg_monomer_sd = _prism_sd_envelope_columns(
-                np.empty((0, len(r_vals))), r_vals, prefix="segregation_cluster_monomer_L12"
+            seg_sd = _prism_sd_envelope_columns(
+                np.empty((0, len(r_vals))), r_vals, prefix="segregation_greedy_L12"
             )
 
         n_tomograms = int(sub["tomogram_name"].nunique()) if "tomogram_name" in sub.columns else 0
@@ -673,47 +797,20 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                     "control_L12_sem": float(ctrl_sd["control_L12_sem"][i]),
                     "control_L12_sem_envelope_lo": float(ctrl_sd["control_L12_sem_envelope_lo"][i]),
                     "control_L12_sem_envelope_hi": float(ctrl_sd["control_L12_sem_envelope_hi"][i]),
-                    "segregation_cluster_dimer_L12_mean": float(
-                        seg_dimer_sd["segregation_cluster_dimer_L12_mean"][i]
+                    "segregation_greedy_L12_mean": float(seg_sd["segregation_greedy_L12_mean"][i]),
+                    "segregation_greedy_L12_sd": float(seg_sd["segregation_greedy_L12_sd"][i]),
+                    "segregation_greedy_L12_sd_envelope_lo": float(
+                        seg_sd["segregation_greedy_L12_sd_envelope_lo"][i]
                     ),
-                    "segregation_cluster_dimer_L12_sd": float(
-                        seg_dimer_sd["segregation_cluster_dimer_L12_sd"][i]
+                    "segregation_greedy_L12_sd_envelope_hi": float(
+                        seg_sd["segregation_greedy_L12_sd_envelope_hi"][i]
                     ),
-                    "segregation_cluster_dimer_L12_sd_envelope_lo": float(
-                        seg_dimer_sd["segregation_cluster_dimer_L12_sd_envelope_lo"][i]
+                    "segregation_greedy_L12_sem": float(seg_sd["segregation_greedy_L12_sem"][i]),
+                    "segregation_greedy_L12_sem_envelope_lo": float(
+                        seg_sd["segregation_greedy_L12_sem_envelope_lo"][i]
                     ),
-                    "segregation_cluster_dimer_L12_sd_envelope_hi": float(
-                        seg_dimer_sd["segregation_cluster_dimer_L12_sd_envelope_hi"][i]
-                    ),
-                    "segregation_cluster_dimer_L12_sem": float(
-                        seg_dimer_sd["segregation_cluster_dimer_L12_sem"][i]
-                    ),
-                    "segregation_cluster_dimer_L12_sem_envelope_lo": float(
-                        seg_dimer_sd["segregation_cluster_dimer_L12_sem_envelope_lo"][i]
-                    ),
-                    "segregation_cluster_dimer_L12_sem_envelope_hi": float(
-                        seg_dimer_sd["segregation_cluster_dimer_L12_sem_envelope_hi"][i]
-                    ),
-                    "segregation_cluster_monomer_L12_mean": float(
-                        seg_monomer_sd["segregation_cluster_monomer_L12_mean"][i]
-                    ),
-                    "segregation_cluster_monomer_L12_sd": float(
-                        seg_monomer_sd["segregation_cluster_monomer_L12_sd"][i]
-                    ),
-                    "segregation_cluster_monomer_L12_sd_envelope_lo": float(
-                        seg_monomer_sd["segregation_cluster_monomer_L12_sd_envelope_lo"][i]
-                    ),
-                    "segregation_cluster_monomer_L12_sd_envelope_hi": float(
-                        seg_monomer_sd["segregation_cluster_monomer_L12_sd_envelope_hi"][i]
-                    ),
-                    "segregation_cluster_monomer_L12_sem": float(
-                        seg_monomer_sd["segregation_cluster_monomer_L12_sem"][i]
-                    ),
-                    "segregation_cluster_monomer_L12_sem_envelope_lo": float(
-                        seg_monomer_sd["segregation_cluster_monomer_L12_sem_envelope_lo"][i]
-                    ),
-                    "segregation_cluster_monomer_L12_sem_envelope_hi": float(
-                        seg_monomer_sd["segregation_cluster_monomer_L12_sem_envelope_hi"][i]
+                    "segregation_greedy_L12_sem_envelope_hi": float(
+                        seg_sd["segregation_greedy_L12_sem_envelope_hi"][i]
                     ),
                     "n_zone_curves": int(len(obs_curves)),
                     "n_tomograms": n_tomograms,
@@ -791,8 +888,7 @@ def run_monomer_dimer_ripley_for_zone(
     # Segregation always matches label-permutation replicate count.
     n_segregation_int = n_perm_int
     n_perm_workers = _default_ripley_perm_workers(n_perm_int)
-    n_seg_evals = 2 * max(n_segregation_int, 0)
-    progress_total = 1 + max(n_perm_int, 0) + n_seg_evals
+    progress_total = 1 + max(n_perm_int, 0) + max(n_segregation_int, 0)
     pbar = tqdm(
         total=progress_total,
         desc=f"{zone_name} monomer/dimer Ripley",
@@ -803,7 +899,7 @@ def run_monomer_dimer_ripley_for_zone(
     )
     try:
         # Edge factors depend only on fixed pooled coordinates — estimate once and reuse
-        # for observed + both segregation modes (label-perm estimates its own pool factors).
+        # for observed + greedy segregation (label-perm estimates its own pool factors).
         edge_rng = np.random.default_rng(int(seed) + 7919)
         pool_edge_factors = _isotropic_edge_factors_for_foci(
             pool, r_vals, window.hull, edge_rng
@@ -829,31 +925,16 @@ def run_monomer_dimer_ripley_for_zone(
             pbar=pbar if n_perm_int > 0 else None,
         )
         seg_rng = np.random.default_rng(int(seed) + 1_000_000)
-        seg_cluster_dimer_curves = _greedy_segregation_l12_curves(
+        seg_greedy_curves = _greedy_segregation_l12_curves(
             pool,
             n_monomer,
             n_dimer,
             r_vals,
             window,
             seg_rng,
-            cluster_class="dimer",
             n_rep=n_segregation_int,
             pool_edge_factors=pool_edge_factors,
             seed=int(seed) + 2_000_000,
-            n_workers=n_perm_workers,
-            pbar=pbar if n_segregation_int > 0 else None,
-        )
-        seg_cluster_monomer_curves = _greedy_segregation_l12_curves(
-            pool,
-            n_monomer,
-            n_dimer,
-            r_vals,
-            window,
-            seg_rng,
-            cluster_class="monomer",
-            n_rep=n_segregation_int,
-            pool_edge_factors=pool_edge_factors,
-            seed=int(seed) + 3_000_000,
             n_workers=n_perm_workers,
             pbar=pbar if n_segregation_int > 0 else None,
         )
@@ -862,12 +943,9 @@ def run_monomer_dimer_ripley_for_zone(
     _, perm_mean, _ = _percentile_band(perm_curves)
     if len(perm_mean) != len(r_vals):
         perm_mean = np.full(len(r_vals), np.nan)
-    _, seg_dimer_mean, _ = _percentile_band(seg_cluster_dimer_curves)
-    if len(seg_dimer_mean) != len(r_vals):
-        seg_dimer_mean = np.full(len(r_vals), np.nan)
-    _, seg_monomer_mean, _ = _percentile_band(seg_cluster_monomer_curves)
-    if len(seg_monomer_mean) != len(r_vals):
-        seg_monomer_mean = np.full(len(r_vals), np.nan)
+    _, seg_greedy_mean, _ = _percentile_band(seg_greedy_curves)
+    if len(seg_greedy_mean) != len(r_vals):
+        seg_greedy_mean = np.full(len(r_vals), np.nan)
 
     tomogram_name = tomogram_path.name
     out_dir = (
@@ -883,6 +961,30 @@ def run_monomer_dimer_ripley_for_zone(
     if write_figures:
         figures_dir.mkdir(parents=True, exist_ok=True)
 
+    simulated_stars_dir: Path | None = None
+    try:
+        pool_df = _load_pool_star_dataframe_for_export(
+            tomogram_path,
+            alignment_dir,
+            int(active_zone_index),
+            monomer_star_pattern=monomer_star_pattern,
+            dimer_star_pattern=dimer_star_pattern,
+        )
+        if len(pool_df) != len(pool):
+            raise ValueError(
+                f"Pool STAR row count ({len(pool_df)}) != pooled coords ({len(pool)})"
+            )
+        simulated_stars_dir = _write_simulated_null_star_examples(
+            out_dir=out_dir,
+            pool=pool,
+            pool_df=pool_df,
+            n_monomer=n_monomer,
+            n_dimer=n_dimer,
+            analysis_seed=int(seed),
+        )
+    except Exception as exc:
+        print(f"  Warning: could not write simulated null STAR examples for {zone_name}: {exc}")
+
     curves_df = pd.DataFrame(
         {
             "active_zone_name": zone_name,
@@ -891,8 +993,7 @@ def run_monomer_dimer_ripley_for_zone(
             "r_nm": r_vals,
             "l12": observed_l12,
             "perm_l12_mean": perm_mean,
-            "seg_cluster_dimer_l12_mean": seg_dimer_mean,
-            "seg_cluster_monomer_l12_mean": seg_monomer_mean,
+            "seg_greedy_l12_mean": seg_greedy_mean,
             "n_monomer": n_monomer,
             "n_dimer": n_dimer,
             "n_permutations": int(n_perm_int),
@@ -908,8 +1009,7 @@ def run_monomer_dimer_ripley_for_zone(
         r_vals=r_vals,
         observed_l12=observed_l12,
         perm_curves=perm_curves,
-        seg_cluster_dimer_curves=seg_cluster_dimer_curves,
-        seg_cluster_monomer_curves=seg_cluster_monomer_curves,
+        seg_greedy_curves=seg_greedy_curves,
         n_monomer=n_monomer,
         n_dimer=n_dimer,
         window_volume_nm3=float(window.volume_nm3),
@@ -924,19 +1024,15 @@ def run_monomer_dimer_ripley_for_zone(
         perm_curves, r_vals, curve_type="label_permutation"
     ).to_csv(out_dir / "ripley_l12_individual_label_permutation_wide.csv", index=False)
     curves_matrix_to_wide_dataframe(
-        seg_cluster_dimer_curves, r_vals, curve_type="segregation_cluster_dimer"
-    ).to_csv(out_dir / "ripley_l12_individual_segregation_cluster_dimer_wide.csv", index=False)
-    curves_matrix_to_wide_dataframe(
-        seg_cluster_monomer_curves, r_vals, curve_type="segregation_cluster_monomer"
-    ).to_csv(out_dir / "ripley_l12_individual_segregation_cluster_monomer_wide.csv", index=False)
+        seg_greedy_curves, r_vals, curve_type="segregation_greedy"
+    ).to_csv(out_dir / "ripley_l12_individual_segregation_greedy_wide.csv", index=False)
 
     prism_df = build_monomer_dimer_prism_table(
         zone_name=zone_name,
         r_vals=r_vals,
         observed_l12=observed_l12,
         perm_curves=perm_curves,
-        seg_cluster_dimer_curves=seg_cluster_dimer_curves,
-        seg_cluster_monomer_curves=seg_cluster_monomer_curves,
+        seg_greedy_curves=seg_greedy_curves,
         n_monomer=n_monomer,
         n_dimer=n_dimer,
         n_perm=n_perm_int,
@@ -951,10 +1047,7 @@ def run_monomer_dimer_ripley_for_zone(
 
     if write_figures:
         perm_lo, perm_band_mean, perm_hi = _percentile_band(perm_curves)
-        seg_dimer_lo, seg_dimer_band_mean, seg_dimer_hi = _percentile_band(seg_cluster_dimer_curves)
-        seg_monomer_lo, seg_monomer_band_mean, seg_monomer_hi = _percentile_band(
-            seg_cluster_monomer_curves
-        )
+        seg_lo, seg_band_mean, seg_hi = _percentile_band(seg_greedy_curves)
         fig, ax = plt.subplots(figsize=(6.5, 4.5))
         ax.plot(r_vals, observed_l12, color="C0", lw=2, label="Observed monomer→dimer L₁₂")
         if len(perm_band_mean) == len(r_vals):
@@ -967,38 +1060,21 @@ def run_monomer_dimer_ripley_for_zone(
                 alpha=0.8,
                 label=f"Label-perm {RIPLEY_PERCENTILE_LO:g}–{RIPLEY_PERCENTILE_HI:g}%",
             )
-        if len(seg_dimer_band_mean) == len(r_vals):
+        if len(seg_band_mean) == len(r_vals):
             ax.plot(
                 r_vals,
-                seg_dimer_band_mean,
+                seg_band_mean,
                 color="C3",
                 lw=1.5,
-                label="Greedy cluster-dimer mean",
+                label="Greedy segregation mean",
             )
             ax.fill_between(
                 r_vals,
-                seg_dimer_lo,
-                seg_dimer_hi,
+                seg_lo,
+                seg_hi,
                 color="C3",
                 alpha=0.2,
-                label=f"Cluster-dimer {RIPLEY_PERCENTILE_LO:g}–{RIPLEY_PERCENTILE_HI:g}%",
-            )
-        if len(seg_monomer_band_mean) == len(r_vals):
-            ax.plot(
-                r_vals,
-                seg_monomer_band_mean,
-                color="C2",
-                lw=1.5,
-                ls="--",
-                label="Greedy cluster-monomer mean",
-            )
-            ax.fill_between(
-                r_vals,
-                seg_monomer_lo,
-                seg_monomer_hi,
-                color="C2",
-                alpha=0.15,
-                label=f"Cluster-monomer {RIPLEY_PERCENTILE_LO:g}–{RIPLEY_PERCENTILE_HI:g}%",
+                label=f"Greedy seg {RIPLEY_PERCENTILE_LO:g}–{RIPLEY_PERCENTILE_HI:g}%",
             )
         ax.axhline(0.0, color="0.5", ls="--", lw=0.8)
         ax.set_xlabel("r (nm)")
@@ -1006,7 +1082,7 @@ def run_monomer_dimer_ripley_for_zone(
         ax.set_title(
             f"{tomogram_name} | {zone_name}\n"
             f"monomer ({n_monomer}) vs dimer ({n_dimer}) | "
-            f"{int(n_perm_int)} label perms, {int(n_segregation_int)} seg reps/class"
+            f"{int(n_perm_int)} label perms, {int(n_segregation_int)} greedy seg reps"
         )
         ax.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else r_max_nm)
         ax.legend(loc="best", fontsize=7)
@@ -1026,8 +1102,7 @@ def run_monomer_dimer_ripley_for_zone(
         observed_l12=observed_l12,
         null_named_curves=[
             ("label_permutation", perm_curves),
-            ("segregation_cluster_dimer", seg_cluster_dimer_curves),
-            ("segregation_cluster_monomer", seg_cluster_monomer_curves),
+            ("segregation_greedy", seg_greedy_curves),
         ],
         write_figures=write_figures,
         figure_title=(
@@ -1048,20 +1123,24 @@ def run_monomer_dimer_ripley_for_zone(
         "n_perm_workers": int(n_perm_workers),
         "n_segregation_replicates": int(n_segregation_int),
         "segregation_matches_n_perm": True,
-        "segregation_modes": ["cluster_dimer", "cluster_monomer"],
+        "segregation_modes": ["greedy_random_cluster_class"],
         "segregation_seed_strategy": "random_point",
+        "segregation_cluster_class_choice": "random_per_replicate_monomer_or_dimer",
         "window_volume_nm3": float(window.volume_nm3),
         "control_label_permutation": "label_permutation_preserving_class_counts",
-        "control_segregation": "greedy_nearest_neighbor_cluster",
+        "control_segregation": "greedy_nearest_neighbor_cluster_random_class",
         "ripley_edge_correction": "isotropic_3d_mc",
         "mad_min_null_curves": int(MAD_MIN_NULL_CURVES),
         "mad_nulls": [
             "label_permutation",
-            "segregation_cluster_dimer",
-            "segregation_cluster_monomer",
+            "segregation_greedy",
         ],
         "mad_r_ranges": [label for label, _, _ in MAD_R_RANGES],
         "seed": int(seed),
+        "n_simulated_null_star_examples": int(N_SIMULATED_NULL_STAR_EXAMPLES),
+        "simulated_null_stars_dir": (
+            str(simulated_stars_dir) if simulated_stars_dir is not None else None
+        ),
     }
     with open(out_dir / "run_metadata.json", "w") as f:
         json.dump(meta, f, indent=2)
@@ -1069,9 +1148,9 @@ def run_monomer_dimer_ripley_for_zone(
     print(
         f"  Monomer/dimer Ripley L₁₂ ({zone_name}): "
         f"{n_monomer} monomer, {n_dimer} dimer, {int(n_perm_int)} perms, "
-        f"{int(n_segregation_int)} seg reps/class -> {out_dir}"
+        f"{int(n_segregation_int)} greedy seg reps -> {out_dir}"
     )
-    return {
+    result = {
         "curves_path": curves_path,
         "individual_curves_path": individual_path,
         "prism_path": prism_path,
@@ -1079,6 +1158,9 @@ def run_monomer_dimer_ripley_for_zone(
         "mad_curves_path": mad_curves_path,
         "output_dir": out_dir,
     }
+    if simulated_stars_dir is not None:
+        result["simulated_null_stars_dir"] = simulated_stars_dir
+    return result
 
 
 def run_monomer_dimer_ripley_for_tomogram(
@@ -1218,23 +1300,14 @@ def plot_pooled_monomer_dimer_ripley_visualizations(
         ctrl_mean = grp["control_L12_mean"].to_numpy(dtype=float)
         ctrl_lo = grp["control_L12_sd_envelope_lo"].to_numpy(dtype=float)
         ctrl_hi = grp["control_L12_sd_envelope_hi"].to_numpy(dtype=float)
-        seg_dimer_mean = grp.get(
-            "segregation_cluster_dimer_L12_mean", pd.Series(np.nan, index=grp.index)
+        seg_mean = grp.get(
+            "segregation_greedy_L12_mean", pd.Series(np.nan, index=grp.index)
         ).to_numpy(dtype=float)
-        seg_dimer_lo = grp.get(
-            "segregation_cluster_dimer_L12_sd_envelope_lo", pd.Series(np.nan, index=grp.index)
+        seg_lo = grp.get(
+            "segregation_greedy_L12_sd_envelope_lo", pd.Series(np.nan, index=grp.index)
         ).to_numpy(dtype=float)
-        seg_dimer_hi = grp.get(
-            "segregation_cluster_dimer_L12_sd_envelope_hi", pd.Series(np.nan, index=grp.index)
-        ).to_numpy(dtype=float)
-        seg_monomer_mean = grp.get(
-            "segregation_cluster_monomer_L12_mean", pd.Series(np.nan, index=grp.index)
-        ).to_numpy(dtype=float)
-        seg_monomer_lo = grp.get(
-            "segregation_cluster_monomer_L12_sd_envelope_lo", pd.Series(np.nan, index=grp.index)
-        ).to_numpy(dtype=float)
-        seg_monomer_hi = grp.get(
-            "segregation_cluster_monomer_L12_sd_envelope_hi", pd.Series(np.nan, index=grp.index)
+        seg_hi = grp.get(
+            "segregation_greedy_L12_sd_envelope_hi", pd.Series(np.nan, index=grp.index)
         ).to_numpy(dtype=float)
         meta = grp.iloc[0]
 
@@ -1244,27 +1317,10 @@ def plot_pooled_monomer_dimer_ripley_visualizations(
         ax.fill_between(r_vals, obs_lo, obs_hi, color="C0", alpha=0.25, label="Observed mean ± SD")
         ax.plot(r_vals, ctrl_mean, color="0.45", lw=1.5, label="Label-permutation (mean)")
         ax.fill_between(r_vals, ctrl_lo, ctrl_hi, color="0.7", alpha=0.4, label="Label-perm mean ± SD")
-        if np.isfinite(seg_dimer_mean).any():
-            ax.plot(r_vals, seg_dimer_mean, color="C3", lw=1.5, label="Greedy cluster-dimer (mean)")
+        if np.isfinite(seg_mean).any():
+            ax.plot(r_vals, seg_mean, color="C3", lw=1.5, label="Greedy segregation (mean)")
             ax.fill_between(
-                r_vals, seg_dimer_lo, seg_dimer_hi, color="C3", alpha=0.2, label="Cluster-dimer mean ± SD"
-            )
-        if np.isfinite(seg_monomer_mean).any():
-            ax.plot(
-                r_vals,
-                seg_monomer_mean,
-                color="C2",
-                lw=1.5,
-                ls="--",
-                label="Greedy cluster-monomer (mean)",
-            )
-            ax.fill_between(
-                r_vals,
-                seg_monomer_lo,
-                seg_monomer_hi,
-                color="C2",
-                alpha=0.15,
-                label="Cluster-monomer mean ± SD",
+                r_vals, seg_lo, seg_hi, color="C3", alpha=0.2, label="Greedy seg mean ± SD"
             )
         ax.axhline(0.0, color="0.5", ls="--", lw=0.8)
         ax.set_xlabel("r (nm)")
