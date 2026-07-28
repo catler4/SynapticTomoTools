@@ -500,6 +500,38 @@ def ripley_l12(k12: np.ndarray, r_vals: np.ndarray) -> np.ndarray:
     return np.cbrt(3.0 * k12 / (4.0 * np.pi)) - r_vals
 
 
+def ripley_k12_from_l12(l12: np.ndarray, r_vals: np.ndarray) -> np.ndarray:
+    """Invert L₁₂ → K₁₂: K = (4π/3)·(L+r)³ (non-negative radius argument)."""
+    l12 = np.asarray(l12, dtype=float)
+    r_vals = np.asarray(r_vals, dtype=float)
+    return (4.0 * np.pi / 3.0) * np.maximum(l12 + r_vals, 0.0) ** 3
+
+
+def mean_l12_from_averaged_k12(
+    l12_curves: np.ndarray,
+    r_vals: np.ndarray,
+    *,
+    k12_curves: np.ndarray | None = None,
+) -> np.ndarray:
+    """
+    Pool on the K₁₂ scale, then convert the mean K back to L₁₂.
+
+    If ``k12_curves`` is provided it is averaged directly; otherwise each L₁₂ curve is
+    inverted to K₁₂ first. Empty input yields an all-NaN L₁₂ vector.
+    """
+    r_vals = np.asarray(r_vals, dtype=float)
+    if k12_curves is not None:
+        k_mat = np.atleast_2d(np.asarray(k12_curves, dtype=float))
+    else:
+        l_mat = np.atleast_2d(np.asarray(l12_curves, dtype=float))
+        if l_mat.size == 0 or l_mat.shape[0] == 0:
+            return np.full(len(r_vals), np.nan)
+        k_mat = ripley_k12_from_l12(l_mat, r_vals[None, :])
+    if k_mat.size == 0 or k_mat.shape[0] == 0:
+        return np.full(len(r_vals), np.nan)
+    return ripley_l12(np.nanmean(k_mat, axis=0), r_vals)
+
+
 def ripley_l12_from_points(
     x: np.ndarray,
     y: np.ndarray,
@@ -1193,15 +1225,18 @@ def build_ripley_l12_prism_envelope_table(
     each comparison group (mean across fusing-vesicle curves).
     """
     fusing_sd = _prism_sd_envelope_columns(obs_curves, r_vals, prefix="fusing_L12")
+    fusing_mean_from_k = mean_l12_from_averaged_k12(obs_curves, r_vals)
     rows: list[dict] = []
     for comparison, control_curves in control_curves_by_comparison.items():
         if len(control_curves):
             ctrl_lo, ctrl_mean, ctrl_hi = _percentile_band(control_curves)
             ctrl_sd = _prism_sd_envelope_columns(control_curves, r_vals, prefix="control_L12")
+            ctrl_mean_from_k = mean_l12_from_averaged_k12(control_curves, r_vals)
             n_control = int(len(control_curves))
         else:
             ctrl_lo = ctrl_mean = ctrl_hi = np.full(len(r_vals), np.nan)
             ctrl_sd = _prism_sd_envelope_columns(np.empty((0, len(r_vals))), r_vals, prefix="control_L12")
+            ctrl_mean_from_k = np.full(len(r_vals), np.nan)
             n_control = 0
         for i, r_nm in enumerate(r_vals):
             rows.append(
@@ -1212,6 +1247,7 @@ def build_ripley_l12_prism_envelope_table(
                     "control_comparison": comparison,
                     "r_nm": float(r_nm),
                     "fusing_L12_mean": float(fusing_sd["fusing_L12_mean"][i]),
+                    "fusing_L12_mean_from_k": float(fusing_mean_from_k[i]),
                     "fusing_L12_sd": float(fusing_sd["fusing_L12_sd"][i]),
                     "fusing_L12_sd_envelope_lo": float(fusing_sd["fusing_L12_sd_envelope_lo"][i]),
                     "fusing_L12_sd_envelope_hi": float(fusing_sd["fusing_L12_sd_envelope_hi"][i]),
@@ -1219,6 +1255,7 @@ def build_ripley_l12_prism_envelope_table(
                     "fusing_L12_sem_envelope_lo": float(fusing_sd["fusing_L12_sem_envelope_lo"][i]),
                     "fusing_L12_sem_envelope_hi": float(fusing_sd["fusing_L12_sem_envelope_hi"][i]),
                     "control_L12_mean": float(ctrl_mean[i]),
+                    "control_L12_mean_from_k": float(ctrl_mean_from_k[i]),
                     "control_L12_sd": float(ctrl_sd["control_L12_sd"][i]),
                     "control_L12_envelope_lo": float(ctrl_lo[i]),
                     "control_L12_envelope_hi": float(ctrl_hi[i]),
@@ -1256,10 +1293,12 @@ def build_ripley_l12_prism_wide_table(
         col
         for col in (
             "fusing_L12_mean",
+            "fusing_L12_mean_from_k",
             "fusing_L12_sd",
             "fusing_L12_sd_envelope_lo",
             "fusing_L12_sd_envelope_hi",
             "control_L12_mean",
+            "control_L12_mean_from_k",
             "control_L12_sd",
             "control_L12_envelope_lo",
             "control_L12_envelope_hi",
@@ -1288,12 +1327,32 @@ def _plot_ripley_control_comparison(
 ) -> None:
     fig, ax = plt.subplots(figsize=(7, 4.5))
     obs_mean = np.nanmean(obs_curves, axis=0) if len(obs_curves) else np.full(len(r_vals), np.nan)
-    ax.plot(r_vals, obs_mean, color="C3", lw=2.2, label="Fusing mean", zorder=5)
+    obs_mean_from_k = mean_l12_from_averaged_k12(obs_curves, r_vals)
+    ax.plot(r_vals, obs_mean, color="C3", lw=2.2, label="Fusing mean (of L)", zorder=5)
+    ax.plot(
+        r_vals,
+        obs_mean_from_k,
+        color="C3",
+        lw=1.6,
+        ls="--",
+        label="Fusing mean (K→L)",
+        zorder=5,
+    )
 
     if len(control_curves):
         lo, ctrl_mean, hi = _percentile_band(control_curves)
+        ctrl_mean_from_k = mean_l12_from_averaged_k12(control_curves, r_vals)
         ax.fill_between(r_vals, lo, hi, color="0.75", alpha=0.55, label="Control 95% envelope", zorder=2)
-        ax.plot(r_vals, ctrl_mean, color="0.45", lw=2.0, label="Control mean", zorder=3)
+        ax.plot(r_vals, ctrl_mean, color="0.45", lw=2.0, label="Control mean (of L)", zorder=3)
+        ax.plot(
+            r_vals,
+            ctrl_mean_from_k,
+            color="0.45",
+            lw=1.5,
+            ls="--",
+            label="Control mean (K→L)",
+            zorder=3,
+        )
 
     ax.axhline(0.0, color="k", ls="--", lw=0.8, alpha=0.6)
     ax.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else DEFAULT_RIPLEY_R_MAX_NM)
@@ -1572,7 +1631,8 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
     """
     Pooled mean curves and control envelopes across all tomograms/zones.
 
-    ``fusing_L12_mean`` is the mean across all pooled fusing-vesicle curves at each r.
+    ``fusing_L12_mean`` / ``control_L12_mean`` are means of L₁₂ curves.
+    ``*_mean_from_k`` average K₁₂ first (recovered from L), then convert back to L₁₂.
     Percentile envelopes use 2.5–97.5%; SD envelopes use mean ± 1 sample SD.
     """
     if df.empty or "tomogram_name" not in df.columns:
@@ -1592,6 +1652,7 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
                 continue
 
             fusing_sd = _prism_sd_envelope_columns(obs_curves, r_vals, prefix="fusing_L12")
+            fusing_mean_from_k = mean_l12_from_averaged_k12(obs_curves, r_vals)
             n_tomograms = int(sub_df["tomogram_name"].nunique())
             n_zones = int(
                 sub_df[["tomogram_name", "alignment_dir", "active_zone_name"]]
@@ -1608,12 +1669,14 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
                     ctrl_sd = _prism_sd_envelope_columns(
                         control_curves, r_vals, prefix="control_L12"
                     )
+                    ctrl_mean_from_k = mean_l12_from_averaged_k12(control_curves, r_vals)
                     n_control = int(len(control_curves))
                 else:
                     ctrl_lo = ctrl_mean = ctrl_hi = np.full(len(r_vals), np.nan)
                     ctrl_sd = _prism_sd_envelope_columns(
                         np.empty((0, len(r_vals))), r_vals, prefix="control_L12"
                     )
+                    ctrl_mean_from_k = np.full(len(r_vals), np.nan)
                     n_control = 0
 
                 for i, r_nm in enumerate(r_vals):
@@ -1624,6 +1687,7 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
                             "control_comparison": comparison,
                             "r_nm": float(r_nm),
                             "fusing_L12_mean": float(fusing_sd["fusing_L12_mean"][i]),
+                            "fusing_L12_mean_from_k": float(fusing_mean_from_k[i]),
                             "fusing_L12_sd": float(fusing_sd["fusing_L12_sd"][i]),
                             "fusing_L12_sd_envelope_lo": float(
                                 fusing_sd["fusing_L12_sd_envelope_lo"][i]
@@ -1639,6 +1703,7 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
                                 fusing_sd["fusing_L12_sem_envelope_hi"][i]
                             ),
                             "control_L12_mean": float(ctrl_mean[i]),
+                            "control_L12_mean_from_k": float(ctrl_mean_from_k[i]),
                             "control_L12_sd": float(ctrl_sd["control_L12_sd"][i]),
                             "control_L12_envelope_lo": float(ctrl_lo[i]),
                             "control_L12_envelope_hi": float(ctrl_hi[i]),

@@ -66,6 +66,7 @@ from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
     load_synaptic_cleft_active_zone_points,
     mad_result_to_curves_dataframe,
     mad_result_to_summary_row,
+    mean_l12_from_averaged_k12,
     ripley_l12_from_points,
     run_mad_tests_over_r_ranges,
     subset_aunps,
@@ -739,7 +740,10 @@ def build_monomer_dimer_prism_table(
 
 
 def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
-    """Pooled mean ± SD of observed and control L₁₂ across zones, per tomogram set."""
+    """Pooled mean ± SD of observed and control L₁₂ across zones, per tomogram set.
+
+    Reports both mean-of-L (``*_mean``) and mean-of-K then convert to L (``*_mean_from_k``).
+    """
     if df.empty:
         return pd.DataFrame()
 
@@ -757,20 +761,25 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
         _, seg_curves = _extract_curves_matrix(sub, "seg_greedy_l12_mean")
 
         obs_sd = _prism_sd_envelope_columns(obs_curves, r_vals, prefix="observed_L12")
+        obs_mean_from_k = mean_l12_from_averaged_k12(obs_curves, r_vals)
         if len(ctrl_curves):
             ctrl_sd = _prism_sd_envelope_columns(ctrl_curves, r_vals, prefix="control_L12")
+            ctrl_mean_from_k = mean_l12_from_averaged_k12(ctrl_curves, r_vals)
         else:
             ctrl_sd = _prism_sd_envelope_columns(
                 np.empty((0, len(r_vals))), r_vals, prefix="control_L12"
             )
+            ctrl_mean_from_k = np.full(len(r_vals), np.nan)
         if len(seg_curves):
             seg_sd = _prism_sd_envelope_columns(
                 seg_curves, r_vals, prefix="segregation_greedy_L12"
             )
+            seg_mean_from_k = mean_l12_from_averaged_k12(seg_curves, r_vals)
         else:
             seg_sd = _prism_sd_envelope_columns(
                 np.empty((0, len(r_vals))), r_vals, prefix="segregation_greedy_L12"
             )
+            seg_mean_from_k = np.full(len(r_vals), np.nan)
 
         n_tomograms = int(sub["tomogram_name"].nunique()) if "tomogram_name" in sub.columns else 0
         n_zones = int(
@@ -784,6 +793,7 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                     "window_mode": WINDOW_MODE,
                     "r_nm": float(r_nm),
                     "observed_L12_mean": float(obs_sd["observed_L12_mean"][i]),
+                    "observed_L12_mean_from_k": float(obs_mean_from_k[i]),
                     "observed_L12_sd": float(obs_sd["observed_L12_sd"][i]),
                     "observed_L12_sd_envelope_lo": float(obs_sd["observed_L12_sd_envelope_lo"][i]),
                     "observed_L12_sd_envelope_hi": float(obs_sd["observed_L12_sd_envelope_hi"][i]),
@@ -791,6 +801,7 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                     "observed_L12_sem_envelope_lo": float(obs_sd["observed_L12_sem_envelope_lo"][i]),
                     "observed_L12_sem_envelope_hi": float(obs_sd["observed_L12_sem_envelope_hi"][i]),
                     "control_L12_mean": float(ctrl_sd["control_L12_mean"][i]),
+                    "control_L12_mean_from_k": float(ctrl_mean_from_k[i]),
                     "control_L12_sd": float(ctrl_sd["control_L12_sd"][i]),
                     "control_L12_sd_envelope_lo": float(ctrl_sd["control_L12_sd_envelope_lo"][i]),
                     "control_L12_sd_envelope_hi": float(ctrl_sd["control_L12_sd_envelope_hi"][i]),
@@ -798,6 +809,7 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                     "control_L12_sem_envelope_lo": float(ctrl_sd["control_L12_sem_envelope_lo"][i]),
                     "control_L12_sem_envelope_hi": float(ctrl_sd["control_L12_sem_envelope_hi"][i]),
                     "segregation_greedy_L12_mean": float(seg_sd["segregation_greedy_L12_mean"][i]),
+                    "segregation_greedy_L12_mean_from_k": float(seg_mean_from_k[i]),
                     "segregation_greedy_L12_sd": float(seg_sd["segregation_greedy_L12_sd"][i]),
                     "segregation_greedy_L12_sd_envelope_lo": float(
                         seg_sd["segregation_greedy_L12_sd_envelope_lo"][i]
@@ -1313,12 +1325,39 @@ def plot_pooled_monomer_dimer_ripley_visualizations(
 
         set_tag = _safe_name(str(set_name)) or "unspecified"
         fig, ax = plt.subplots(figsize=(6.5, 4.5))
-        ax.plot(r_vals, obs_mean, color="C0", lw=2, label="Observed monomer→dimer (mean)")
+        ax.plot(r_vals, obs_mean, color="C0", lw=2, label="Observed mean (of L)")
+        if "observed_L12_mean_from_k" in grp.columns:
+            ax.plot(
+                r_vals,
+                grp["observed_L12_mean_from_k"].to_numpy(dtype=float),
+                color="C0",
+                lw=1.5,
+                ls="--",
+                label="Observed mean (K→L)",
+            )
         ax.fill_between(r_vals, obs_lo, obs_hi, color="C0", alpha=0.25, label="Observed mean ± SD")
-        ax.plot(r_vals, ctrl_mean, color="0.45", lw=1.5, label="Label-permutation (mean)")
+        ax.plot(r_vals, ctrl_mean, color="0.45", lw=1.5, label="Label-perm mean (of L)")
+        if "control_L12_mean_from_k" in grp.columns:
+            ax.plot(
+                r_vals,
+                grp["control_L12_mean_from_k"].to_numpy(dtype=float),
+                color="0.45",
+                lw=1.3,
+                ls="--",
+                label="Label-perm mean (K→L)",
+            )
         ax.fill_between(r_vals, ctrl_lo, ctrl_hi, color="0.7", alpha=0.4, label="Label-perm mean ± SD")
         if np.isfinite(seg_mean).any():
-            ax.plot(r_vals, seg_mean, color="C3", lw=1.5, label="Greedy segregation (mean)")
+            ax.plot(r_vals, seg_mean, color="C3", lw=1.5, label="Greedy seg mean (of L)")
+            if "segregation_greedy_L12_mean_from_k" in grp.columns:
+                ax.plot(
+                    r_vals,
+                    grp["segregation_greedy_L12_mean_from_k"].to_numpy(dtype=float),
+                    color="C3",
+                    lw=1.3,
+                    ls="--",
+                    label="Greedy seg mean (K→L)",
+                )
             ax.fill_between(
                 r_vals, seg_lo, seg_hi, color="C3", alpha=0.2, label="Greedy seg mean ± SD"
             )
