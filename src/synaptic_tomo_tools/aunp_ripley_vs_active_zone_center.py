@@ -29,7 +29,7 @@ from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
     curves_matrix_to_long_dataframe,
     curves_matrix_to_wide_dataframe,
     load_synaptic_cleft_active_zone_points,
-    mean_l12_from_averaged_k12,
+    prism_sd_envelope_columns_from_averaged_k12,
     ripley_l12,
 )
 
@@ -145,8 +145,8 @@ def build_aunp_vs_az_center_prism_table(
 def build_pooled_aunp_vs_az_center_prism_table(df: pd.DataFrame) -> pd.DataFrame:
     """Pooled mean ± SD/SEM of L₁₂ across tomogram-zone curves at each r, per tomogram set.
 
-    Reports both mean-of-L (``center_L12_mean``) and mean-of-K then convert to L
-    (``center_L12_mean_from_k``). Uses stored ``k12`` when present.
+    Reports both L-space mean±SD/SEM and K-space mean±SD/SEM mapped to L
+    (``center_L12_*_from_k``). Uses stored ``k12`` when present.
     """
     if df.empty:
         return pd.DataFrame()
@@ -163,15 +163,14 @@ def build_pooled_aunp_vs_az_center_prism_table(df: pd.DataFrame) -> pd.DataFrame
             continue
 
         sd = _prism_sd_envelope_columns(curves, r_vals, prefix="center_L12")
+        k12_curves = None
         if "k12" in sub.columns:
             _, k_curves = _extract_zone_curves_matrix(sub, value_col="k12")
-            mean_from_k = mean_l12_from_averaged_k12(
-                curves,
-                r_vals,
-                k12_curves=k_curves if len(k_curves) == len(curves) else None,
-            )
-        else:
-            mean_from_k = mean_l12_from_averaged_k12(curves, r_vals)
+            if len(k_curves) == len(curves):
+                k12_curves = k_curves
+        from_k = prism_sd_envelope_columns_from_averaged_k12(
+            curves, r_vals, prefix="center_L12", k12_curves=k12_curves
+        )
         n_tomograms = int(sub["tomogram_name"].nunique()) if "tomogram_name" in sub.columns else 0
         n_zones = int(
             sub[["tomogram_name", "alignment_dir", "active_zone_name"]].drop_duplicates().shape[0]
@@ -184,13 +183,27 @@ def build_pooled_aunp_vs_az_center_prism_table(df: pd.DataFrame) -> pd.DataFrame
                     "window_mode": WINDOW_MODE,
                     "r_nm": float(r_nm),
                     "center_L12_mean": float(sd["center_L12_mean"][i]),
-                    "center_L12_mean_from_k": float(mean_from_k[i]),
+                    "center_L12_mean_from_k": float(from_k["center_L12_mean_from_k"][i]),
                     "center_L12_sd": float(sd["center_L12_sd"][i]),
                     "center_L12_sd_envelope_lo": float(sd["center_L12_sd_envelope_lo"][i]),
                     "center_L12_sd_envelope_hi": float(sd["center_L12_sd_envelope_hi"][i]),
+                    "center_L12_sd_from_k": float(from_k["center_L12_sd_from_k"][i]),
+                    "center_L12_sd_envelope_lo_from_k": float(
+                        from_k["center_L12_sd_envelope_lo_from_k"][i]
+                    ),
+                    "center_L12_sd_envelope_hi_from_k": float(
+                        from_k["center_L12_sd_envelope_hi_from_k"][i]
+                    ),
                     "center_L12_sem": float(sd["center_L12_sem"][i]),
                     "center_L12_sem_envelope_lo": float(sd["center_L12_sem_envelope_lo"][i]),
                     "center_L12_sem_envelope_hi": float(sd["center_L12_sem_envelope_hi"][i]),
+                    "center_L12_sem_from_k": float(from_k["center_L12_sem_from_k"][i]),
+                    "center_L12_sem_envelope_lo_from_k": float(
+                        from_k["center_L12_sem_envelope_lo_from_k"][i]
+                    ),
+                    "center_L12_sem_envelope_hi_from_k": float(
+                        from_k["center_L12_sem_envelope_hi_from_k"][i]
+                    ),
                     "n_zone_curves": int(len(curves)),
                     "n_tomograms": n_tomograms,
                     "n_active_zones": n_zones,
@@ -471,7 +484,17 @@ def plot_pooled_aunp_vs_az_center_ripley_visualizations(
                 ls="--",
                 label="Mean L₁₂ (K→L)",
             )
-        ax.fill_between(r_vals, lo, hi, color="C0", alpha=0.25, label="Mean ± SD")
+        ax.fill_between(r_vals, lo, hi, color="C0", alpha=0.25, label="±SD (of L)")
+        if "center_L12_sd_envelope_lo_from_k" in grp.columns:
+            ax.fill_between(
+                r_vals,
+                grp["center_L12_sd_envelope_lo_from_k"].to_numpy(dtype=float),
+                grp["center_L12_sd_envelope_hi_from_k"].to_numpy(dtype=float),
+                color="C0",
+                alpha=0.12,
+                hatch="///",
+                label="±SD (K→L)",
+            )
         ax.axhline(0.0, color="0.5", ls="--", lw=0.8)
         ax.set_xlabel("r (nm)")
         ax.set_ylabel("Ripley L₁₂(r) = (3K₁₂/4π)^(1/3) − r")

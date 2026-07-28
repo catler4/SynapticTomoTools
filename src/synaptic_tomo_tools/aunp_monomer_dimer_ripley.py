@@ -66,7 +66,7 @@ from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
     load_synaptic_cleft_active_zone_points,
     mad_result_to_curves_dataframe,
     mad_result_to_summary_row,
-    mean_l12_from_averaged_k12,
+    prism_sd_envelope_columns_from_averaged_k12,
     ripley_l12_from_points,
     run_mad_tests_over_r_ranges,
     subset_aunps,
@@ -742,7 +742,8 @@ def build_monomer_dimer_prism_table(
 def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
     """Pooled mean ± SD of observed and control L₁₂ across zones, per tomogram set.
 
-    Reports both mean-of-L (``*_mean``) and mean-of-K then convert to L (``*_mean_from_k``).
+    Reports both L-space mean±SD/SEM (``*_mean``, ``*_sd_*``) and K-space mean±SD/SEM
+    mapped to L (``*_mean_from_k``, ``*_sd_*_from_k``, ``*_sem_*_from_k``).
     """
     if df.empty:
         return pd.DataFrame()
@@ -761,25 +762,35 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
         _, seg_curves = _extract_curves_matrix(sub, "seg_greedy_l12_mean")
 
         obs_sd = _prism_sd_envelope_columns(obs_curves, r_vals, prefix="observed_L12")
-        obs_mean_from_k = mean_l12_from_averaged_k12(obs_curves, r_vals)
+        obs_from_k = prism_sd_envelope_columns_from_averaged_k12(
+            obs_curves, r_vals, prefix="observed_L12"
+        )
         if len(ctrl_curves):
             ctrl_sd = _prism_sd_envelope_columns(ctrl_curves, r_vals, prefix="control_L12")
-            ctrl_mean_from_k = mean_l12_from_averaged_k12(ctrl_curves, r_vals)
+            ctrl_from_k = prism_sd_envelope_columns_from_averaged_k12(
+                ctrl_curves, r_vals, prefix="control_L12"
+            )
         else:
             ctrl_sd = _prism_sd_envelope_columns(
                 np.empty((0, len(r_vals))), r_vals, prefix="control_L12"
             )
-            ctrl_mean_from_k = np.full(len(r_vals), np.nan)
+            ctrl_from_k = prism_sd_envelope_columns_from_averaged_k12(
+                np.empty((0, len(r_vals))), r_vals, prefix="control_L12"
+            )
         if len(seg_curves):
             seg_sd = _prism_sd_envelope_columns(
                 seg_curves, r_vals, prefix="segregation_greedy_L12"
             )
-            seg_mean_from_k = mean_l12_from_averaged_k12(seg_curves, r_vals)
+            seg_from_k = prism_sd_envelope_columns_from_averaged_k12(
+                seg_curves, r_vals, prefix="segregation_greedy_L12"
+            )
         else:
             seg_sd = _prism_sd_envelope_columns(
                 np.empty((0, len(r_vals))), r_vals, prefix="segregation_greedy_L12"
             )
-            seg_mean_from_k = np.full(len(r_vals), np.nan)
+            seg_from_k = prism_sd_envelope_columns_from_averaged_k12(
+                np.empty((0, len(r_vals))), r_vals, prefix="segregation_greedy_L12"
+            )
 
         n_tomograms = int(sub["tomogram_name"].nunique()) if "tomogram_name" in sub.columns else 0
         n_zones = int(
@@ -793,23 +804,53 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                     "window_mode": WINDOW_MODE,
                     "r_nm": float(r_nm),
                     "observed_L12_mean": float(obs_sd["observed_L12_mean"][i]),
-                    "observed_L12_mean_from_k": float(obs_mean_from_k[i]),
+                    "observed_L12_mean_from_k": float(obs_from_k["observed_L12_mean_from_k"][i]),
                     "observed_L12_sd": float(obs_sd["observed_L12_sd"][i]),
                     "observed_L12_sd_envelope_lo": float(obs_sd["observed_L12_sd_envelope_lo"][i]),
                     "observed_L12_sd_envelope_hi": float(obs_sd["observed_L12_sd_envelope_hi"][i]),
+                    "observed_L12_sd_from_k": float(obs_from_k["observed_L12_sd_from_k"][i]),
+                    "observed_L12_sd_envelope_lo_from_k": float(
+                        obs_from_k["observed_L12_sd_envelope_lo_from_k"][i]
+                    ),
+                    "observed_L12_sd_envelope_hi_from_k": float(
+                        obs_from_k["observed_L12_sd_envelope_hi_from_k"][i]
+                    ),
                     "observed_L12_sem": float(obs_sd["observed_L12_sem"][i]),
                     "observed_L12_sem_envelope_lo": float(obs_sd["observed_L12_sem_envelope_lo"][i]),
                     "observed_L12_sem_envelope_hi": float(obs_sd["observed_L12_sem_envelope_hi"][i]),
+                    "observed_L12_sem_from_k": float(obs_from_k["observed_L12_sem_from_k"][i]),
+                    "observed_L12_sem_envelope_lo_from_k": float(
+                        obs_from_k["observed_L12_sem_envelope_lo_from_k"][i]
+                    ),
+                    "observed_L12_sem_envelope_hi_from_k": float(
+                        obs_from_k["observed_L12_sem_envelope_hi_from_k"][i]
+                    ),
                     "control_L12_mean": float(ctrl_sd["control_L12_mean"][i]),
-                    "control_L12_mean_from_k": float(ctrl_mean_from_k[i]),
+                    "control_L12_mean_from_k": float(ctrl_from_k["control_L12_mean_from_k"][i]),
                     "control_L12_sd": float(ctrl_sd["control_L12_sd"][i]),
                     "control_L12_sd_envelope_lo": float(ctrl_sd["control_L12_sd_envelope_lo"][i]),
                     "control_L12_sd_envelope_hi": float(ctrl_sd["control_L12_sd_envelope_hi"][i]),
+                    "control_L12_sd_from_k": float(ctrl_from_k["control_L12_sd_from_k"][i]),
+                    "control_L12_sd_envelope_lo_from_k": float(
+                        ctrl_from_k["control_L12_sd_envelope_lo_from_k"][i]
+                    ),
+                    "control_L12_sd_envelope_hi_from_k": float(
+                        ctrl_from_k["control_L12_sd_envelope_hi_from_k"][i]
+                    ),
                     "control_L12_sem": float(ctrl_sd["control_L12_sem"][i]),
                     "control_L12_sem_envelope_lo": float(ctrl_sd["control_L12_sem_envelope_lo"][i]),
                     "control_L12_sem_envelope_hi": float(ctrl_sd["control_L12_sem_envelope_hi"][i]),
+                    "control_L12_sem_from_k": float(ctrl_from_k["control_L12_sem_from_k"][i]),
+                    "control_L12_sem_envelope_lo_from_k": float(
+                        ctrl_from_k["control_L12_sem_envelope_lo_from_k"][i]
+                    ),
+                    "control_L12_sem_envelope_hi_from_k": float(
+                        ctrl_from_k["control_L12_sem_envelope_hi_from_k"][i]
+                    ),
                     "segregation_greedy_L12_mean": float(seg_sd["segregation_greedy_L12_mean"][i]),
-                    "segregation_greedy_L12_mean_from_k": float(seg_mean_from_k[i]),
+                    "segregation_greedy_L12_mean_from_k": float(
+                        seg_from_k["segregation_greedy_L12_mean_from_k"][i]
+                    ),
                     "segregation_greedy_L12_sd": float(seg_sd["segregation_greedy_L12_sd"][i]),
                     "segregation_greedy_L12_sd_envelope_lo": float(
                         seg_sd["segregation_greedy_L12_sd_envelope_lo"][i]
@@ -817,12 +858,30 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                     "segregation_greedy_L12_sd_envelope_hi": float(
                         seg_sd["segregation_greedy_L12_sd_envelope_hi"][i]
                     ),
+                    "segregation_greedy_L12_sd_from_k": float(
+                        seg_from_k["segregation_greedy_L12_sd_from_k"][i]
+                    ),
+                    "segregation_greedy_L12_sd_envelope_lo_from_k": float(
+                        seg_from_k["segregation_greedy_L12_sd_envelope_lo_from_k"][i]
+                    ),
+                    "segregation_greedy_L12_sd_envelope_hi_from_k": float(
+                        seg_from_k["segregation_greedy_L12_sd_envelope_hi_from_k"][i]
+                    ),
                     "segregation_greedy_L12_sem": float(seg_sd["segregation_greedy_L12_sem"][i]),
                     "segregation_greedy_L12_sem_envelope_lo": float(
                         seg_sd["segregation_greedy_L12_sem_envelope_lo"][i]
                     ),
                     "segregation_greedy_L12_sem_envelope_hi": float(
                         seg_sd["segregation_greedy_L12_sem_envelope_hi"][i]
+                    ),
+                    "segregation_greedy_L12_sem_from_k": float(
+                        seg_from_k["segregation_greedy_L12_sem_from_k"][i]
+                    ),
+                    "segregation_greedy_L12_sem_envelope_lo_from_k": float(
+                        seg_from_k["segregation_greedy_L12_sem_envelope_lo_from_k"][i]
+                    ),
+                    "segregation_greedy_L12_sem_envelope_hi_from_k": float(
+                        seg_from_k["segregation_greedy_L12_sem_envelope_hi_from_k"][i]
                     ),
                     "n_zone_curves": int(len(obs_curves)),
                     "n_tomograms": n_tomograms,
@@ -1335,7 +1394,17 @@ def plot_pooled_monomer_dimer_ripley_visualizations(
                 ls="--",
                 label="Observed mean (K→L)",
             )
-        ax.fill_between(r_vals, obs_lo, obs_hi, color="C0", alpha=0.25, label="Observed mean ± SD")
+        ax.fill_between(r_vals, obs_lo, obs_hi, color="C0", alpha=0.25, label="Observed ±SD (of L)")
+        if "observed_L12_sd_envelope_lo_from_k" in grp.columns:
+            ax.fill_between(
+                r_vals,
+                grp["observed_L12_sd_envelope_lo_from_k"].to_numpy(dtype=float),
+                grp["observed_L12_sd_envelope_hi_from_k"].to_numpy(dtype=float),
+                color="C0",
+                alpha=0.12,
+                hatch="///",
+                label="Observed ±SD (K→L)",
+            )
         ax.plot(r_vals, ctrl_mean, color="0.45", lw=1.5, label="Label-perm mean (of L)")
         if "control_L12_mean_from_k" in grp.columns:
             ax.plot(
@@ -1346,7 +1415,17 @@ def plot_pooled_monomer_dimer_ripley_visualizations(
                 ls="--",
                 label="Label-perm mean (K→L)",
             )
-        ax.fill_between(r_vals, ctrl_lo, ctrl_hi, color="0.7", alpha=0.4, label="Label-perm mean ± SD")
+        ax.fill_between(r_vals, ctrl_lo, ctrl_hi, color="0.7", alpha=0.4, label="Label-perm ±SD (of L)")
+        if "control_L12_sd_envelope_lo_from_k" in grp.columns:
+            ax.fill_between(
+                r_vals,
+                grp["control_L12_sd_envelope_lo_from_k"].to_numpy(dtype=float),
+                grp["control_L12_sd_envelope_hi_from_k"].to_numpy(dtype=float),
+                color="0.45",
+                alpha=0.12,
+                hatch="///",
+                label="Label-perm ±SD (K→L)",
+            )
         if np.isfinite(seg_mean).any():
             ax.plot(r_vals, seg_mean, color="C3", lw=1.5, label="Greedy seg mean (of L)")
             if "segregation_greedy_L12_mean_from_k" in grp.columns:
@@ -1359,8 +1438,18 @@ def plot_pooled_monomer_dimer_ripley_visualizations(
                     label="Greedy seg mean (K→L)",
                 )
             ax.fill_between(
-                r_vals, seg_lo, seg_hi, color="C3", alpha=0.2, label="Greedy seg mean ± SD"
+                r_vals, seg_lo, seg_hi, color="C3", alpha=0.2, label="Greedy seg ±SD (of L)"
             )
+            if "segregation_greedy_L12_sd_envelope_lo_from_k" in grp.columns:
+                ax.fill_between(
+                    r_vals,
+                    grp["segregation_greedy_L12_sd_envelope_lo_from_k"].to_numpy(dtype=float),
+                    grp["segregation_greedy_L12_sd_envelope_hi_from_k"].to_numpy(dtype=float),
+                    color="C3",
+                    alpha=0.1,
+                    hatch="///",
+                    label="Greedy seg ±SD (K→L)",
+                )
         ax.axhline(0.0, color="0.5", ls="--", lw=0.8)
         ax.set_xlabel("r (nm)")
         ax.set_ylabel("Ripley L₁₂(r) = (3K₁₂/4π)^(1/3) − r")
