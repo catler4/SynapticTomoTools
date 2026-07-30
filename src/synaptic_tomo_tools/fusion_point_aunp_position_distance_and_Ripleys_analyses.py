@@ -15,6 +15,12 @@ Ripley window options (both run for every zone):
 Distance and Ripley partner sets are reported separately for monomer-only, dimer-only,
 and combined monomer+dimer picks when both STAR files are present. If only one STAR
 file exists, analyses run for that kind only.
+
+Vesicle–AuNP distance tables are also written in a Prism-friendly form with one column
+per vesicle (or vesicle×simulation), distances listed down the column, for fusing,
+close, 40 nm-shifted, and label-permutation sites. Per-zone files live under
+``STT_results/aunps/fusion_point_aunp_analyses/<zone>/``; pooled files under
+``results/aunps/fusion_point_aunp_distances_*_columns_pooled.csv``.
 """
 
 from __future__ import annotations
@@ -70,6 +76,26 @@ POOLED_RIPLEY_CURVES_CSV = Path("results/aunps/fusion_point_aunp_ripley_l12_curv
 POOLED_RIPLEY_PRISM_CSV = Path("results/aunps/fusion_point_aunp_ripley_l12_prism_envelopes_pooled.csv")
 POOLED_RIPLEY_PRISM_WIDE_CSV = Path("results/aunps/fusion_point_aunp_ripley_l12_prism_envelopes_pooled_wide.csv")
 POOLED_RIPLEY_FIGURES_DIR = Path("results/aunps/figures/fusion_point_aunp_ripley_l12_pooled")
+
+# Prism-style distance tables: one column per vesicle/site, distances listed down the column.
+POOLED_DIST_FUSING_COLUMNS_CSV = Path(
+    "results/aunps/fusion_point_aunp_distances_fusing_columns_pooled.csv"
+)
+POOLED_DIST_CLOSE_COLUMNS_CSV = Path(
+    "results/aunps/fusion_point_aunp_distances_close_columns_pooled.csv"
+)
+POOLED_DIST_SHIFT_COLUMNS_CSV = Path(
+    "results/aunps/fusion_point_aunp_distances_40nm_shift_columns_pooled.csv"
+)
+POOLED_DIST_PERM_COLUMNS_CSV = Path(
+    "results/aunps/fusion_point_aunp_distances_label_permutation_columns_pooled.csv"
+)
+DISTANCE_COLUMNS_ONLY_STEMS = {
+    "fusing": "distances_fusing_columns_only",
+    "close": "distances_close_columns_only",
+    "shift_40nm": "distances_40nm_shift_columns_only",
+    "label_permutation": "distances_label_permutation_columns_only",
+}
 
 DEFAULT_MONOMER_STAR_PATTERN = "aunp_tm_BP_active_zone_*_manual_refined_monomer.star"
 DEFAULT_DIMER_STAR_PATTERN = "aunp_tm_BP_active_zone_*_manual_refined_dimer.star"
@@ -1135,16 +1161,156 @@ def build_distance_wide_csv(
 ) -> pd.DataFrame:
     """Rows = AuNPs; columns = meta + one column per query site with 3D distance."""
     aunp_coords = np.atleast_2d(np.asarray(aunp_coords, dtype=float))
-    base = aunp_meta.copy()
-    for col_name, site_xyz in site_columns.items():
-        site = np.asarray(site_xyz, dtype=float).reshape(3)
-        base[col_name] = np.linalg.norm(aunp_coords - site, axis=1)
-    return base
+    base = aunp_meta.reset_index(drop=True).copy()
+    if not site_columns:
+        return base
+    dist_data = {
+        col_name: np.linalg.norm(
+            aunp_coords - np.asarray(site_xyz, dtype=float).reshape(3), axis=1
+        )
+        for col_name, site_xyz in site_columns.items()
+    }
+    return pd.concat([base, pd.DataFrame(dist_data)], axis=1)
+
+
+def build_distance_columns_only_dataframe(
+    aunp_coords: np.ndarray,
+    site_columns: dict[str, np.ndarray],
+) -> pd.DataFrame:
+    """
+    Prism-friendly wide table: one column per vesicle/site, AuNP distances listed down
+    that column (no AuNP metadata columns).
+    """
+    aunp_coords = np.atleast_2d(np.asarray(aunp_coords, dtype=float))
+    if not site_columns:
+        return pd.DataFrame()
+    dist_data = {
+        col_name: np.linalg.norm(
+            aunp_coords - np.asarray(site_xyz, dtype=float).reshape(3), axis=1
+        )
+        for col_name, site_xyz in site_columns.items()
+    }
+    return pd.DataFrame(dist_data)
 
 
 def _site_column_name(vesicle_name: str, suffix: str) -> str:
     safe = str(vesicle_name).replace(" ", "_")
     return f"{safe}__{suffix}"
+
+
+def _global_site_column_name(
+    tomogram_name: str,
+    alignment_dir: str,
+    zone_name: str,
+    vesicle_name: str,
+    suffix: str,
+) -> str:
+    """Unique column id across tomograms/zones for pooled vesicle-distance tables."""
+    parts = [
+        str(tomogram_name).replace(" ", "_"),
+        str(alignment_dir).replace(" ", "_"),
+        str(zone_name).replace(" ", "_"),
+        str(vesicle_name).replace(" ", "_"),
+        str(suffix).replace(" ", "_"),
+    ]
+    return "__".join(parts)
+
+
+def _zone_column_prefix(tomogram_name: str, alignment_dir: str, zone_name: str) -> str:
+    return "__".join(
+        [
+            str(tomogram_name).replace(" ", "_"),
+            str(alignment_dir).replace(" ", "_"),
+            str(zone_name).replace(" ", "_"),
+            "",
+        ]
+    )
+
+
+def merge_distance_column_dataframes(frames: Sequence[pd.DataFrame]) -> pd.DataFrame:
+    """Horizontally combine vesicle-distance tables, padding shorter columns with NaN."""
+    usable = [f for f in frames if f is not None and not f.empty]
+    if not usable:
+        return pd.DataFrame()
+    max_rows = max(len(f) for f in usable)
+    out: dict[str, np.ndarray] = {}
+    for frame in usable:
+        for col in frame.columns:
+            values = frame[col].to_numpy(dtype=float)
+            padded = np.full(max_rows, np.nan, dtype=float)
+            padded[: len(values)] = values
+            out[str(col)] = padded
+    return pd.DataFrame(out)
+
+
+def upsert_pooled_distance_columns_csv(
+    path: Path,
+    new_df: pd.DataFrame,
+    *,
+    drop_column_prefix: str | None = None,
+) -> Path:
+    """
+    Merge ``new_df`` into a pooled vesicle-column CSV.
+
+    If ``drop_column_prefix`` is set, existing columns starting with that prefix are
+    removed first (supports re-running a tomogram/zone without duplicating columns).
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frames: list[pd.DataFrame] = []
+    if path.is_file():
+        old = pd.read_csv(path)
+        if drop_column_prefix and not old.empty:
+            keep = [c for c in old.columns if not str(c).startswith(drop_column_prefix)]
+            old = old[keep] if keep else pd.DataFrame()
+        if not old.empty:
+            frames.append(old)
+    if new_df is not None and not new_df.empty:
+        frames.append(new_df)
+    merged = merge_distance_column_dataframes(frames)
+    merged.to_csv(path, index=False)
+    return path
+
+
+def write_pooled_fusion_point_aunp_distance_column_csvs(
+    search_roots: Sequence[Path] | str | Path,
+) -> list[Path]:
+    """
+    Rebuild the four pooled vesicle-column distance CSVs from per-zone outputs.
+
+    Each pooled file has one column per vesicle (or per vesicle×simulation), with AuNP
+    distances listed down the column. Shorter columns are NaN-padded.
+    """
+    if isinstance(search_roots, (str, Path)):
+        roots = [Path(search_roots)]
+    else:
+        roots = [Path(p) for p in search_roots]
+
+    stem_to_out = {
+        DISTANCE_COLUMNS_ONLY_STEMS["fusing"]: POOLED_DIST_FUSING_COLUMNS_CSV,
+        DISTANCE_COLUMNS_ONLY_STEMS["close"]: POOLED_DIST_CLOSE_COLUMNS_CSV,
+        DISTANCE_COLUMNS_ONLY_STEMS["shift_40nm"]: POOLED_DIST_SHIFT_COLUMNS_CSV,
+        DISTANCE_COLUMNS_ONLY_STEMS["label_permutation"]: POOLED_DIST_PERM_COLUMNS_CSV,
+    }
+    written: list[Path] = []
+    for stem, out_path in stem_to_out.items():
+        found: list[Path] = []
+        for root in roots:
+            found.extend(root.glob(f"**/{ANALYSES_SUBDIR}/*/{stem}.csv"))
+        frames = [pd.read_csv(p) for p in sorted(set(found)) if p.is_file()]
+        merged = merge_distance_column_dataframes(frames)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        merged.to_csv(out_path, index=False)
+        print(
+            f"Pooled vesicle-column distances ({stem}: {merged.shape[1]} columns, "
+            f"{merged.shape[0]} rows) -> {out_path}"
+        )
+        written.append(out_path)
+    return written
+
+
+def _distance_csv_name(stem: str, subset: AunpSubset) -> str:
+    return f"{stem}__{subset}.csv"
 
 
 def _percentile_band(curves: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1736,10 +1902,6 @@ def run_ripley_for_zone_window(
     return curves_df, prism_df, mad_summary_df, mad_curves_df
 
 
-def _distance_csv_name(stem: str, subset: AunpSubset) -> str:
-    return f"{stem}__{subset}.csv"
-
-
 def _extract_curves_matrix(
     df: pd.DataFrame,
     curve_type: str,
@@ -2125,13 +2287,34 @@ def run_fusion_point_aunp_analyses_for_zone(
         cleft_coords = None
         print(f"  Ripley synaptic-cleft AZ hull window skipped for {zone_name}: {exc}")
 
-    # --- Distance wide CSVs (per AuNP subset) ---
+    # --- Distance wide CSVs (per AuNP subset) + vesicle-column tables (all AuNPs) ---
     original_cols: dict[str, np.ndarray] = {}
+    original_cols_global: dict[str, np.ndarray] = {}
     for fp in fusing_rows:
-        original_cols[_site_column_name(fp["vesicle_name"], "original")] = np.array(
+        xyz = np.array(
             [fp["fusion_point_x_nm"], fp["fusion_point_y_nm"], fp["fusion_point_z_nm"]],
             dtype=float,
         )
+        original_cols[_site_column_name(fp["vesicle_name"], "original")] = xyz
+        original_cols_global[
+            _global_site_column_name(
+                tomogram_name, alignment_dir, zone_name, fp["vesicle_name"], "fusing"
+            )
+        ] = xyz
+
+    close_cols: dict[str, np.ndarray] = {}
+    close_cols_global: dict[str, np.ndarray] = {}
+    for fp in close_rows:
+        xyz = np.array(
+            [fp["fusion_point_x_nm"], fp["fusion_point_y_nm"], fp["fusion_point_z_nm"]],
+            dtype=float,
+        )
+        close_cols[_site_column_name(fp["vesicle_name"], "close")] = xyz
+        close_cols_global[
+            _global_site_column_name(
+                tomogram_name, alignment_dir, zone_name, fp["vesicle_name"], "close"
+            )
+        ] = xyz
 
     shift_by_rep = _shift_sites_by_replicate(
         fusing_rows,
@@ -2142,12 +2325,23 @@ def run_fusion_point_aunp_analyses_for_zone(
         max_snap_distance_nm=FUSION_POINT_AZ_MAX_SNAP_DISTANCE_NM,
     )
     shift_cols: dict[str, np.ndarray] = {}
+    shift_cols_global: dict[str, np.ndarray] = {}
     for rep_id, ves_map in shift_by_rep.items():
         for fp in fusing_rows:
             vid = int(fp["vesicle_id"])
             if vid not in ves_map:
                 continue
-            shift_cols[_site_column_name(fp["vesicle_name"], f"shift_{rep_id:03d}")] = ves_map[vid]
+            xyz = ves_map[vid]
+            shift_cols[_site_column_name(fp["vesicle_name"], f"shift_{rep_id:03d}")] = xyz
+            shift_cols_global[
+                _global_site_column_name(
+                    tomogram_name,
+                    alignment_dir,
+                    zone_name,
+                    fp["vesicle_name"],
+                    f"shift_{rep_id:03d}",
+                )
+            ] = xyz
 
     # Label permutation uses the full monomer+dimer pool; same null sites for all subsets.
     label_per_ves, label_pooled = _label_permutation_sites(
@@ -2158,12 +2352,23 @@ def run_fusion_point_aunp_analyses_for_zone(
         rng=rng,
     )
     label_cols: dict[str, np.ndarray] = {}
+    label_cols_global: dict[str, np.ndarray] = {}
     for perm_id, ves_map in label_per_ves.items():
         for fp in fusing_rows:
             vid = int(fp["vesicle_id"])
             if vid not in ves_map:
                 continue
-            label_cols[_site_column_name(fp["vesicle_name"], f"perm_{perm_id:03d}")] = ves_map[vid]
+            xyz = ves_map[vid]
+            label_cols[_site_column_name(fp["vesicle_name"], f"perm_{perm_id:03d}")] = xyz
+            label_cols_global[
+                _global_site_column_name(
+                    tomogram_name,
+                    alignment_dir,
+                    zone_name,
+                    fp["vesicle_name"],
+                    f"perm_{perm_id:03d}",
+                )
+            ] = xyz
 
     distance_paths: dict[str, dict[str, Path]] = {subset: {} for subset in subsets_to_run}
     for subset in subsets_to_run:
@@ -2175,20 +2380,46 @@ def run_fusion_point_aunp_analyses_for_zone(
         meta_out.insert(3, "active_zone_name", zone_name)
 
         df_orig = build_distance_wide_csv(sub_coords, meta_out, original_cols)
+        df_close = build_distance_wide_csv(sub_coords, meta_out, close_cols)
         df_shift = build_distance_wide_csv(sub_coords, meta_out, shift_cols)
         df_perm = build_distance_wide_csv(sub_coords, meta_out, label_cols)
 
         p_orig = out_dir / _distance_csv_name("distances_original_fusing_wide", subset)
+        p_close = out_dir / _distance_csv_name("distances_close_wide", subset)
         p_shift = out_dir / _distance_csv_name("distances_40nm_shift_wide", subset)
         p_perm = out_dir / _distance_csv_name("distances_label_permutation_wide", subset)
         df_orig.to_csv(p_orig, index=False)
+        df_close.to_csv(p_close, index=False)
         df_shift.to_csv(p_shift, index=False)
         df_perm.to_csv(p_perm, index=False)
-        distance_paths[subset] = {"original": p_orig, "shift": p_shift, "permutation": p_perm}
+        distance_paths[subset] = {
+            "original": p_orig,
+            "close": p_close,
+            "shift": p_shift,
+            "permutation": p_perm,
+        }
 
         if len(sub_coords) == 0:
             print(f"  No {subset} AuNPs for {zone_name}; distance CSVs written empty")
 
+    # Vesicle-as-column tables using all loaded AuNPs for this zone (pooled across tomograms later).
+    col_only_specs = [
+        ("fusing", original_cols_global, POOLED_DIST_FUSING_COLUMNS_CSV),
+        ("close", close_cols_global, POOLED_DIST_CLOSE_COLUMNS_CSV),
+        ("shift_40nm", shift_cols_global, POOLED_DIST_SHIFT_COLUMNS_CSV),
+        ("label_permutation", label_cols_global, POOLED_DIST_PERM_COLUMNS_CSV),
+    ]
+    zone_prefix = _zone_column_prefix(tomogram_name, alignment_dir, zone_name)
+    distance_column_paths: dict[str, Path] = {}
+    for kind, cols_global, pooled_path in col_only_specs:
+        df_cols = build_distance_columns_only_dataframe(aunp_coords_all, cols_global)
+        stem = DISTANCE_COLUMNS_ONLY_STEMS[kind]
+        p_cols = out_dir / f"{stem}.csv"
+        df_cols.to_csv(p_cols, index=False)
+        distance_column_paths[kind] = p_cols
+        upsert_pooled_distance_columns_csv(
+            pooled_path, df_cols, drop_column_prefix=zone_prefix
+        )
     # --- Ripley: both window modes × three AuNP partner subsets ---
     ripley_frames: list[pd.DataFrame] = []
     prism_frames: list[pd.DataFrame] = []
@@ -2337,6 +2568,7 @@ def run_fusion_point_aunp_analyses_for_zone(
     )
     return {
         "distance_paths": distance_paths,
+        "distance_column_paths": distance_column_paths,
         "output_dir": out_dir,
     }
 
