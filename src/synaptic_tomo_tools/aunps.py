@@ -563,21 +563,26 @@ def calculate_packing_density_using_sliding_cylinder(
         dist_to_outer, _ = outer_tree.query(ps_mesh.vertices)
         outer_mask = dist_to_outer < 1e-3
         candidate_vertices = ps_mesh.vertices[outer_mask]
+        outer_normals = ps_mesh.vertex_normals[outer_mask]
     else:
         candidate_vertices = ps_mesh.vertices
+        outer_normals = ps_mesh.vertex_normals
 
     num_samples = max(1, len(candidate_vertices) // step)
     sample_idxs = _farthest_point_sample_indices(np.asarray(candidate_vertices), num_samples)
     subset_vertices = candidate_vertices[sample_idxs]
 
-    tree = cKDTree(ps_mesh.vertices)
+    # Only average normals from outer-facing vertices, so a nearby patch of
+    # inner (back-facing) membrane doesn't skew avg_normal towards the wrong
+    # direction and cause the forward AuNP search to miss real neighbors.
+    tree = cKDTree(candidate_vertices)
     # Generate a cKDTree of aunps
     tree_aunps = cKDTree(aunp_coordinates)
     # Iterate over vertices in ps_mesh_simplified and find all vertices in ps_mesh within cylinder_radius and average their normals
     num_aunps_at_vertex = []
     for v in subset_vertices:
         idxs = tree.query_ball_point(v, cylinder_radius)
-        normals = ps_mesh.vertex_normals[idxs]
+        normals = outer_normals[idxs]
         avg_normal = np.mean(normals, axis=0)
         avg_normal /= np.linalg.norm(avg_normal)
         # Find all aunps within cylinder_radius of line through v in direction of avg_normal
