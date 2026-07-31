@@ -1094,7 +1094,9 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                   run_aunp_monomer_dimer_ripley=False,
                   monomer_star_pattern=None,
                   dimer_star_pattern=None,
-                  monomer_dimer_ripley_n_perm=None):
+                  monomer_dimer_ripley_n_perm=None,
+                  use_angle_betweenness_window=False,
+                  drop_monomer_dimer_aunps_outside_hull=False):
     """
     Performs analysis of gold nanoparticles (AuNPs) in the tomogram.
 
@@ -1128,6 +1130,14 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             zone index (default: ``aunp_tm_BP_active_zone_*_manual_refined_dimer.star``).
         monomer_dimer_ripley_n_perm (int or None): Null replicate count for monomer vs dimer
             Ripley L₁₂ label permutation **and** greedy segregation (default: 1000).
+        use_angle_betweenness_window (bool): Restrict the Ripley window (volume + edge
+            correction) for all three 3D Ripley analyses above to the region of the
+            synaptic-cleft hull that also sits "between" the pre- and post-synaptic
+            membranes (angle-betweenness test), instead of the raw hull. Default: False.
+        drop_monomer_dimer_aunps_outside_hull (bool): For the monomer vs dimer Ripley
+            analysis only, drop monomer/dimer AuNPs that fall outside the synaptic-cleft
+            hull before running the Ripley computation (dropped AuNPs are highlighted in
+            the monomer/dimer diagnostic figure). Default: False.
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     print(f"Analyzing AuNPs in {Path(tomogram_path).name}")
@@ -1703,6 +1713,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                     write_figures=True,
                     monomer_star_pattern=monomer_star_pattern,
                     dimer_star_pattern=dimer_star_pattern,
+                    use_angle_betweenness_window=use_angle_betweenness_window,
                 )
                 if ripley_frames:
                     df_ripley = pd.concat(ripley_frames, ignore_index=True)
@@ -1763,6 +1774,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                     df_valid=df_valid,
                     az_segmentations=az_segmentations,
                     write_figures=True,
+                    use_angle_betweenness_window=use_angle_betweenness_window,
                 )
                 if ripley_frames:
                     df_ripley = pd.concat(ripley_frames, ignore_index=True)
@@ -1819,6 +1831,8 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                         dimer_star_pattern=dimer_star_pattern,
                         n_perm=monomer_dimer_ripley_n_perm,
                         write_figures=True,
+                        use_angle_betweenness_window=use_angle_betweenness_window,
+                        drop_aunps_outside_hull=drop_monomer_dimer_aunps_outside_hull,
                     )
                 if md_ripley_frames:
                     df_md_ripley = pd.concat(md_ripley_frames, ignore_index=True)

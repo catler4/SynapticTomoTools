@@ -224,6 +224,7 @@ def run_aunp_vs_az_center_ripley_for_zone(
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
+    use_angle_betweenness_window: bool = False,
 ) -> dict[str, Path] | None:
     """Compute observed 3D L₁₂(center, AuNPs) for one active zone."""
     tomogram_path = Path(tomogram_path)
@@ -241,17 +242,24 @@ def run_aunp_vs_az_center_ripley_for_zone(
         print(f"  Skipping AZ-center Ripley for {zone_name}: could not compute center")
         return None
 
+    rng = np.random.default_rng(seed)
     try:
         cleft_coords = load_synaptic_cleft_active_zone_points(
             tomogram_path, alignment_dir, zone_name
         )
-        window = build_ripley_window_3d(cleft_coords, mode=WINDOW_MODE)
+        window = build_ripley_window_3d(
+            cleft_coords,
+            mode=WINDOW_MODE,
+            pre_membrane_coords=az_segmentation.get("presynaptic_outer_coords"),
+            post_membrane_coords=az_segmentation.get("postsynaptic_outer_coords"),
+            use_angle_betweenness=use_angle_betweenness_window,
+            rng=rng,
+        )
     except Exception as exc:
         print(f"  Skipping AZ-center Ripley for {zone_name}: {exc}")
         return None
 
     r_vals = _ripley_r_grid(r_max_nm, r_step_nm)
-    rng = np.random.default_rng(seed)
     center_xyz = center.reshape(1, 3)
     k12 = cross_k12_3d_isotropic(center_xyz, aunp_coords, r_vals, window, rng)
     l12 = ripley_l12(k12, r_vals)
@@ -343,6 +351,7 @@ def run_aunp_vs_az_center_ripley_for_zone(
         "window_volume_nm3": float(window.volume_nm3),
         "center_definition": "mean_of_presynaptic_and_postsynaptic_active_zone_surface_points",
         "ripley_edge_correction": "isotropic_3d_mc",
+        "window_uses_angle_betweenness": bool(window.use_angle_betweenness),
         "seed": int(seed),
     }
     with open(out_dir / "run_metadata.json", "w") as f:
@@ -371,6 +380,7 @@ def run_aunp_vs_az_center_ripley_for_tomogram(
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
+    use_angle_betweenness_window: bool = False,
 ) -> tuple[list[pd.DataFrame], list[pd.DataFrame]]:
     """Run AZ-center Ripley for all mapped active zones in one tomogram."""
     from .activezone import load_active_zone_mapping
@@ -415,6 +425,7 @@ def run_aunp_vs_az_center_ripley_for_tomogram(
             r_step_nm=r_step_nm,
             seed=seed,
             write_figures=write_figures,
+            use_angle_betweenness_window=use_angle_betweenness_window,
         )
         if result is None:
             continue
