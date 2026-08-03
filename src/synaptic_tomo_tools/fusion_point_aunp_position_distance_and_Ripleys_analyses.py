@@ -68,6 +68,7 @@ RIPLEY_PERCENTILE_LO = 2.5
 RIPLEY_PERCENTILE_HI = 97.5
 EDGE_MC_SAMPLES = 384
 EDGE_MIN_C = 1e-3
+WINDOW_VOLUME_MC_SAMPLES = 200_000
 
 ANALYSES_SUBDIR = "fusion_point_aunp_analyses"
 COORD_COLS = ("faCoordinateX", "faCoordinateY", "faCoordinateZ")
@@ -134,11 +135,15 @@ def available_aunp_subsets(kinds_loaded: Sequence[AunpKind]) -> tuple[AunpSubset
 
 @dataclass(frozen=True)
 class RipleyWindow3D:
-    """3D convex-hull window; ``volume_nm3`` is the full hull volume."""
+    """3D convex-hull window; ``volume_nm3`` is the hull volume (or hull ∩ betweenness-region
+    volume when ``use_angle_betweenness`` is set)."""
 
     volume_nm3: float
     hull: ConvexHull
     defining_mode: WindowMode
+    pre_membrane_coords: np.ndarray | None = None
+    post_membrane_coords: np.ndarray | None = None
+    use_angle_betweenness: bool = False
 
 
 def output_dir_for_zone(tomogram_path: Path, alignment_dir: str, zone_name: str) -> Path:
@@ -377,6 +382,11 @@ def build_fusion_aunp_hull_defining_coords(
 def build_ripley_window_3d(
     defining_coords: np.ndarray,
     mode: WindowMode,
+    *,
+    pre_membrane_coords: np.ndarray | None = None,
+    post_membrane_coords: np.ndarray | None = None,
+    use_angle_betweenness: bool = False,
+    rng: np.random.Generator | None = None,
 ) -> RipleyWindow3D:
     defining_coords = np.atleast_2d(np.asarray(defining_coords, dtype=float))
     if len(defining_coords) < 4:
@@ -384,7 +394,30 @@ def build_ripley_window_3d(
     hull = ConvexHull(defining_coords)
     if hull.volume <= 0:
         raise ValueError(f"Convex hull volume must be positive ({mode})")
-    return RipleyWindow3D(volume_nm3=float(hull.volume), hull=hull, defining_mode=mode)
+
+    if use_angle_betweenness:
+        pre_membrane_coords = np.atleast_2d(np.asarray(pre_membrane_coords, dtype=float)) if pre_membrane_coords is not None else np.zeros((0, 3))
+        post_membrane_coords = np.atleast_2d(np.asarray(post_membrane_coords, dtype=float)) if post_membrane_coords is not None else np.zeros((0, 3))
+        if len(pre_membrane_coords) == 0 or len(post_membrane_coords) == 0:
+            raise ValueError(
+                f"use_angle_betweenness requires non-empty pre/post membrane coords ({mode})"
+            )
+        volume = _hull_betweenness_volume_mc(
+            hull, pre_membrane_coords, post_membrane_coords, rng or np.random.default_rng(0)
+        )
+        if volume <= 0:
+            raise ValueError(f"Hull ∩ betweenness-region volume must be positive ({mode})")
+    else:
+        volume = float(hull.volume)
+
+    return RipleyWindow3D(
+        volume_nm3=volume,
+        hull=hull,
+        defining_mode=mode,
+        pre_membrane_coords=pre_membrane_coords,
+        post_membrane_coords=post_membrane_coords,
+        use_angle_betweenness=use_angle_betweenness,
+    )
 
 
 def _points_inside_hull(pts: np.ndarray, hull: ConvexHull, tol: float = 1e-6) -> np.ndarray:
@@ -394,6 +427,117 @@ def _points_inside_hull(pts: np.ndarray, hull: ConvexHull, tol: float = 1e-6) ->
     normals = hull.equations[:, :-1]
     offsets = hull.equations[:, -1]
     return np.all(pts @ normals.T + offsets <= tol, axis=1)
+
+
+def _angle_betweenness_mask(
+    points: np.ndarray,
+    pre_membrane_coords: np.ndarray,
+    post_membrane_coords: np.ndarray,
+) -> np.ndarray:
+    """
+    True where a point sits "between" the two membranes: the vector from the point to
+    its nearest presynaptic-membrane point and the vector to its nearest
+    postsynaptic-membrane point face away from each other (angle > 90 deg, i.e. the
+    two vectors have a negative dot product).
+
+    Optional Ripley-window refinement: when ``RipleyWindow3D.use_angle_betweenness`` is
+    set, this mask is ANDed with hull membership (see ``_window_contains``) to define the
+    effective window used for volume normalization and edge correction.
+    """
+    points = np.atleast_2d(np.asarray(points, dtype=float))
+    pre_membrane_coords = np.atleast_2d(np.asarray(pre_membrane_coords, dtype=float))
+    post_membrane_coords = np.atleast_2d(np.asarray(post_membrane_coords, dtype=float))
+    if len(points) == 0:
+        return np.zeros(0, dtype=bool)
+    if len(pre_membrane_coords) == 0 or len(post_membrane_coords) == 0:
+        return np.zeros(len(points), dtype=bool)
+
+    pre_tree = cKDTree(pre_membrane_coords)
+    post_tree = cKDTree(post_membrane_coords)
+    _, pre_idx = pre_tree.query(points)
+    _, post_idx = post_tree.query(points)
+    v_pre = pre_membrane_coords[pre_idx] - points
+    v_post = post_membrane_coords[post_idx] - points
+    dot = np.einsum("ij,ij->i", v_pre, v_post)
+    return dot < 0.0
+
+
+def _window_contains(window: RipleyWindow3D, pts: np.ndarray) -> np.ndarray:
+    """Point membership in the effective Ripley window: inside the hull, additionally
+    restricted to the angle-betweenness region when ``window.use_angle_betweenness``."""
+    pts = np.atleast_2d(np.asarray(pts, dtype=float))
+    inside = _points_inside_hull(pts, window.hull)
+    if not window.use_angle_betweenness:
+        return inside
+    mask = inside.copy()
+    if np.any(inside):
+        mask[inside] = _angle_betweenness_mask(
+            pts[inside], window.pre_membrane_coords, window.post_membrane_coords
+        )
+    return mask
+
+
+def _hull_betweenness_volume_mc(
+    hull: ConvexHull,
+    pre_membrane_coords: np.ndarray,
+    post_membrane_coords: np.ndarray,
+    rng: np.random.Generator,
+    *,
+    n_samples: int = WINDOW_VOLUME_MC_SAMPLES,
+) -> float:
+    """Bounding-box Monte Carlo estimate of the hull ∩ betweenness-region volume."""
+    mins = hull.points.min(axis=0)
+    maxs = hull.points.max(axis=0)
+    box_volume = float(np.prod(maxs - mins))
+    if box_volume <= 0:
+        return 0.0
+    candidates = rng.uniform(mins, maxs, size=(int(n_samples), 3))
+    inside_hull = _points_inside_hull(candidates, hull)
+    mask = inside_hull.copy()
+    if np.any(inside_hull):
+        mask[inside_hull] = _angle_betweenness_mask(
+            candidates[inside_hull], pre_membrane_coords, post_membrane_coords
+        )
+    return box_volume * float(np.mean(mask))
+
+
+def _downsample_points(pts: np.ndarray, n_max: int, seed: int = 0) -> np.ndarray:
+    pts = np.atleast_2d(np.asarray(pts, dtype=float))
+    if len(pts) <= n_max:
+        return pts
+    idx = np.random.default_rng(seed).choice(len(pts), n_max, replace=False)
+    return pts[idx]
+
+
+def _sample_uniform_points_in_hull(
+    hull: ConvexHull,
+    n_points: int,
+    rng: np.random.Generator,
+    *,
+    max_tries: int = 60,
+) -> np.ndarray:
+    """Rejection-sample points approximately uniformly inside a convex hull's volume.
+
+    QC-plot utility only (visualizes what fraction of the hull volume a candidate
+    edge-correction test would keep/reject) — not used by the production Ripley window.
+    """
+    mins = hull.points.min(axis=0)
+    maxs = hull.points.max(axis=0)
+    accepted: list[np.ndarray] = []
+    n_accepted = 0
+    tries = 0
+    while n_accepted < n_points and tries < max_tries:
+        batch = max(n_points * 4, 512)
+        candidates = rng.uniform(mins, maxs, size=(batch, 3))
+        inside = _points_inside_hull(candidates, hull)
+        if np.any(inside):
+            accepted.append(candidates[inside])
+            n_accepted += int(np.sum(inside))
+        tries += 1
+    if not accepted:
+        return np.zeros((0, 3), dtype=float)
+    out = np.vstack(accepted)
+    return out[:n_points]
 
 
 def _unit_ball_offsets(
@@ -413,7 +557,7 @@ def _unit_ball_offsets(
 def _isotropic_edge_factor_3d(
     center: np.ndarray,
     radius_nm: float,
-    hull: ConvexHull,
+    window: RipleyWindow3D,
     rng: np.random.Generator,
     *,
     n_samples: int = EDGE_MC_SAMPLES,
@@ -425,7 +569,7 @@ def _isotropic_edge_factor_3d(
     if unit_offsets is None:
         unit_offsets = _unit_ball_offsets(rng, n_samples=n_samples)
     samples = center + unit_offsets * float(radius_nm)
-    inside = _points_inside_hull(samples, hull)
+    inside = _window_contains(window, samples)
     frac = float(np.mean(inside))
     return max(frac, EDGE_MIN_C)
 
@@ -433,7 +577,7 @@ def _isotropic_edge_factor_3d(
 def _isotropic_edge_factors_for_foci(
     centers: np.ndarray,
     r_vals: np.ndarray,
-    hull: ConvexHull,
+    window: RipleyWindow3D,
     rng: np.random.Generator,
     *,
     n_samples: int = EDGE_MC_SAMPLES,
@@ -460,7 +604,7 @@ def _isotropic_edge_factors_for_foci(
             continue
         samples = centers[:, None, :] + unit_offsets[None, :, :] * r
         flat = samples.reshape(-1, 3)
-        inside = _points_inside_hull(flat, hull).reshape(n1, n_samples)
+        inside = _window_contains(window, flat).reshape(n1, n_samples)
         frac = np.mean(inside, axis=1)
         factors[:, k] = np.maximum(frac, EDGE_MIN_C)
     return factors
@@ -495,7 +639,7 @@ def cross_k12_3d_isotropic(
     tree = cKDTree(y)
     r_max = float(r_vals[-1])
     if edge_factors is None:
-        edge_factors = _isotropic_edge_factors_for_foci(x, r_vals, window.hull, rng)
+        edge_factors = _isotropic_edge_factors_for_foci(x, r_vals, window, rng)
     else:
         edge_factors = np.asarray(edge_factors, dtype=float)
         if edge_factors.shape != (n1, len(r_vals)):
@@ -656,7 +800,7 @@ def ripley_l12_curves_per_focus(
 
     tree = cKDTree(y)
     r_max = float(r_vals[-1])
-    edge_factors = _isotropic_edge_factors_for_foci(x, r_vals, window.hull, rng)
+    edge_factors = _isotropic_edge_factors_for_foci(x, r_vals, window, rng)
     neighbor_lists = tree.query_ball_point(x, r=r_max)
     k12 = np.zeros((n1, len(r_vals)), dtype=float)
     scale = window.volume_nm3 / float(n2)
@@ -1019,7 +1163,7 @@ def label_permutation_l12_curves(
 
     # Precompute isotropic edge factors once for every pooled point (reused across perms).
     edge_rng = np.random.default_rng(int(seed) + 7919)
-    pool_edge_factors = _isotropic_edge_factors_for_foci(pool, r_vals, window.hull, edge_rng)
+    pool_edge_factors = _isotropic_edge_factors_for_foci(pool, r_vals, window, edge_rng)
 
     if n_workers == 1:
         perm_rng = rng if rng is not None else np.random.default_rng(int(seed))
@@ -2184,6 +2328,7 @@ def run_fusion_point_aunp_analyses_for_zone(
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
     monomer_star_pattern: Optional[str] = None,
     dimer_star_pattern: Optional[str] = None,
+    use_angle_betweenness_window: bool = False,
 ) -> dict[str, Path] | None:
     tomogram_path = Path(tomogram_path)
     alignment_dir = require_alignment_dir(alignment_dir)
@@ -2269,9 +2414,26 @@ def run_fusion_point_aunp_analyses_for_zone(
         mode: None for mode in RIPLEY_WINDOW_MODES
     }
 
+    pre_membrane_coords = None
+    post_membrane_coords = None
+    if use_angle_betweenness_window:
+        from .activezone import import_active_zone_segmentations
+
+        az_segmentation = import_active_zone_segmentations(
+            tomogram_path, alignment_dir=alignment_dir
+        ).get(zone_name)
+        if az_segmentation is not None:
+            pre_membrane_coords = az_segmentation.get("presynaptic_outer_coords")
+            post_membrane_coords = az_segmentation.get("postsynaptic_outer_coords")
+
     try:
         ripley_windows["fusion_aunp_hull"] = build_ripley_window_3d(
-            hull_defining_coords, "fusion_aunp_hull"
+            hull_defining_coords,
+            "fusion_aunp_hull",
+            pre_membrane_coords=pre_membrane_coords,
+            post_membrane_coords=post_membrane_coords,
+            use_angle_betweenness=use_angle_betweenness_window,
+            rng=rng,
         )
     except ValueError as exc:
         print(f"  Ripley fusion+AuNP hull window skipped for {zone_name}: {exc}")
@@ -2281,7 +2443,12 @@ def run_fusion_point_aunp_analyses_for_zone(
             tomogram_path, alignment_dir, zone_name
         )
         ripley_windows["synaptic_cleft_az_hull"] = build_ripley_window_3d(
-            cleft_coords, "synaptic_cleft_az_hull"
+            cleft_coords,
+            "synaptic_cleft_az_hull",
+            pre_membrane_coords=pre_membrane_coords,
+            post_membrane_coords=post_membrane_coords,
+            use_angle_betweenness=use_angle_betweenness_window,
+            rng=rng,
         )
     except (ValueError, FileNotFoundError) as exc:
         cleft_coords = None
@@ -2536,6 +2703,7 @@ def run_fusion_point_aunp_analyses_for_zone(
                     else "presynaptic_and_postsynaptic_active_zone_surface_points"
                 ),
                 "volume_nm3": float(win.volume_nm3),
+                "uses_angle_betweenness": bool(win.use_angle_betweenness),
                 "n_defining_points": (
                     int(len(hull_defining_coords))
                     if mode == "fusion_aunp_hull"
@@ -2558,6 +2726,7 @@ def run_fusion_point_aunp_analyses_for_zone(
         "seed": int(seed),
         "ripley_edge_correction": "isotropic_3d_mc",
         "window_volume_definition": "convex_hull_volume",
+        "window_uses_angle_betweenness": bool(use_angle_betweenness_window),
     }
     with open(out_dir / "run_metadata.json", "w") as f:
         json.dump(meta, f, indent=2)
@@ -2710,6 +2879,7 @@ def run_fusion_point_aunp_analyses_for_tomogram(
     write_figures: bool = True,
     monomer_star_pattern: Optional[str] = None,
     dimer_star_pattern: Optional[str] = None,
+    use_angle_betweenness_window: bool = False,
 ) -> tuple[list[pd.DataFrame], list[pd.DataFrame]]:
     from .activezone import load_active_zone_mapping
 
@@ -2742,6 +2912,7 @@ def run_fusion_point_aunp_analyses_for_tomogram(
             write_figures=write_figures,
             monomer_star_pattern=monomer_star_pattern,
             dimer_star_pattern=dimer_star_pattern,
+            use_angle_betweenness_window=use_angle_betweenness_window,
         )
         if result is None:
             continue
