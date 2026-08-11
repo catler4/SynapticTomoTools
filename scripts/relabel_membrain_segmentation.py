@@ -380,11 +380,48 @@ def save_xy_projection_png(
     return output_path
 
 
+def write_mrc_with_voxel_size(
+    path: Path,
+    data: np.ndarray,
+    *,
+    voxel_size_angstrom: float | tuple[float, float, float] = 10.0,
+) -> Path:
+    """Write an MRC and set isotropic (or XYZ) voxel size in Angstroms in the header."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if np.isscalar(voxel_size_angstrom):
+        vx = vy = vz = float(voxel_size_angstrom)
+    else:
+        vx, vy, vz = (float(v) for v in voxel_size_angstrom)
+    with mrcfile.new(path, overwrite=True) as mrc:
+        mrc.set_data(np.ascontiguousarray(data))
+        mrc.voxel_size = (vx, vy, vz)
+    return path
+
+
+def read_voxel_size_angstrom(
+    mrc,
+    *,
+    fallback_nm: float = 1.0,
+) -> tuple[float, float, float]:
+    """
+    Read voxel size (Å) from an open MRC. If missing/zero, use ``fallback_nm * 10``
+    (1 nm = 10 Å), matching the usual BIN4 tomogram pixel size.
+    """
+    vs = mrc.voxel_size
+    vx, vy, vz = float(vs.x), float(vs.y), float(vs.z)
+    if vx > 0 and vy > 0 and vz > 0:
+        return (vx, vy, vz)
+    ang = float(fallback_nm) * 10.0
+    return (ang, ang, ang)
+
+
 def write_separate_label_mrcs(
     labels: np.ndarray,
     out_dir: Path,
     *,
     tomogram_name: str,
+    voxel_size_angstrom: float | tuple[float, float, float] = 10.0,
 ) -> list[Path]:
     """Write one binary MRC per present membrane-related label."""
     out_dir = Path(out_dir)
@@ -396,7 +433,7 @@ def write_separate_label_mrcs(
             continue
         name = LABEL_NAMES[label_id]
         path = out_dir / f"{tomogram_name}_label{label_id}_{name}.mrc"
-        mrcfile.write(path, mask, overwrite=True)
+        write_mrc_with_voxel_size(path, mask, voxel_size_angstrom=voxel_size_angstrom)
         written.append(path)
     return written
 
@@ -582,10 +619,17 @@ def process_one_tomogram(
 
     with mrcfile.open(seg_path, permissive=True) as mrc:
         seg = np.asarray(mrc.data)
+        voxel_size_angstrom = read_voxel_size_angstrom(
+            mrc, fallback_nm=float(voxel_size_nm)
+        )
 
     print(
         f"Volume shape (Z,Y,X): {seg.shape}; "
         f"input value range: [{np.nanmin(seg):g}, {np.nanmax(seg):g}]"
+    )
+    print(
+        f"MRC voxel size (Å): ({voxel_size_angstrom[0]:g}, "
+        f"{voxel_size_angstrom[1]:g}, {voxel_size_angstrom[2]:g})"
     )
 
     labeled, membrane_desc = relabel_segmentation(
@@ -608,13 +652,19 @@ def process_one_tomogram(
         name = LABEL_NAMES.get(label_id, "unknown")
         print(f"  {label_id} ({name}): {counts[label_id]:,} voxels")
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    mrcfile.write(out_path, labeled.astype(np.int16), overwrite=True)
+    write_mrc_with_voxel_size(
+        out_path,
+        labeled.astype(np.int16),
+        voxel_size_angstrom=voxel_size_angstrom,
+    )
     print(f"Wrote relabeled segmentation -> {out_path}")
 
     if write_separate_masks:
         separate_paths = write_separate_label_mrcs(
-            labeled, out_dir, tomogram_name=tomogram_name
+            labeled,
+            out_dir,
+            tomogram_name=tomogram_name,
+            voxel_size_angstrom=voxel_size_angstrom,
         )
         for path in separate_paths:
             print(f"Wrote separate label MRC -> {path}")
