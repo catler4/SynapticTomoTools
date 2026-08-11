@@ -563,21 +563,26 @@ def calculate_packing_density_using_sliding_cylinder(
         dist_to_outer, _ = outer_tree.query(ps_mesh.vertices)
         outer_mask = dist_to_outer < 1e-3
         candidate_vertices = ps_mesh.vertices[outer_mask]
+        outer_normals = ps_mesh.vertex_normals[outer_mask]
     else:
         candidate_vertices = ps_mesh.vertices
+        outer_normals = ps_mesh.vertex_normals
 
     num_samples = max(1, len(candidate_vertices) // step)
     sample_idxs = _farthest_point_sample_indices(np.asarray(candidate_vertices), num_samples)
     subset_vertices = candidate_vertices[sample_idxs]
 
-    tree = cKDTree(ps_mesh.vertices)
+    # Only average normals from outer-facing vertices, so a nearby patch of
+    # inner (back-facing) membrane doesn't skew avg_normal towards the wrong
+    # direction and cause the forward AuNP search to miss real neighbors.
+    tree = cKDTree(candidate_vertices)
     # Generate a cKDTree of aunps
     tree_aunps = cKDTree(aunp_coordinates)
     # Iterate over vertices in ps_mesh_simplified and find all vertices in ps_mesh within cylinder_radius and average their normals
     num_aunps_at_vertex = []
     for v in subset_vertices:
         idxs = tree.query_ball_point(v, cylinder_radius)
-        normals = ps_mesh.vertex_normals[idxs]
+        normals = outer_normals[idxs]
         avg_normal = np.mean(normals, axis=0)
         avg_normal /= np.linalg.norm(avg_normal)
         # Find all aunps within cylinder_radius of line through v in direction of avg_normal
@@ -1089,7 +1094,9 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                   run_aunp_monomer_dimer_ripley=False,
                   monomer_star_pattern=None,
                   dimer_star_pattern=None,
-                  monomer_dimer_ripley_n_perm=None):
+                  monomer_dimer_ripley_n_perm=None,
+                  use_angle_betweenness_window=False,
+                  drop_monomer_dimer_aunps_outside_hull=False):
     """
     Performs analysis of gold nanoparticles (AuNPs) in the tomogram.
 
@@ -1123,6 +1130,14 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             zone index (default: ``aunp_tm_BP_active_zone_*_manual_refined_dimer.star``).
         monomer_dimer_ripley_n_perm (int or None): Null replicate count for monomer vs dimer
             Ripley L₁₂ label permutation **and** greedy segregation (default: 1000).
+        use_angle_betweenness_window (bool): Restrict the Ripley window (volume + edge
+            correction) for all three 3D Ripley analyses above to the region of the
+            synaptic-cleft hull that also sits "between" the pre- and post-synaptic
+            membranes (angle-betweenness test), instead of the raw hull. Default: False.
+        drop_monomer_dimer_aunps_outside_hull (bool): For the monomer vs dimer Ripley
+            analysis only, drop monomer/dimer AuNPs that fall outside the synaptic-cleft
+            hull before running the Ripley computation (dropped AuNPs are highlighted in
+            the monomer/dimer diagnostic figure). Default: False.
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     print(f"Analyzing AuNPs in {Path(tomogram_path).name}")
@@ -1698,6 +1713,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                     write_figures=True,
                     monomer_star_pattern=monomer_star_pattern,
                     dimer_star_pattern=dimer_star_pattern,
+                    use_angle_betweenness_window=use_angle_betweenness_window,
                 )
                 if ripley_frames:
                     df_ripley = pd.concat(ripley_frames, ignore_index=True)
@@ -1758,6 +1774,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                     df_valid=df_valid,
                     az_segmentations=az_segmentations,
                     write_figures=True,
+                    use_angle_betweenness_window=use_angle_betweenness_window,
                 )
                 if ripley_frames:
                     df_ripley = pd.concat(ripley_frames, ignore_index=True)
@@ -1814,6 +1831,8 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                         dimer_star_pattern=dimer_star_pattern,
                         n_perm=monomer_dimer_ripley_n_perm,
                         write_figures=True,
+                        use_angle_betweenness_window=use_angle_betweenness_window,
+                        drop_aunps_outside_hull=drop_monomer_dimer_aunps_outside_hull,
                     )
                 if md_ripley_frames:
                     df_md_ripley = pd.concat(md_ripley_frames, ignore_index=True)

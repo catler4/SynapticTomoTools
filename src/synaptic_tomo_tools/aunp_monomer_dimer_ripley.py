@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from scipy.spatial import ConvexHull
 from scipy.spatial.distance import cdist
 
 from .alignment_utils import require_alignment_dir
@@ -53,11 +54,15 @@ from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
     RIPLEY_PERCENTILE_HI,
     RIPLEY_PERCENTILE_LO,
     _default_ripley_perm_workers,
+    _downsample_points,
     _find_monomer_dimer_star_path,
     _isotropic_edge_factors_for_foci,
     _percentile_band,
+    _points_inside_hull,
     _prism_sd_envelope_columns,
     _ripley_r_grid,
+    _sample_uniform_points_in_hull,
+    _window_contains,
     build_ripley_window_3d,
     curves_matrix_to_long_dataframe,
     curves_matrix_to_wide_dataframe,
@@ -70,6 +75,7 @@ from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
     ripley_l12_from_points,
     run_mad_tests_over_r_ranges,
     subset_aunps,
+    RipleyWindow3D,
 )
 
 WINDOW_MODE = "synaptic_cleft_az_hull"
@@ -424,7 +430,7 @@ def _greedy_segregation_l12_curves(
 
     pairwise_dist = cdist(pool, pool)
     if pool_edge_factors is None:
-        pool_edge_factors = _isotropic_edge_factors_for_foci(pool, r_vals, window.hull, rng)
+        pool_edge_factors = _isotropic_edge_factors_for_foci(pool, r_vals, window, rng)
     else:
         pool_edge_factors = np.asarray(pool_edge_factors, dtype=float)
         if pool_edge_factors.shape != (n_pool, len(r_vals)):
@@ -891,6 +897,172 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+MC_DIAGNOSTIC_POINTS = 4000
+
+
+def plot_monomer_dimer_diagnostic(
+    tomogram_path: Path,
+    alignment_dir: str,
+    zone_name: str,
+    *,
+    monomer_coords: np.ndarray,
+    dimer_coords: np.ndarray,
+    az_segmentation: dict,
+    window: RipleyWindow3D,
+    output_path: Path,
+    dropped_monomer_coords: np.ndarray | None = None,
+    dropped_dimer_coords: np.ndarray | None = None,
+    membrane_max_points: int = 4000,
+    n_mc_diagnostic_points: int = MC_DIAGNOSTIC_POINTS,
+    n_z_slices: int = 5,
+) -> Path | None:
+    """
+    QC figure: monomer AuNPs, dimer AuNPs, pre/post membrane surfaces, and the
+    ``synaptic_cleft_az_hull`` convex hull used as the Ripley window.
+
+    Also overlays a Monte-Carlo point cloud sampled uniformly inside the hull, colored by
+    whether each point lies in the effective Ripley window (``window``): hull membership,
+    additionally restricted to the angle-betweenness region when
+    ``window.use_angle_betweenness`` is set — i.e. this reflects whichever window
+    definition was actually used for the analysis, not just the raw hull.
+
+    ``dropped_monomer_coords``/``dropped_dimer_coords`` (from ``drop_aunps_outside_hull``)
+    are highlighted separately, distinct from the analyzed monomer/dimer AuNPs.
+
+    XY projection only, split into ``n_z_slices`` equal-width bands through z so points at
+    different depths don't overplot each other. Each panel's hull outline is the 2D hull of
+    only the (densely sampled) hull-defining points within that panel's z-band, so it tracks
+    the true local cross-section instead of the whole hull's full-depth XY shadow.
+    """
+    tomogram_path = Path(tomogram_path)
+    alignment_dir = require_alignment_dir(alignment_dir)
+    monomer_coords = np.atleast_2d(np.asarray(monomer_coords, dtype=float))
+    dimer_coords = np.atleast_2d(np.asarray(dimer_coords, dtype=float))
+    dropped_coords = np.vstack(
+        [
+            np.atleast_2d(np.asarray(dropped_monomer_coords, dtype=float))
+            if dropped_monomer_coords is not None and len(dropped_monomer_coords)
+            else np.zeros((0, 3)),
+            np.atleast_2d(np.asarray(dropped_dimer_coords, dtype=float))
+            if dropped_dimer_coords is not None and len(dropped_dimer_coords)
+            else np.zeros((0, 3)),
+        ]
+    )
+
+    pre_outer = np.atleast_2d(np.asarray(az_segmentation.get("presynaptic_outer_coords", []), dtype=float))
+    post_outer = np.atleast_2d(np.asarray(az_segmentation.get("postsynaptic_outer_coords", []), dtype=float))
+
+    hull = window.hull
+    hull_pts = hull.points
+
+    pre_plot = _downsample_points(pre_outer, membrane_max_points, seed=1)
+    post_plot = _downsample_points(post_outer, membrane_max_points, seed=2)
+
+    mc_rng = np.random.default_rng(3)
+    mc_points = _sample_uniform_points_in_hull(hull, n_mc_diagnostic_points, mc_rng)
+    if len(mc_points):
+        mc_pass_mask = _window_contains(window, mc_points)
+    else:
+        mc_pass_mask = np.zeros(len(mc_points), dtype=bool)
+    mc_pass = mc_points[mc_pass_mask]
+    mc_fail = mc_points[~mc_pass_mask]
+    mc_pass_frac = float(np.mean(mc_pass_mask)) if len(mc_points) else float("nan")
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _scatter(ax, pts, *, z_lo, z_hi, **kwargs):
+        pts = pts[(pts[:, 2] >= z_lo) & (pts[:, 2] <= z_hi)] if len(pts) else pts
+        if len(pts) == 0:
+            return
+        ax.scatter(pts[:, 0], pts[:, 1], **kwargs)
+
+    n_z_slices = max(1, int(n_z_slices))
+    z_values = np.concatenate(
+        [arr[:, 2] for arr in (hull_pts, pre_outer, post_outer, monomer_coords, dimer_coords, dropped_coords) if len(arr)]
+    )
+    z_min, z_max = float(z_values.min()), float(z_values.max())
+    if z_max <= z_min:
+        z_max = z_min + 1.0
+    z_edges = np.linspace(z_min, z_max, n_z_slices + 1)
+
+    fig, axes = plt.subplots(1, n_z_slices, figsize=(4.0 * n_z_slices, 4.5), squeeze=False)
+    axes = axes[0]
+
+    for k, ax in enumerate(axes):
+        z_lo, z_hi = float(z_edges[k]), float(z_edges[k + 1])
+        # Hull footprint restricted to this z-band: the 2D hull of only the (densely
+        # sampled) defining points whose z falls in this band, so the outline tracks the
+        # true local cross-section instead of the whole hull's full-depth XY shadow.
+        band_hull_pts = hull_pts[(hull_pts[:, 2] >= z_lo) & (hull_pts[:, 2] <= z_hi)]
+        if len(band_hull_pts) >= 3:
+            try:
+                band_hull_2d = ConvexHull(band_hull_pts[:, [0, 1]])
+                band_hull_vertices = band_hull_2d.points[band_hull_2d.vertices]
+                poly = plt.Polygon(
+                    band_hull_vertices, closed=True, fill=True, facecolor="tab:green",
+                    edgecolor="tab:green", alpha=0.08, linewidth=1.0,
+                    label="cleft hull (XY footprint, this z-band)",
+                )
+                ax.add_patch(poly)
+            except Exception:
+                pass
+        _scatter(
+            ax, mc_pass, z_lo=z_lo, z_hi=z_hi, s=4, c="mediumseagreen", alpha=0.3,
+            label="MC: passes angle test", zorder=1,
+        )
+        _scatter(
+            ax, mc_fail, z_lo=z_lo, z_hi=z_hi, s=4, c="lightcoral", alpha=0.3,
+            label="MC: fails angle test", zorder=1,
+        )
+        _scatter(ax, pre_plot, z_lo=z_lo, z_hi=z_hi, s=2, c="tab:blue", alpha=0.12, label="presynaptic membrane")
+        _scatter(ax, post_plot, z_lo=z_lo, z_hi=z_hi, s=2, c="tab:orange", alpha=0.12, label="postsynaptic membrane")
+        _scatter(
+            ax, monomer_coords, z_lo=z_lo, z_hi=z_hi, s=18, c="tab:purple", label="monomer AuNPs",
+            edgecolors="k", linewidths=0.3, zorder=5,
+        )
+        _scatter(
+            ax, dimer_coords, z_lo=z_lo, z_hi=z_hi, s=28, c="tab:green", marker="^", label="dimer AuNPs",
+            edgecolors="k", linewidths=0.3, zorder=5,
+        )
+        _scatter(
+            ax, dropped_coords, z_lo=z_lo, z_hi=z_hi, s=40, c="black", marker="x",
+            label="dropped (outside hull)", linewidths=1.5, zorder=6,
+        )
+        ax.set_xlabel("x (nm)")
+        if k == 0:
+            ax.set_ylabel("y (nm)")
+        ax.set_title(f"z: {z_lo:.0f}–{z_hi:.0f} nm")
+        ax.set_aspect("equal", adjustable="datalim")
+
+    legend_by_label: dict[str, object] = {}
+    for ax in axes:
+        handles, labels = ax.get_legend_handles_labels()
+        for handle, label in zip(handles, labels):
+            legend_by_label.setdefault(label, handle)
+    fig.legend(
+        list(legend_by_label.values()), list(legend_by_label.keys()),
+        loc="lower center", ncol=len(legend_by_label), fontsize=7,
+    )
+
+    dropped_line = (
+        f"\nDropped outside hull: {len(dropped_coords)} AuNP(s)" if len(dropped_coords) else ""
+    )
+    fig.suptitle(
+        f"{tomogram_path.name} | {zone_name}\n"
+        f"Monomer ({len(monomer_coords)}) vs dimer ({len(dimer_coords)}) AuNPs "
+        f"({len(pre_outer)}+{len(post_outer)} membrane pts)\n"
+        f"Angle-test MC acceptance: {mc_pass_frac:.1%} of hull volume "
+        f"({len(mc_pass)}/{len(mc_points)} sampled points)"
+        f"{dropped_line}"
+    )
+    fig.tight_layout(rect=(0.0, 0.06, 1.0, 0.88))
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Monomer/dimer diagnostic plot ({zone_name}) -> {output_path}")
+    return output_path
+
+
 def run_monomer_dimer_ripley_for_zone(
     tomogram_path: Path,
     alignment_dir: str,
@@ -904,6 +1076,8 @@ def run_monomer_dimer_ripley_for_zone(
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
+    use_angle_betweenness_window: bool = False,
+    drop_aunps_outside_hull: bool = False,
 ) -> dict[str, Path] | None:
     """Observed monomer→dimer L₁₂ with label-permutation and greedy-segregation controls.
 
@@ -933,6 +1107,55 @@ def run_monomer_dimer_ripley_for_zone(
 
     monomer_coords, _ = subset_aunps(loaded.meta, subset="monomer")
     dimer_coords, _ = subset_aunps(loaded.meta, subset="dimer")
+
+    az_segmentation: dict | None = None
+    if use_angle_betweenness_window or write_figures:
+        from .activezone import import_active_zone_segmentations
+
+        az_segmentation = import_active_zone_segmentations(
+            tomogram_path, alignment_dir=alignment_dir
+        ).get(zone_name)
+
+    rng = np.random.default_rng(seed)
+    try:
+        cleft_coords = load_synaptic_cleft_active_zone_points(
+            tomogram_path, alignment_dir, zone_name
+        )
+        window = build_ripley_window_3d(
+            cleft_coords,
+            mode=WINDOW_MODE,
+            pre_membrane_coords=(
+                az_segmentation.get("presynaptic_outer_coords") if az_segmentation is not None else None
+            ),
+            post_membrane_coords=(
+                az_segmentation.get("postsynaptic_outer_coords") if az_segmentation is not None else None
+            ),
+            use_angle_betweenness=use_angle_betweenness_window,
+            rng=rng,
+        )
+    except Exception as exc:
+        print(f"  Skipping monomer/dimer Ripley for {zone_name}: {exc}")
+        return None
+
+    # ``pool_keep_mask`` (pool order: monomer then dimer) also keeps the disk-re-read
+    # STAR export in sync below.
+    dropped_monomer_coords = np.zeros((0, 3), dtype=float)
+    dropped_dimer_coords = np.zeros((0, 3), dtype=float)
+    pool_keep_mask: np.ndarray | None = None
+    if drop_aunps_outside_hull:
+        monomer_inside = _points_inside_hull(monomer_coords, window.hull)
+        dimer_inside = _points_inside_hull(dimer_coords, window.hull)
+        dropped_monomer_coords = monomer_coords[~monomer_inside]
+        dropped_dimer_coords = dimer_coords[~dimer_inside]
+        monomer_coords = monomer_coords[monomer_inside]
+        dimer_coords = dimer_coords[dimer_inside]
+        pool_keep_mask = np.concatenate([monomer_inside, dimer_inside])
+        if len(dropped_monomer_coords) or len(dropped_dimer_coords):
+            print(
+                f"  Dropping {len(dropped_monomer_coords)} monomer + "
+                f"{len(dropped_dimer_coords)} dimer AuNP(s) outside the cleft hull for {zone_name}"
+            )
+
     n_monomer = len(monomer_coords)
     n_dimer = len(dimer_coords)
     if n_monomer < MIN_POINTS_PER_CLASS or n_dimer < MIN_POINTS_PER_CLASS:
@@ -943,18 +1166,8 @@ def run_monomer_dimer_ripley_for_zone(
         )
         return None
 
-    try:
-        cleft_coords = load_synaptic_cleft_active_zone_points(
-            tomogram_path, alignment_dir, zone_name
-        )
-        window = build_ripley_window_3d(cleft_coords, mode=WINDOW_MODE)
-    except Exception as exc:
-        print(f"  Skipping monomer/dimer Ripley for {zone_name}: {exc}")
-        return None
-
     r_vals = _ripley_r_grid(r_max_nm, r_step_nm)
     pool = np.vstack([np.atleast_2d(monomer_coords), np.atleast_2d(dimer_coords)])
-    rng = np.random.default_rng(seed)
     n_perm_int = int(n_perm)
     # Segregation always matches label-permutation replicate count.
     n_segregation_int = n_perm_int
@@ -973,7 +1186,7 @@ def run_monomer_dimer_ripley_for_zone(
         # for observed + greedy segregation (label-perm estimates its own pool factors).
         edge_rng = np.random.default_rng(int(seed) + 7919)
         pool_edge_factors = _isotropic_edge_factors_for_foci(
-            pool, r_vals, window.hull, edge_rng
+            pool, r_vals, window, edge_rng
         )
         pbar.set_postfix_str("observed", refresh=False)
         observed_l12 = ripley_l12_from_points(
@@ -1031,6 +1244,22 @@ def run_monomer_dimer_ripley_for_zone(
     figures_dir = out_dir / "figures"
     if write_figures:
         figures_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            if az_segmentation is not None:
+                plot_monomer_dimer_diagnostic(
+                    tomogram_path,
+                    alignment_dir,
+                    zone_name,
+                    monomer_coords=monomer_coords,
+                    dimer_coords=dimer_coords,
+                    az_segmentation=az_segmentation,
+                    window=window,
+                    dropped_monomer_coords=dropped_monomer_coords,
+                    dropped_dimer_coords=dropped_dimer_coords,
+                    output_path=figures_dir / "geometry_diagnostic.png",
+                )
+        except Exception as diag_exc:
+            print(f"  Skipping monomer/dimer diagnostic plot for {zone_name}: {diag_exc}")
 
     simulated_stars_dir: Path | None = None
     try:
@@ -1041,6 +1270,13 @@ def run_monomer_dimer_ripley_for_zone(
             monomer_star_pattern=monomer_star_pattern,
             dimer_star_pattern=dimer_star_pattern,
         )
+        if pool_keep_mask is not None:
+            if len(pool_df) != len(pool_keep_mask):
+                raise ValueError(
+                    f"Pool STAR row count ({len(pool_df)}) != pre-drop pooled coords "
+                    f"({len(pool_keep_mask)})"
+                )
+            pool_df = pool_df.loc[pool_keep_mask].reset_index(drop=True)
         if len(pool_df) != len(pool):
             raise ValueError(
                 f"Pool STAR row count ({len(pool_df)}) != pooled coords ({len(pool)})"
@@ -1198,6 +1434,10 @@ def run_monomer_dimer_ripley_for_zone(
         "segregation_seed_strategy": "random_point",
         "segregation_cluster_class_choice": "random_per_replicate_monomer_or_dimer",
         "window_volume_nm3": float(window.volume_nm3),
+        "window_uses_angle_betweenness": bool(window.use_angle_betweenness),
+        "drop_aunps_outside_hull": bool(drop_aunps_outside_hull),
+        "n_monomer_dropped_outside_hull": int(len(dropped_monomer_coords)),
+        "n_dimer_dropped_outside_hull": int(len(dropped_dimer_coords)),
         "control_label_permutation": "label_permutation_preserving_class_counts",
         "control_segregation": "greedy_nearest_neighbor_cluster_random_class",
         "ripley_edge_correction": "isotropic_3d_mc",
@@ -1246,6 +1486,8 @@ def run_monomer_dimer_ripley_for_tomogram(
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
+    use_angle_betweenness_window: bool = False,
+    drop_aunps_outside_hull: bool = False,
 ) -> tuple[list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame]]:
     """Run monomer vs dimer Ripley for all mapped active zones in one tomogram.
 
@@ -1297,6 +1539,8 @@ def run_monomer_dimer_ripley_for_tomogram(
             r_step_nm=r_step_nm,
             seed=seed,
             write_figures=write_figures,
+            use_angle_betweenness_window=use_angle_betweenness_window,
+            drop_aunps_outside_hull=drop_aunps_outside_hull,
         )
         if result is None:
             continue
