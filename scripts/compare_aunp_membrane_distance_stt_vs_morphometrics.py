@@ -15,6 +15,9 @@ STT "center" estimate (same as pipeline):
 SM estimate:
   distance = nearest distance to the single midplane triangle mesh
 
+Only **synaptic** AuNPs are analyzed by default (same STT rule):
+  distance_to_postsynaptic_active_outer <= synaptic_designation_cutoff (default 30 nm).
+
 How to run
 ----------
   PYTHONPATH=src python scripts/compare_aunp_membrane_distance_stt_vs_morphometrics.py \\
@@ -682,6 +685,8 @@ def analyze_one(
     star_pattern: str,
     mesh_scale: float,
     output_dir: Path,
+    synaptic_designation_cutoff: float = 30.0,
+    synaptic_only: bool = True,
 ) -> pd.DataFrame | None:
     tomoname = tomogram_path.name
     alignment_dir = require_alignment_dir(alignment_dir)
@@ -715,7 +720,7 @@ def analyze_one(
         return None
 
     coords = df[list(COORD_COLS)].to_numpy(dtype=float)
-    print(f"  AuNPs: {len(coords):,} (zones={sorted(df['active_zone'].unique().tolist())})")
+    print(f"  AuNPs loaded: {len(coords):,} (zones={sorted(df['active_zone'].unique().tolist())})")
 
     # STT outer/inner mean
     try:
@@ -742,6 +747,27 @@ def analyze_one(
         "distance_to_postsynaptic_active_outer_inner_mean_nm",
     ):
         out[key] = stt[key]
+
+    # Same synaptic designation as STT analyze_aunps:
+    # synaptic if distance to postsynaptic active outer <= cutoff (NaN -> extrasynaptic).
+    post_outer = out["distance_to_postsynaptic_active_outer_nm"].to_numpy(dtype=float)
+    synaptic_mask = np.isfinite(post_outer) & (
+        post_outer <= float(synaptic_designation_cutoff)
+    )
+    out["synaptic_designation"] = np.where(synaptic_mask, "synaptic", "extrasynaptic")
+    n_syn = int(synaptic_mask.sum())
+    print(
+        f"  Synaptic designation (post active outer ≤ {synaptic_designation_cutoff:g} nm): "
+        f"{n_syn:,} synaptic / {len(out) - n_syn:,} extrasynaptic"
+    )
+
+    if synaptic_only:
+        out = out.loc[synaptic_mask].copy().reset_index(drop=True)
+        if out.empty:
+            print("  SKIP: no synaptic AuNPs after designation filter")
+            return None
+        print(f"  Using synaptic AuNPs only: {len(out):,}")
+        coords = out[list(COORD_COLS)].to_numpy(dtype=float)
 
     # Surface Morphometrics midplane meshes
     for side, ply_path, out_col in (
@@ -829,6 +855,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Multiply PLY coordinates by this (use 0.1 if mesh is in Å and AuNPs in nm)",
     )
     parser.add_argument(
+        "--synaptic-designation-cutoff",
+        type=float,
+        default=30.0,
+        help=(
+            "AuNP is synaptic if distance to postsynaptic active outer ≤ this (nm); "
+            "same default as STT analyze_aunps"
+        ),
+    )
+    parser.add_argument(
+        "--include-extrasynaptic",
+        action="store_true",
+        help="Include extrasynaptic AuNPs (default: synaptic only, matching STT)",
+    )
+    parser.add_argument(
         "--stop-on-error",
         action="store_true",
         help="Abort on first tomogram failure",
@@ -854,6 +894,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Jobs: {len(jobs)} from {args.csv} (data root: {data_dir})")
     print(f"AuNP STAR pattern: {args.aunp_pick_star_pattern}")
     print(f"Mesh scale: {args.mesh_scale}")
+    print(
+        f"Synaptic filter: "
+        f"{'off (--include-extrasynaptic)' if args.include_extrasynaptic else 'on'} "
+        f"(cutoff={args.synaptic_designation_cutoff:g} nm to post active outer)"
+    )
     print(f"Output: {output_dir}")
 
     frames: list[pd.DataFrame] = []
@@ -870,6 +915,8 @@ def main(argv: list[str] | None = None) -> int:
                 star_pattern=args.aunp_pick_star_pattern,
                 mesh_scale=float(args.mesh_scale),
                 output_dir=output_dir,
+                synaptic_designation_cutoff=float(args.synaptic_designation_cutoff),
+                synaptic_only=not bool(args.include_extrasynaptic),
             )
             if df is None:
                 failed.append(label)
