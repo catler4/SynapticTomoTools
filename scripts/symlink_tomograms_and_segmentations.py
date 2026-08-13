@@ -78,14 +78,18 @@ def find_labeled_segmentation_mrc(alignment_dir: Path, tomoname: str) -> Path | 
     return None
 
 
-def make_symlink(link_path: Path, target: Path, *, force: bool) -> None:
+def make_symlink(link_path: Path, target: Path, *, force: bool) -> str:
+    """Create symlink. Returns 'created', 'skipped', or 'updated'."""
     link_path = Path(link_path)
     target = Path(target).resolve()
     if link_path.is_symlink() or link_path.exists():
         if not force:
-            raise FileExistsError(f"Refusing to overwrite existing path: {link_path}")
+            return "skipped"
         link_path.unlink()
+        link_path.symlink_to(target)
+        return "updated"
     link_path.symlink_to(target)
+    return "created"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -149,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
 
     ok_tomo = 0
     ok_seg = 0
+    skipped = 0
     failed = 0
 
     for _, row in df.iterrows():
@@ -179,9 +184,13 @@ def main(argv: list[str] | None = None) -> int:
             failed += 1
         else:
             try:
-                make_symlink(out_tomo / link_name, bp, force=args.force)
-                print(f"tomograms/{link_name} -> {bp}")
-                ok_tomo += 1
+                status = make_symlink(out_tomo / link_name, bp, force=args.force)
+                if status == "skipped":
+                    print(f"SKIP exists: tomograms/{link_name}")
+                    skipped += 1
+                else:
+                    print(f"tomograms/{link_name} -> {bp} ({status})")
+                    ok_tomo += 1
             except OSError as exc:
                 print(f"FAILED tomograms/{link_name}: {exc}")
                 failed += 1
@@ -195,16 +204,20 @@ def main(argv: list[str] | None = None) -> int:
             failed += 1
         else:
             try:
-                make_symlink(out_seg / link_name, seg, force=args.force)
-                print(f"segmentations/{link_name} -> {seg}")
-                ok_seg += 1
+                status = make_symlink(out_seg / link_name, seg, force=args.force)
+                if status == "skipped":
+                    print(f"SKIP exists: segmentations/{link_name}")
+                    skipped += 1
+                else:
+                    print(f"segmentations/{link_name} -> {seg} ({status})")
+                    ok_seg += 1
             except OSError as exc:
                 print(f"FAILED segmentations/{link_name}: {exc}")
                 failed += 1
 
     print(
         f"\nDone. tomogram links: {ok_tomo}, segmentation links: {ok_seg}, "
-        f"missing/failed: {failed}"
+        f"skipped-exists: {skipped}, missing/failed: {failed}"
     )
     return 1 if failed else 0
 

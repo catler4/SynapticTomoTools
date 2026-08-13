@@ -528,10 +528,35 @@ def process_one_tomogram(
     postsyn_glb: Path | None = None,
     vesicle_glb: Path | None = None,
     write_separate_masks: bool = False,
+    rerun: bool = False,
 ) -> Path:
     """Relabel one tomogram; returns the output directory written."""
     tomogram_path = Path(tomogram_path)
     alignment_dir = require_alignment_dir(alignment_dir)
+    tomogram_name = tomogram_path.name
+
+    out_dir = (
+        Path(output_dir)
+        if output_dir
+        else tomogram_path / alignment_dir / "STT_results" / "membranes_labeled"
+    )
+    out_path = (
+        Path(output_mrc)
+        if output_mrc
+        else out_dir / f"{tomogram_name}_membranes_relabeled.mrc"
+    )
+    png_path = out_dir / f"{tomogram_name}_membranes_relabeled_xy_projection.png"
+
+    if (
+        not rerun
+        and out_path.is_file()
+        and out_path.stat().st_size > 0
+        and png_path.is_file()
+        and png_path.stat().st_size > 0
+    ):
+        print(f"SKIP (already complete): {out_path}")
+        return Path(out_dir)
+
     aunps_dir = tomogram_path / alignment_dir / "aunps"
     if not aunps_dir.is_dir():
         raise FileNotFoundError(f"AuNPs directory not found: {aunps_dir}")
@@ -556,19 +581,7 @@ def process_one_tomogram(
             "Pass --segmentation-mrc or place a .mrc under membrain/."
         )
 
-    out_dir = (
-        Path(output_dir)
-        if output_dir
-        else tomogram_path / alignment_dir / "STT_results" / "membranes_labeled"
-    )
     out_dir.mkdir(parents=True, exist_ok=True)
-    tomogram_name = tomogram_path.name
-    out_path = (
-        Path(output_mrc)
-        if output_mrc
-        else out_dir / f"{tomogram_name}_membranes_relabeled.mrc"
-    )
-    png_path = out_dir / f"{tomogram_name}_membranes_relabeled_xy_projection.png"
 
     print(f"Tomogram:      {tomogram_path}")
     print(f"Alignment:     {alignment_dir}")
@@ -805,6 +818,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="In CSV batch mode, abort on the first failure (default: continue)",
     )
+    parser.add_argument(
+        "--rerun",
+        action="store_true",
+        help="Recompute even if relabeled MRC + PNG already exist",
+    )
     args = parser.parse_args(argv)
 
     if bool(args.csv) == bool(args.tomogram_path):
@@ -819,6 +837,7 @@ def main(argv: list[str] | None = None) -> int:
         skip_vesicles=bool(args.skip_vesicles),
         skip_active_zones=bool(args.skip_active_zones),
         write_separate_masks=bool(args.write_separate_masks),
+        rerun=bool(args.rerun),
     )
 
     if args.tomogram_path:

@@ -687,9 +687,21 @@ def analyze_one(
     output_dir: Path,
     synaptic_designation_cutoff: float = 30.0,
     synaptic_only: bool = True,
+    rerun: bool = False,
 ) -> pd.DataFrame | None:
     tomoname = tomogram_path.name
     alignment_dir = require_alignment_dir(alignment_dir)
+    out_path = (
+        output_dir
+        / f"{tomoname}__{alignment_dir}_aunp_membrane_distance_stt_vs_sm.csv"
+    )
+    if not rerun and out_path.is_file() and out_path.stat().st_size > 0:
+        print(f"  SKIP (already complete): {out_path}")
+        try:
+            return pd.read_csv(out_path)
+        except Exception as exc:
+            print(f"  WARNING: could not reload existing CSV ({exc}); recomputing")
+
     aunps_dir = tomogram_path / alignment_dir / "aunps"
     sm_dir = tomogram_path / alignment_dir / "surface_morphometrics"
     pre_ply = sm_dir / f"{tomoname}_cleft_pre.ply"
@@ -878,6 +890,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip PNG figures (histograms, Gaussian mean±SD, scatter)",
     )
+    parser.add_argument(
+        "--rerun",
+        action="store_true",
+        help="Recompute even if per-tomogram comparison CSV already exists",
+    )
     args = parser.parse_args(argv)
 
     data_dir = Path(args.data_dir) if args.data_dir else default_data_root()
@@ -917,6 +934,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_dir=output_dir,
                 synaptic_designation_cutoff=float(args.synaptic_designation_cutoff),
                 synaptic_only=not bool(args.include_extrasynaptic),
+                rerun=bool(args.rerun),
             )
             if df is None:
                 failed.append(label)
