@@ -15,7 +15,7 @@
 #   csv_path      = STT tomograms.csv relative to this repo (or absolute)
 #   morpho_subdir = folder under MORPHO_ROOT for symlinks + make_meshes + results/
 
-set -euo pipefail
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -45,7 +45,17 @@ if [[ "${FORCE}" == "1" ]]; then
   FORCE_ARGS=(--force)
 fi
 
+# conda.sh / conda activate reference unset vars (e.g. CONDA_BUILD); disable -u around them.
+set +u
 source "${CONDA_SH}"
+set -u
+
+conda_activate() {
+  set +u
+  conda activate "$1"
+  set -u
+}
+
 export PYTHONPATH="${REPO_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
 
 N_DATASETS="${#DATASETS[@]}"
@@ -146,12 +156,12 @@ run_make_meshes_if_needed() {
   fi
 
   echo "Running morphometrics make_meshes in ${work_dir}"
-  conda activate morphometrics
+  conda_activate morphometrics
   (
     cd "${work_dir}"
     morphometrics make_meshes config.yml
   )
-  conda activate synaptictomo
+  conda_activate synaptictomo
 }
 
 echo "========================================"
@@ -170,7 +180,7 @@ else
 fi
 echo "========================================"
 
-conda activate synaptictomo
+conda_activate synaptictomo
 echo "Active env: ${CONDA_DEFAULT_ENV}"
 
 # --- 1) Relabel ---
@@ -210,7 +220,7 @@ echo "Done: make_meshes"
 
 # --- 4) Copy PLYs ---
 step_banner 4 "Copy PLYs into each tomogram surface_morphometrics/"
-conda activate synaptictomo
+conda_activate synaptictomo
 cd "${REPO_ROOT}"
 for i in "${!DATASETS[@]}"; do
   parse_dataset "${DATASETS[$i]}"
