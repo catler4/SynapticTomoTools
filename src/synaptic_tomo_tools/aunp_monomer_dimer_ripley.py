@@ -4,20 +4,35 @@
 Type-1 foci: monomer AuNP pick coordinates for a zone.
 Type-2 partners: dimer AuNP pick coordinates for the same zone.
 
+Reports three K/L families (see ``L_FAMILIES``): the direct K₁₂/L₁₂ (monomer-as-focus, the
+original statistic), the reversed K₂₁/L₂₁ (dimer-as-focus), and their intensity-weighted
+combination K_combined/L_combined (Lotwick & Silverman 1982). Also reports g₁₂/g₂₁/
+g_combined (``G_FAMILIES``), each computed as a finite difference of the corresponding K
+curve (``pair_correlation_from_k_diff``) rather than an independent shell-count estimator.
+AuNPs outside the Ripley window (hull ∩ betweenness-region) are always dropped before any
+of this is computed.
+
 Window: synaptic_cleft_az_hull (convex hull of presynaptic + postsynaptic AZ surface points),
-matching the vesicle fusion-site bivariate Ripley setup.
+always additionally restricted to the angle in-betweenness region (matching the AZ-center
+Ripley analysis) since monomer/dimer AuNP positions are only meaningful relative to the
+space between the two membranes. Edge correction uses the deterministic grid quadrature
+method (``_isotropic_edge_factors_grid``), matching the AZ-center Ripley analysis, rather
+than Monte Carlo sampling.
 
 Control: label permutation — pool all monomer + dimer points, then randomly reassign class
 labels while preserving the per-zone monomer and dimer counts (1000 replicates by default).
+Each replicate computes K in both directions (``label_permutation_k_bidirectional_curves``),
+so every one of the six reported families gets its own null distribution.
 
 Greedy segregation — same pooled points and class counts, but relabel by growing a compact
 spatial cluster from a random seed. Each replicate randomly chooses whether that compact
 class is monomers or dimers (then the remainder gets the other label). Replicate count
-always matches the label-permutation count (``n_perm``, default 1000).
+always matches the label-permutation count (``n_perm``, default 1000). Also bidirectional.
 
-MAD tests (Rebola-style max absolute deviation vs 99% CE) are run against label-permutation
-and greedy segregation when that null has ≥1000 curves; otherwise they are skipped.
-Each MAD is reported for the full r-grid and for the restricted 30–50 nm window.
+MAD tests (Rebola-style max absolute deviation vs 99% CE) are run for each of the six
+families against both label-permutation and greedy segregation when that null has ≥1000
+curves; otherwise they are skipped. Each MAD is reported for the full r-grid and for the
+restricted 30–50 nm window.
 
 Per zone, the first three label-permutation and greedy-segregation point sets are also
 written as monomer/dimer STAR files under ``STT_results/.../simulated_null_stars/``
@@ -31,6 +46,7 @@ from __future__ import annotations
 import json
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import replace as dataclasses_replace
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -39,12 +55,11 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from scipy.spatial import ConvexHull
 from scipy.spatial.distance import cdist
 
 from .alignment_utils import require_alignment_dir
 from .aunps import _read_aunp_pick_star_dataframe
-from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
+from .ripley_library import (
     COORD_COLS,
     DEFAULT_ANALYSIS_SEED,
     DEFAULT_RIPLEY_R_MAX_NM,
@@ -54,25 +69,28 @@ from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
     RIPLEY_PERCENTILE_HI,
     RIPLEY_PERCENTILE_LO,
     _default_ripley_perm_workers,
-    _downsample_points,
     _find_monomer_dimer_star_path,
-    _isotropic_edge_factors_for_foci,
+    _isotropic_edge_factors_grid,
     _percentile_band,
     _points_inside_hull,
+    _prism_long_to_wide,
     _prism_sd_envelope_columns,
     _ripley_r_grid,
-    _sample_uniform_points_in_hull,
-    _window_contains,
+    _safe_name,
     build_ripley_window_3d,
+    build_window_grid_points,
+    cross_k12_3d_isotropic,
     curves_matrix_to_long_dataframe,
     curves_matrix_to_wide_dataframe,
-    label_permutation_l12_curves,
+    derive_symmetric_k_l_g_families,
+    g_shell_reliability_mask,
+    label_permutation_k_bidirectional_curves,
     load_monomer_dimer_aunps_for_zone,
     load_synaptic_cleft_active_zone_points,
     mad_result_to_curves_dataframe,
     mad_result_to_summary_row,
+    plot_ripley_window_geometry_diagnostic,
     prism_sd_envelope_columns_from_averaged_k12,
-    ripley_l12_from_points,
     run_mad_tests_over_r_ranges,
     subset_aunps,
     RipleyWindow3D,
@@ -82,6 +100,8 @@ WINDOW_MODE = "synaptic_cleft_az_hull"
 MONOMER_DIMER_N_PERM = 1000
 # Segregation always uses the same replicate count as label permutation (n_perm).
 MIN_POINTS_PER_CLASS = 2
+# Matches the AZ-center Ripley analysis's tuned grid spacing/accuracy tradeoff.
+MONOMER_DIMER_EDGE_GRID_SPACING_NM = 2.0
 # Example null point sets written as STAR files (label-perm + greedy each).
 N_SIMULATED_NULL_STAR_EXAMPLES = 3
 SIMULATED_STAR_COLS = (
@@ -92,6 +112,20 @@ SIMULATED_STAR_COLS = (
     "postsynapse",
 )
 
+# The six reported statistics per zone: direct (monomer-as-focus), reversed
+# (dimer-as-focus), and their intensity-weighted combination -- for both K's L-transform
+# and the K-difference pair-correlation function (see derive_symmetric_k_l_g_families).
+L_FAMILIES: tuple[str, ...] = ("l12", "l21", "l_combined")
+G_FAMILIES: tuple[str, ...] = ("g12", "g21", "g_combined")
+ALL_FAMILIES: tuple[str, ...] = L_FAMILIES + G_FAMILIES
+
+
+def _family_tag(fam: str) -> str:
+    """Column-prefix tag for a family key, e.g. ``'l12' -> 'L12'``, ``'g_combined' ->
+    'G_combined'``."""
+    return ("L" if fam.startswith("l") else "G") + fam[1:]
+
+
 POOLED_CURVES_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_curves.csv")
 POOLED_INDIVIDUAL_CURVES_CSV = Path(
     "results/aunps/aunp_monomer_dimer_ripley_l12_individual_curves.csv"
@@ -100,20 +134,6 @@ POOLED_MAD_SUMMARY_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_mad_s
 POOLED_PRISM_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_prism_pooled.csv")
 POOLED_PRISM_WIDE_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_prism_pooled_wide.csv")
 POOLED_FIGURES_DIR = Path("results/aunps/figures/aunp_monomer_dimer_ripley_l12_pooled")
-
-
-def _safe_name(name: str) -> str:
-    safe = str(name).strip().replace(" ", "_")
-    for ch in '<>:"/\\|?*':
-        safe = safe.replace(ch, "_")
-    return safe
-
-
-def _prism_long_to_wide(prism_long: pd.DataFrame, id_cols: Sequence[str]) -> pd.DataFrame:
-    if prism_long.empty:
-        return prism_long.copy()
-    value_cols = [c for c in prism_long.columns if c not in id_cols and c != "r_nm"]
-    return prism_long[list(id_cols) + ["r_nm"] + value_cols].copy()
 
 
 def _extract_curves_matrix(df: pd.DataFrame, value_col: str) -> tuple[np.ndarray, np.ndarray]:
@@ -174,11 +194,11 @@ def _greedy_segregation_cluster_mask(
     return mask
 
 
-# Shared context for parallel greedy-segregation L₁₂ workers.
-_SEG_L12_CTX: dict = {}
+# Shared context for parallel greedy-segregation bidirectional-K workers.
+_SEG_BIDIR_CTX: dict = {}
 
 
-def _init_greedy_seg_l12_worker(
+def _init_greedy_seg_bidir_worker(
     pool: np.ndarray,
     r_vals: np.ndarray,
     window,
@@ -187,13 +207,13 @@ def _init_greedy_seg_l12_worker(
     pairwise_dist: np.ndarray,
     pool_edge_factors: np.ndarray,
 ) -> None:
-    _SEG_L12_CTX["pool"] = pool
-    _SEG_L12_CTX["r_vals"] = r_vals
-    _SEG_L12_CTX["window"] = window
-    _SEG_L12_CTX["n_monomer"] = int(n_monomer)
-    _SEG_L12_CTX["n_dimer"] = int(n_dimer)
-    _SEG_L12_CTX["pairwise_dist"] = pairwise_dist
-    _SEG_L12_CTX["pool_edge_factors"] = pool_edge_factors
+    _SEG_BIDIR_CTX["pool"] = pool
+    _SEG_BIDIR_CTX["r_vals"] = r_vals
+    _SEG_BIDIR_CTX["window"] = window
+    _SEG_BIDIR_CTX["n_monomer"] = int(n_monomer)
+    _SEG_BIDIR_CTX["n_dimer"] = int(n_dimer)
+    _SEG_BIDIR_CTX["pairwise_dist"] = pairwise_dist
+    _SEG_BIDIR_CTX["pool_edge_factors"] = pool_edge_factors
 
 
 def _label_permutation_monomer_mask(
@@ -233,7 +253,7 @@ def _greedy_segregation_monomer_mask(
     return ~cluster_mask if cluster_class == "dimer" else cluster_mask
 
 
-def _greedy_seg_l12_one_replicate(
+def _greedy_seg_k_bidir_one_replicate(
     *,
     pool: np.ndarray,
     r_vals: np.ndarray,
@@ -243,15 +263,16 @@ def _greedy_seg_l12_one_replicate(
     pairwise_dist: np.ndarray,
     pool_edge_factors: np.ndarray,
     rng: np.random.Generator,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     """
-    One greedy-segregation L₁₂ curve: randomly choose monomer or dimer as the compact
-    class, grow that class from a random seed, assign the remainder to the other class.
+    One greedy-segregation (K12, K21) curve pair: randomly choose monomer or dimer as the
+    compact class, grow that class from a random seed, assign the remainder to the other
+    class, then compute K in both directions.
     """
     monomer_mask = _greedy_segregation_monomer_mask(
         pool, n_monomer, n_dimer, pairwise_dist, rng
     )
-    return ripley_l12_from_points(
+    k12 = cross_k12_3d_isotropic(
         pool[monomer_mask],
         pool[~monomer_mask],
         r_vals,
@@ -259,6 +280,15 @@ def _greedy_seg_l12_one_replicate(
         rng,
         edge_factors=pool_edge_factors[monomer_mask],
     )
+    k21 = cross_k12_3d_isotropic(
+        pool[~monomer_mask],
+        pool[monomer_mask],
+        r_vals,
+        window,
+        rng,
+        edge_factors=pool_edge_factors[~monomer_mask],
+    )
+    return k12, k21
 
 
 def _load_pool_star_dataframe_for_export(
@@ -375,23 +405,23 @@ def _write_simulated_null_star_examples(
     return stars_dir
 
 
-def _greedy_seg_l12_worker(task: tuple[int, int]) -> tuple[int, np.ndarray]:
-    """Run one greedy-segregation L₁₂ curve (rep_id, seed)."""
+def _greedy_seg_bidir_worker(task: tuple[int, int]) -> tuple[int, np.ndarray, np.ndarray]:
+    """Run one greedy-segregation (K12, K21) curve pair (rep_id, seed)."""
     rep_id, seed = task
-    curve = _greedy_seg_l12_one_replicate(
-        pool=_SEG_L12_CTX["pool"],
-        r_vals=_SEG_L12_CTX["r_vals"],
-        window=_SEG_L12_CTX["window"],
-        n_monomer=_SEG_L12_CTX["n_monomer"],
-        n_dimer=_SEG_L12_CTX["n_dimer"],
-        pairwise_dist=_SEG_L12_CTX["pairwise_dist"],
-        pool_edge_factors=_SEG_L12_CTX["pool_edge_factors"],
+    k12, k21 = _greedy_seg_k_bidir_one_replicate(
+        pool=_SEG_BIDIR_CTX["pool"],
+        r_vals=_SEG_BIDIR_CTX["r_vals"],
+        window=_SEG_BIDIR_CTX["window"],
+        n_monomer=_SEG_BIDIR_CTX["n_monomer"],
+        n_dimer=_SEG_BIDIR_CTX["n_dimer"],
+        pairwise_dist=_SEG_BIDIR_CTX["pairwise_dist"],
+        pool_edge_factors=_SEG_BIDIR_CTX["pool_edge_factors"],
         rng=np.random.default_rng(int(seed)),
     )
-    return int(rep_id), curve
+    return int(rep_id), k12, k21
 
 
-def _greedy_segregation_l12_curves(
+def _greedy_segregation_k_bidirectional_curves(
     pool: np.ndarray,
     n_monomer: int,
     n_dimer: int,
@@ -400,52 +430,58 @@ def _greedy_segregation_l12_curves(
     rng: np.random.Generator,
     *,
     n_rep: int,
-    pool_edge_factors: np.ndarray | None = None,
+    pool_edge_factors: np.ndarray,
     seed: int = DEFAULT_ANALYSIS_SEED,
     n_workers: int | None = None,
     pbar: Optional[tqdm] = None,
-) -> np.ndarray:
+) -> dict[str, np.ndarray]:
     """
-    Greedy segregation L₁₂ curves with a random clustered class per replicate.
+    Greedy segregation (K12, K21) curve pairs with a random clustered class per replicate.
 
     Each replicate independently chooses monomer or dimer as the compact class
     (equal probability), grows that class from a random seed via nearest-neighbor
     expansion to the observed class count, assigns the remaining points to the other
-    class, then computes monomer→dimer L₁₂.
+    class, then computes K in both directions (see ``derive_symmetric_k_l_g_families``
+    for deriving L12/L21/L_combined/g12/g21/g_combined from the result).
 
     Uses the same edge-factor precompute + process-pool pattern as label permutation.
+    ``pool_edge_factors`` (e.g. from the deterministic grid method) must already cover
+    every pooled point as a potential focus.
     """
     pool = np.atleast_2d(np.asarray(pool, dtype=float))
     n_pool = len(pool)
     n_rep_int = int(n_rep)
     n_monomer = int(n_monomer)
     n_dimer = int(n_dimer)
-    curves = np.full((n_rep_int, len(r_vals)), np.nan, dtype=float)
+    empty = {
+        "k12": np.full((n_rep_int, len(r_vals)), np.nan, dtype=float),
+        "k21": np.full((n_rep_int, len(r_vals)), np.nan, dtype=float),
+    }
     if n_pool == 0 or n_rep_int == 0:
-        return curves
+        return empty
     if n_monomer <= 0 or n_dimer <= 0 or n_monomer + n_dimer != n_pool:
-        return curves
+        return empty
     if n_monomer > n_pool or n_dimer > n_pool:
-        return curves
+        return empty
 
     pairwise_dist = cdist(pool, pool)
-    if pool_edge_factors is None:
-        pool_edge_factors = _isotropic_edge_factors_for_foci(pool, r_vals, window, rng)
-    else:
-        pool_edge_factors = np.asarray(pool_edge_factors, dtype=float)
-        if pool_edge_factors.shape != (n_pool, len(r_vals)):
-            raise ValueError(
-                f"pool_edge_factors shape {pool_edge_factors.shape} != "
-                f"expected {(n_pool, len(r_vals))}"
-            )
+    pool_edge_factors = np.asarray(pool_edge_factors, dtype=float)
+    if pool_edge_factors.shape != (n_pool, len(r_vals)):
+        raise ValueError(
+            f"pool_edge_factors shape {pool_edge_factors.shape} != "
+            f"expected {(n_pool, len(r_vals))}"
+        )
 
     if n_workers is None:
         n_workers = _default_ripley_perm_workers(n_rep_int)
     n_workers = max(1, min(int(n_workers), n_rep_int))
 
+    k12_curves = np.full((n_rep_int, len(r_vals)), np.nan, dtype=float)
+    k21_curves = np.full((n_rep_int, len(r_vals)), np.nan, dtype=float)
+
     if n_workers == 1:
         for rep_id in range(n_rep_int):
-            curves[rep_id] = _greedy_seg_l12_one_replicate(
+            k12, k21 = _greedy_seg_k_bidir_one_replicate(
                 pool=pool,
                 r_vals=r_vals,
                 window=window,
@@ -455,16 +491,18 @@ def _greedy_segregation_l12_curves(
                 pool_edge_factors=pool_edge_factors,
                 rng=rng,
             )
+            k12_curves[rep_id] = k12
+            k21_curves[rep_id] = k21
             if pbar is not None:
                 pbar.set_postfix_str(f"greedy seg {rep_id + 1}/{n_rep_int}", refresh=False)
                 pbar.update(1)
-        return curves
+        return {"k12": k12_curves, "k21": k21_curves}
 
     # Deterministic per-replicate seeds (independent of call-order / worker scheduling).
     tasks = [(rep_id, int(seed) + 17 + rep_id) for rep_id in range(n_rep_int)]
     with ProcessPoolExecutor(
         max_workers=n_workers,
-        initializer=_init_greedy_seg_l12_worker,
+        initializer=_init_greedy_seg_bidir_worker,
         initargs=(
             pool,
             r_vals,
@@ -475,14 +513,15 @@ def _greedy_segregation_l12_curves(
             pool_edge_factors,
         ),
     ) as executor:
-        futures = [executor.submit(_greedy_seg_l12_worker, task) for task in tasks]
+        futures = [executor.submit(_greedy_seg_bidir_worker, task) for task in tasks]
         for fut in as_completed(futures):
-            rep_id, curve = fut.result()
-            curves[rep_id] = curve
+            rep_id, k12, k21 = fut.result()
+            k12_curves[rep_id] = k12
+            k21_curves[rep_id] = k21
             if pbar is not None:
                 pbar.set_postfix_str(f"greedy seg {rep_id + 1}/{n_rep_int}", refresh=False)
                 pbar.update(1)
-    return curves
+    return {"k12": k12_curves, "k21": k21_curves}
 
 
 def _plot_mad_panels(
@@ -492,6 +531,7 @@ def _plot_mad_panels(
     title: str,
     observed_color: str = "C0",
     observed_label: str = "Observed L₁₂",
+    value_label: str = "L₁₂(r)",
 ) -> None:
     """Plot raw + normalized MAD panels for each null (uses each result's own r-window)."""
     n_panels = max(1, len(mad_results))
@@ -533,10 +573,10 @@ def _plot_mad_panels(
             ax_norm.set_title("MAD not run", fontsize=9)
         ax_raw.axhline(0.0, color="0.5", ls="--", lw=0.8)
         ax_raw.set_xlabel("r (nm)")
-        ax_raw.set_ylabel("L₁₂(r)")
+        ax_raw.set_ylabel(value_label)
         ax_raw.legend(fontsize=7, loc="best")
         ax_norm.set_xlabel("r (nm)")
-        ax_norm.set_ylabel("(L₁₂ − μ_null) / CE half-width")
+        ax_norm.set_ylabel(f"({value_label} − μ_null) / CE half-width")
         ax_norm.legend(fontsize=7, loc="best")
         if len(r_use):
             for ax in (ax_raw, ax_norm):
@@ -554,50 +594,57 @@ def _write_mad_outputs(
     figures_dir: Path | None,
     zone_name: str,
     r_vals: np.ndarray,
-    observed_l12: np.ndarray,
-    null_named_curves: list[tuple[str, np.ndarray]],
+    observed_by_family: dict[str, np.ndarray],
+    null_curves_by_family: dict[str, list[tuple[str, np.ndarray]]],
     write_figures: bool,
-    figure_title: str,
+    figure_title_prefix: str,
 ) -> tuple[Path, Path]:
-    """Run MAD for each null × r-range (≥1000 curves), write summary/curves CSVs and figures."""
+    """Run MAD for each family × null × r-range (≥1000 curves), for every family in
+    ``observed_by_family`` (see ``ALL_FAMILIES``). Writes one combined summary/curves CSV
+    (with a ``curve_family`` column) and one figure per family × r-range."""
     summary_rows: list[dict] = []
     curve_frames: list[pd.DataFrame] = []
-    mad_by_range: dict[str, list[dict]] = {label: [] for label, _, _ in MAD_R_RANGES}
 
-    for null_name, null_curves in null_named_curves:
-        for mad in run_mad_tests_over_r_ranges(
-            observed_l12,
-            null_curves,
-            r_vals,
-            null_name=null_name,
-            min_null_curves=MAD_MIN_NULL_CURVES,
-        ):
-            mad_by_range.setdefault(str(mad["r_range"]), []).append(mad)
-            summary_rows.append(
-                mad_result_to_summary_row(
-                    mad,
-                    extra_cols={"active_zone_name": zone_name},
+    for fam, observed in observed_by_family.items():
+        value_label = f"{_family_tag(fam)}(r)"
+        mad_by_range: dict[str, list[dict]] = {label: [] for label, _, _ in MAD_R_RANGES}
+        for null_name, null_curves in null_curves_by_family[fam]:
+            for mad in run_mad_tests_over_r_ranges(
+                observed,
+                null_curves,
+                r_vals,
+                null_name=null_name,
+                min_null_curves=MAD_MIN_NULL_CURVES,
+            ):
+                mad_by_range.setdefault(str(mad["r_range"]), []).append(mad)
+                summary_rows.append(
+                    mad_result_to_summary_row(
+                        mad,
+                        extra_cols={"active_zone_name": zone_name, "curve_family": fam},
+                    )
                 )
-            )
-            curves_df = mad_result_to_curves_dataframe(mad, r_vals, observed=observed_l12)
-            curves_df.insert(0, "active_zone_name", zone_name)
-            curve_frames.append(curves_df)
+                curves_df = mad_result_to_curves_dataframe(mad, r_vals, observed=observed)
+                curves_df.insert(0, "curve_family", fam)
+                curves_df.insert(0, "active_zone_name", zone_name)
+                curve_frames.append(curves_df)
 
-    summary_path = out_dir / "ripley_l12_mad_summary.csv"
-    curves_path = out_dir / "ripley_l12_mad_curves.csv"
+        if write_figures and figures_dir is not None:
+            for r_range, mad_results in mad_by_range.items():
+                if not mad_results:
+                    continue
+                suffix = "" if r_range == "full" else f"_{r_range.replace('-', '_')}"
+                _plot_mad_panels(
+                    mad_results=mad_results,
+                    output_path=figures_dir / f"ripley_{fam}_mad_vs_nulls{suffix}.png",
+                    title=f"{figure_title_prefix} | {value_label} | r-range={r_range}",
+                    observed_label=f"Observed {value_label}",
+                    value_label=value_label,
+                )
+
+    summary_path = out_dir / "ripley_mad_summary.csv"
+    curves_path = out_dir / "ripley_mad_curves.csv"
     pd.DataFrame(summary_rows).to_csv(summary_path, index=False)
     pd.concat(curve_frames, ignore_index=True).to_csv(curves_path, index=False)
-
-    if write_figures and figures_dir is not None:
-        for r_range, mad_results in mad_by_range.items():
-            if not mad_results:
-                continue
-            suffix = "" if r_range == "full" else f"_{r_range.replace('-', '_')}"
-            _plot_mad_panels(
-                mad_results=mad_results,
-                output_path=figures_dir / f"ripley_l12_mad_vs_nulls{suffix}.png",
-                title=f"{figure_title} | r-range={r_range}",
-            )
     return summary_path, curves_path
 
 
@@ -630,14 +677,15 @@ def build_monomer_dimer_individual_curves_table(
     *,
     zone_name: str,
     r_vals: np.ndarray,
-    observed_l12: np.ndarray,
-    perm_curves: np.ndarray,
-    seg_greedy_curves: np.ndarray,
+    observed_by_family: dict[str, np.ndarray],
+    perm_curves_by_family: dict[str, np.ndarray],
+    seg_greedy_curves_by_family: dict[str, np.ndarray],
     n_monomer: int,
     n_dimer: int,
     window_volume_nm3: float,
 ) -> pd.DataFrame:
-    """Long table of every individual L₁₂ curve (observed + all control replicates)."""
+    """Long table of every individual curve (observed + all control replicates), for every
+    family in ``ALL_FAMILIES`` (distinguished by a ``curve_family`` column)."""
     extras = {
         "active_zone_name": zone_name,
         "window_mode": WINDOW_MODE,
@@ -645,26 +693,33 @@ def build_monomer_dimer_individual_curves_table(
         "n_dimer": int(n_dimer),
         "window_volume_nm3": float(window_volume_nm3),
     }
-    frames = [
-        curves_matrix_to_long_dataframe(
-            np.atleast_2d(observed_l12),
-            r_vals,
-            curve_type="observed",
-            extra_cols=extras,
-        ),
-        curves_matrix_to_long_dataframe(
-            perm_curves,
-            r_vals,
-            curve_type="label_permutation",
-            extra_cols=extras,
-        ),
-        curves_matrix_to_long_dataframe(
-            seg_greedy_curves,
-            r_vals,
-            curve_type="segregation_greedy",
-            extra_cols=extras,
-        ),
-    ]
+    frames: list[pd.DataFrame] = []
+    for fam in observed_by_family:
+        fam_extras = {**extras, "curve_family": fam}
+        frames.append(
+            curves_matrix_to_long_dataframe(
+                np.atleast_2d(observed_by_family[fam]),
+                r_vals,
+                curve_type="observed",
+                extra_cols=fam_extras,
+            )
+        )
+        frames.append(
+            curves_matrix_to_long_dataframe(
+                perm_curves_by_family[fam],
+                r_vals,
+                curve_type="label_permutation",
+                extra_cols=fam_extras,
+            )
+        )
+        frames.append(
+            curves_matrix_to_long_dataframe(
+                seg_greedy_curves_by_family[fam],
+                r_vals,
+                curve_type="segregation_greedy",
+                extra_cols=fam_extras,
+            )
+        )
     nonempty = [f for f in frames if not f.empty]
     if not nonempty:
         return pd.DataFrame()
@@ -675,64 +730,84 @@ def build_monomer_dimer_prism_table(
     *,
     zone_name: str,
     r_vals: np.ndarray,
-    observed_l12: np.ndarray,
-    perm_curves: np.ndarray,
-    seg_greedy_curves: np.ndarray,
+    observed_by_family: dict[str, np.ndarray],
+    perm_curves_by_family: dict[str, np.ndarray],
+    seg_greedy_curves_by_family: dict[str, np.ndarray],
     n_monomer: int,
     n_dimer: int,
     n_perm: int,
     n_segregation: int,
     window_volume_nm3: float,
 ) -> pd.DataFrame:
-    """Per-zone Prism table: observed L₁₂ plus label-permutation and segregation controls."""
-    perm_lo, perm_mean, perm_hi = _percentile_band(perm_curves)
-    perm_sd = _prism_sd_envelope_columns(perm_curves, r_vals, prefix="control_L12")
-    seg = _segregation_band_columns(
-        seg_greedy_curves, r_vals, prefix="segregation_greedy_L12"
-    )
+    """Per-zone Prism table: observed value plus label-permutation and segregation
+    controls, for every family in ``ALL_FAMILIES``. Column names for the ``l12`` family
+    (``observed_L12``, ``control_L12_*``, ``segregation_greedy_L12_*``) are unchanged from
+    before the six-family extension.
+    """
     n_r = len(r_vals)
-    if len(perm_lo) != n_r:
-        nan = np.full(n_r, np.nan)
-        perm_lo = perm_mean = perm_hi = nan
+    per_family: dict[str, dict] = {}
+    for fam in observed_by_family:
+        tag = _family_tag(fam)
+        perm_lo, perm_mean, perm_hi = _percentile_band(perm_curves_by_family[fam])
+        perm_sd = _prism_sd_envelope_columns(
+            perm_curves_by_family[fam], r_vals, prefix=f"control_{tag}"
+        )
+        if len(perm_lo) != n_r:
+            nan = np.full(n_r, np.nan)
+            perm_lo = perm_mean = perm_hi = nan
+        seg = _segregation_band_columns(
+            seg_greedy_curves_by_family[fam], r_vals, prefix=f"segregation_greedy_{tag}"
+        )
+        per_family[fam] = {"tag": tag, "perm_sd": perm_sd, "perm_lo": perm_lo, "perm_hi": perm_hi, "seg": seg}
 
     rows: list[dict] = []
     for i, r_nm in enumerate(r_vals):
-        rows.append(
+        row: dict = {
+            "active_zone_name": zone_name,
+            "window_mode": WINDOW_MODE,
+            "r_nm": float(r_nm),
+        }
+        for fam, data in per_family.items():
+            tag = data["tag"]
+            perm_sd = data["perm_sd"]
+            seg = data["seg"]
+            row.update(
+                {
+                    f"observed_{tag}": float(observed_by_family[fam][i]),
+                    f"control_{tag}_mean": float(perm_sd[f"control_{tag}_mean"][i]),
+                    f"control_{tag}_sd": float(perm_sd[f"control_{tag}_sd"][i]),
+                    f"control_{tag}_sd_envelope_lo": float(perm_sd[f"control_{tag}_sd_envelope_lo"][i]),
+                    f"control_{tag}_sd_envelope_hi": float(perm_sd[f"control_{tag}_sd_envelope_hi"][i]),
+                    f"control_{tag}_sem": float(perm_sd[f"control_{tag}_sem"][i]),
+                    f"control_{tag}_sem_envelope_lo": float(perm_sd[f"control_{tag}_sem_envelope_lo"][i]),
+                    f"control_{tag}_sem_envelope_hi": float(perm_sd[f"control_{tag}_sem_envelope_hi"][i]),
+                    f"control_{tag}_envelope_lo": float(data["perm_lo"][i]),
+                    f"control_{tag}_envelope_hi": float(data["perm_hi"][i]),
+                    f"segregation_greedy_{tag}_mean": float(seg[f"segregation_greedy_{tag}_mean"][i]),
+                    f"segregation_greedy_{tag}_sd": float(seg[f"segregation_greedy_{tag}_sd"][i]),
+                    f"segregation_greedy_{tag}_sd_envelope_lo": float(
+                        seg[f"segregation_greedy_{tag}_sd_envelope_lo"][i]
+                    ),
+                    f"segregation_greedy_{tag}_sd_envelope_hi": float(
+                        seg[f"segregation_greedy_{tag}_sd_envelope_hi"][i]
+                    ),
+                    f"segregation_greedy_{tag}_sem": float(seg[f"segregation_greedy_{tag}_sem"][i]),
+                    f"segregation_greedy_{tag}_sem_envelope_lo": float(
+                        seg[f"segregation_greedy_{tag}_sem_envelope_lo"][i]
+                    ),
+                    f"segregation_greedy_{tag}_sem_envelope_hi": float(
+                        seg[f"segregation_greedy_{tag}_sem_envelope_hi"][i]
+                    ),
+                    f"segregation_greedy_{tag}_envelope_lo": float(
+                        seg[f"segregation_greedy_{tag}_envelope_lo"][i]
+                    ),
+                    f"segregation_greedy_{tag}_envelope_hi": float(
+                        seg[f"segregation_greedy_{tag}_envelope_hi"][i]
+                    ),
+                }
+            )
+        row.update(
             {
-                "active_zone_name": zone_name,
-                "window_mode": WINDOW_MODE,
-                "r_nm": float(r_nm),
-                "observed_L12": float(observed_l12[i]),
-                "control_L12_mean": float(perm_sd["control_L12_mean"][i]),
-                "control_L12_sd": float(perm_sd["control_L12_sd"][i]),
-                "control_L12_sd_envelope_lo": float(perm_sd["control_L12_sd_envelope_lo"][i]),
-                "control_L12_sd_envelope_hi": float(perm_sd["control_L12_sd_envelope_hi"][i]),
-                "control_L12_sem": float(perm_sd["control_L12_sem"][i]),
-                "control_L12_sem_envelope_lo": float(perm_sd["control_L12_sem_envelope_lo"][i]),
-                "control_L12_sem_envelope_hi": float(perm_sd["control_L12_sem_envelope_hi"][i]),
-                "control_L12_envelope_lo": float(perm_lo[i]),
-                "control_L12_envelope_hi": float(perm_hi[i]),
-                "segregation_greedy_L12_mean": float(seg["segregation_greedy_L12_mean"][i]),
-                "segregation_greedy_L12_sd": float(seg["segregation_greedy_L12_sd"][i]),
-                "segregation_greedy_L12_sd_envelope_lo": float(
-                    seg["segregation_greedy_L12_sd_envelope_lo"][i]
-                ),
-                "segregation_greedy_L12_sd_envelope_hi": float(
-                    seg["segregation_greedy_L12_sd_envelope_hi"][i]
-                ),
-                "segregation_greedy_L12_sem": float(seg["segregation_greedy_L12_sem"][i]),
-                "segregation_greedy_L12_sem_envelope_lo": float(
-                    seg["segregation_greedy_L12_sem_envelope_lo"][i]
-                ),
-                "segregation_greedy_L12_sem_envelope_hi": float(
-                    seg["segregation_greedy_L12_sem_envelope_hi"][i]
-                ),
-                "segregation_greedy_L12_envelope_lo": float(
-                    seg["segregation_greedy_L12_envelope_lo"][i]
-                ),
-                "segregation_greedy_L12_envelope_hi": float(
-                    seg["segregation_greedy_L12_envelope_hi"][i]
-                ),
                 "n_monomer": int(n_monomer),
                 "n_dimer": int(n_dimer),
                 "n_permutations": int(n_perm),
@@ -742,14 +817,21 @@ def build_monomer_dimer_prism_table(
                 "window_volume_nm3": float(window_volume_nm3),
             }
         )
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
 def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
-    """Pooled mean ± SD of observed and control L₁₂ across zones, per tomogram set.
+    """Pooled mean ± SD of observed/control/segregation curves across zones, per tomogram
+    set, for every family in ``ALL_FAMILIES``.
 
-    Reports both L-space mean±SD/SEM (``*_mean``, ``*_sd_*``) and K-space mean±SD/SEM
-    mapped to L (``*_mean_from_k``, ``*_sd_*_from_k``, ``*_sem_*_from_k``).
+    For L-families (``l12``, ``l21``, ``l_combined``), reports both L-space mean±SD/SEM
+    (``*_mean``, ``*_sd_*``) and K-space mean±SD/SEM mapped to L (``*_mean_from_k``,
+    ``*_sd_*_from_k``, ``*_sem_*_from_k``) — the K-scale version is the statistically sound
+    one (see ``ripley_library``'s K→L pooling docs); the L-space version is kept as a
+    reference. G-families (``g12``, ``g21``, ``g_combined``) get only the direct treatment —
+    g is a linear ratio, not a nonlinear transform of K, so no K-scale detour is needed.
+    Column names for the ``l12`` family are unchanged from before the six-family extension.
     """
     if df.empty:
         return pd.DataFrame()
@@ -761,143 +843,106 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
 
     rows: list[dict] = []
     for set_name, sub in df.groupby("set_name", sort=False):
-        r_vals, obs_curves = _extract_curves_matrix(sub, "l12")
-        if len(obs_curves) == 0:
-            continue
-        _, ctrl_curves = _extract_curves_matrix(sub, "perm_l12_mean")
-        _, seg_curves = _extract_curves_matrix(sub, "seg_greedy_l12_mean")
+        anchor_r_vals: np.ndarray | None = None
+        family_data: dict[str, dict] = {}
+        for fam in ALL_FAMILIES:
+            tag = _family_tag(fam)
+            r_vals, obs_curves = _extract_curves_matrix(sub, fam)
+            if len(obs_curves) == 0:
+                continue
+            _, ctrl_curves = _extract_curves_matrix(sub, f"perm_{fam}_mean")
+            _, seg_curves = _extract_curves_matrix(sub, f"seg_greedy_{fam}_mean")
 
-        obs_sd = _prism_sd_envelope_columns(obs_curves, r_vals, prefix="observed_L12")
-        obs_from_k = prism_sd_envelope_columns_from_averaged_k12(
-            obs_curves, r_vals, prefix="observed_L12"
-        )
-        if len(ctrl_curves):
-            ctrl_sd = _prism_sd_envelope_columns(ctrl_curves, r_vals, prefix="control_L12")
-            ctrl_from_k = prism_sd_envelope_columns_from_averaged_k12(
-                ctrl_curves, r_vals, prefix="control_L12"
-            )
-        else:
-            ctrl_sd = _prism_sd_envelope_columns(
-                np.empty((0, len(r_vals))), r_vals, prefix="control_L12"
-            )
-            ctrl_from_k = prism_sd_envelope_columns_from_averaged_k12(
-                np.empty((0, len(r_vals))), r_vals, prefix="control_L12"
-            )
-        if len(seg_curves):
+            is_l_family = fam in L_FAMILIES
+            obs_sd = _prism_sd_envelope_columns(obs_curves, r_vals, prefix=f"observed_{tag}")
+            ctrl_sd = _prism_sd_envelope_columns(ctrl_curves, r_vals, prefix=f"control_{tag}")
             seg_sd = _prism_sd_envelope_columns(
-                seg_curves, r_vals, prefix="segregation_greedy_L12"
+                seg_curves, r_vals, prefix=f"segregation_greedy_{tag}"
             )
-            seg_from_k = prism_sd_envelope_columns_from_averaged_k12(
-                seg_curves, r_vals, prefix="segregation_greedy_L12"
-            )
-        else:
-            seg_sd = _prism_sd_envelope_columns(
-                np.empty((0, len(r_vals))), r_vals, prefix="segregation_greedy_L12"
-            )
-            seg_from_k = prism_sd_envelope_columns_from_averaged_k12(
-                np.empty((0, len(r_vals))), r_vals, prefix="segregation_greedy_L12"
-            )
+            obs_from_k = ctrl_from_k = seg_from_k = None
+            if is_l_family:
+                obs_from_k = prism_sd_envelope_columns_from_averaged_k12(
+                    obs_curves, r_vals, prefix=f"observed_{tag}"
+                )
+                ctrl_from_k = prism_sd_envelope_columns_from_averaged_k12(
+                    ctrl_curves, r_vals, prefix=f"control_{tag}"
+                )
+                seg_from_k = prism_sd_envelope_columns_from_averaged_k12(
+                    seg_curves, r_vals, prefix=f"segregation_greedy_{tag}"
+                )
+
+            family_data[fam] = {
+                "tag": tag,
+                "is_l_family": is_l_family,
+                "obs_sd": obs_sd,
+                "ctrl_sd": ctrl_sd,
+                "seg_sd": seg_sd,
+                "obs_from_k": obs_from_k,
+                "ctrl_from_k": ctrl_from_k,
+                "seg_from_k": seg_from_k,
+                "n_zone_curves": len(obs_curves),
+            }
+            if anchor_r_vals is None:
+                anchor_r_vals = r_vals
+
+        if anchor_r_vals is None:
+            continue
 
         n_tomograms = int(sub["tomogram_name"].nunique()) if "tomogram_name" in sub.columns else 0
         n_zones = int(
             sub[["tomogram_name", "alignment_dir", "active_zone_name"]].drop_duplicates().shape[0]
         )
 
-        for i, r_nm in enumerate(r_vals):
-            rows.append(
-                {
-                    "set_name": set_name,
-                    "window_mode": WINDOW_MODE,
-                    "r_nm": float(r_nm),
-                    "observed_L12_mean": float(obs_sd["observed_L12_mean"][i]),
-                    "observed_L12_mean_from_k": float(obs_from_k["observed_L12_mean_from_k"][i]),
-                    "observed_L12_sd": float(obs_sd["observed_L12_sd"][i]),
-                    "observed_L12_sd_envelope_lo": float(obs_sd["observed_L12_sd_envelope_lo"][i]),
-                    "observed_L12_sd_envelope_hi": float(obs_sd["observed_L12_sd_envelope_hi"][i]),
-                    "observed_L12_sd_from_k": float(obs_from_k["observed_L12_sd_from_k"][i]),
-                    "observed_L12_sd_envelope_lo_from_k": float(
-                        obs_from_k["observed_L12_sd_envelope_lo_from_k"][i]
-                    ),
-                    "observed_L12_sd_envelope_hi_from_k": float(
-                        obs_from_k["observed_L12_sd_envelope_hi_from_k"][i]
-                    ),
-                    "observed_L12_sem": float(obs_sd["observed_L12_sem"][i]),
-                    "observed_L12_sem_envelope_lo": float(obs_sd["observed_L12_sem_envelope_lo"][i]),
-                    "observed_L12_sem_envelope_hi": float(obs_sd["observed_L12_sem_envelope_hi"][i]),
-                    "observed_L12_sem_from_k": float(obs_from_k["observed_L12_sem_from_k"][i]),
-                    "observed_L12_sem_envelope_lo_from_k": float(
-                        obs_from_k["observed_L12_sem_envelope_lo_from_k"][i]
-                    ),
-                    "observed_L12_sem_envelope_hi_from_k": float(
-                        obs_from_k["observed_L12_sem_envelope_hi_from_k"][i]
-                    ),
-                    "control_L12_mean": float(ctrl_sd["control_L12_mean"][i]),
-                    "control_L12_mean_from_k": float(ctrl_from_k["control_L12_mean_from_k"][i]),
-                    "control_L12_sd": float(ctrl_sd["control_L12_sd"][i]),
-                    "control_L12_sd_envelope_lo": float(ctrl_sd["control_L12_sd_envelope_lo"][i]),
-                    "control_L12_sd_envelope_hi": float(ctrl_sd["control_L12_sd_envelope_hi"][i]),
-                    "control_L12_sd_from_k": float(ctrl_from_k["control_L12_sd_from_k"][i]),
-                    "control_L12_sd_envelope_lo_from_k": float(
-                        ctrl_from_k["control_L12_sd_envelope_lo_from_k"][i]
-                    ),
-                    "control_L12_sd_envelope_hi_from_k": float(
-                        ctrl_from_k["control_L12_sd_envelope_hi_from_k"][i]
-                    ),
-                    "control_L12_sem": float(ctrl_sd["control_L12_sem"][i]),
-                    "control_L12_sem_envelope_lo": float(ctrl_sd["control_L12_sem_envelope_lo"][i]),
-                    "control_L12_sem_envelope_hi": float(ctrl_sd["control_L12_sem_envelope_hi"][i]),
-                    "control_L12_sem_from_k": float(ctrl_from_k["control_L12_sem_from_k"][i]),
-                    "control_L12_sem_envelope_lo_from_k": float(
-                        ctrl_from_k["control_L12_sem_envelope_lo_from_k"][i]
-                    ),
-                    "control_L12_sem_envelope_hi_from_k": float(
-                        ctrl_from_k["control_L12_sem_envelope_hi_from_k"][i]
-                    ),
-                    "segregation_greedy_L12_mean": float(seg_sd["segregation_greedy_L12_mean"][i]),
-                    "segregation_greedy_L12_mean_from_k": float(
-                        seg_from_k["segregation_greedy_L12_mean_from_k"][i]
-                    ),
-                    "segregation_greedy_L12_sd": float(seg_sd["segregation_greedy_L12_sd"][i]),
-                    "segregation_greedy_L12_sd_envelope_lo": float(
-                        seg_sd["segregation_greedy_L12_sd_envelope_lo"][i]
-                    ),
-                    "segregation_greedy_L12_sd_envelope_hi": float(
-                        seg_sd["segregation_greedy_L12_sd_envelope_hi"][i]
-                    ),
-                    "segregation_greedy_L12_sd_from_k": float(
-                        seg_from_k["segregation_greedy_L12_sd_from_k"][i]
-                    ),
-                    "segregation_greedy_L12_sd_envelope_lo_from_k": float(
-                        seg_from_k["segregation_greedy_L12_sd_envelope_lo_from_k"][i]
-                    ),
-                    "segregation_greedy_L12_sd_envelope_hi_from_k": float(
-                        seg_from_k["segregation_greedy_L12_sd_envelope_hi_from_k"][i]
-                    ),
-                    "segregation_greedy_L12_sem": float(seg_sd["segregation_greedy_L12_sem"][i]),
-                    "segregation_greedy_L12_sem_envelope_lo": float(
-                        seg_sd["segregation_greedy_L12_sem_envelope_lo"][i]
-                    ),
-                    "segregation_greedy_L12_sem_envelope_hi": float(
-                        seg_sd["segregation_greedy_L12_sem_envelope_hi"][i]
-                    ),
-                    "segregation_greedy_L12_sem_from_k": float(
-                        seg_from_k["segregation_greedy_L12_sem_from_k"][i]
-                    ),
-                    "segregation_greedy_L12_sem_envelope_lo_from_k": float(
-                        seg_from_k["segregation_greedy_L12_sem_envelope_lo_from_k"][i]
-                    ),
-                    "segregation_greedy_L12_sem_envelope_hi_from_k": float(
-                        seg_from_k["segregation_greedy_L12_sem_envelope_hi_from_k"][i]
-                    ),
-                    "n_zone_curves": int(len(obs_curves)),
-                    "n_tomograms": n_tomograms,
-                    "n_active_zones": n_zones,
-                }
-            )
+        for i, r_nm in enumerate(anchor_r_vals):
+            row: dict = {
+                "set_name": set_name,
+                "window_mode": WINDOW_MODE,
+                "r_nm": float(r_nm),
+                "n_tomograms": n_tomograms,
+                "n_active_zones": n_zones,
+            }
+            for fam, data in family_data.items():
+                tag = data["tag"]
+                if fam == "l12":
+                    row["n_zone_curves"] = int(data["n_zone_curves"])
+                row[f"n_zone_curves_{tag}"] = int(data["n_zone_curves"])
+                for role, sd in (
+                    ("observed", data["obs_sd"]),
+                    ("control", data["ctrl_sd"]),
+                    ("segregation_greedy", data["seg_sd"]),
+                ):
+                    prefix = f"{role}_{tag}"
+                    row[f"{prefix}_mean"] = float(sd[f"{prefix}_mean"][i])
+                    row[f"{prefix}_sd"] = float(sd[f"{prefix}_sd"][i])
+                    row[f"{prefix}_sd_envelope_lo"] = float(sd[f"{prefix}_sd_envelope_lo"][i])
+                    row[f"{prefix}_sd_envelope_hi"] = float(sd[f"{prefix}_sd_envelope_hi"][i])
+                    row[f"{prefix}_sem"] = float(sd[f"{prefix}_sem"][i])
+                    row[f"{prefix}_sem_envelope_lo"] = float(sd[f"{prefix}_sem_envelope_lo"][i])
+                    row[f"{prefix}_sem_envelope_hi"] = float(sd[f"{prefix}_sem_envelope_hi"][i])
+                if data["is_l_family"]:
+                    for role, from_k in (
+                        ("observed", data["obs_from_k"]),
+                        ("control", data["ctrl_from_k"]),
+                        ("segregation_greedy", data["seg_from_k"]),
+                    ):
+                        prefix = f"{role}_{tag}"
+                        row[f"{prefix}_mean_from_k"] = float(from_k[f"{prefix}_mean_from_k"][i])
+                        row[f"{prefix}_sd_from_k"] = float(from_k[f"{prefix}_sd_from_k"][i])
+                        row[f"{prefix}_sd_envelope_lo_from_k"] = float(
+                            from_k[f"{prefix}_sd_envelope_lo_from_k"][i]
+                        )
+                        row[f"{prefix}_sd_envelope_hi_from_k"] = float(
+                            from_k[f"{prefix}_sd_envelope_hi_from_k"][i]
+                        )
+                        row[f"{prefix}_sem_from_k"] = float(from_k[f"{prefix}_sem_from_k"][i])
+                        row[f"{prefix}_sem_envelope_lo_from_k"] = float(
+                            from_k[f"{prefix}_sem_envelope_lo_from_k"][i]
+                        )
+                        row[f"{prefix}_sem_envelope_hi_from_k"] = float(
+                            from_k[f"{prefix}_sem_envelope_hi_from_k"][i]
+                        )
+            rows.append(row)
     return pd.DataFrame(rows)
-
-
-MC_DIAGNOSTIC_POINTS = 4000
 
 
 def plot_monomer_dimer_diagnostic(
@@ -909,33 +954,25 @@ def plot_monomer_dimer_diagnostic(
     dimer_coords: np.ndarray,
     az_segmentation: dict,
     window: RipleyWindow3D,
+    grid_points: np.ndarray,
+    grid_spacing_nm: float,
     output_path: Path,
     dropped_monomer_coords: np.ndarray | None = None,
     dropped_dimer_coords: np.ndarray | None = None,
     membrane_max_points: int = 4000,
-    n_mc_diagnostic_points: int = MC_DIAGNOSTIC_POINTS,
     n_z_slices: int = 5,
 ) -> Path | None:
     """
-    QC figure: monomer AuNPs, dimer AuNPs, pre/post membrane surfaces, and the
-    ``synaptic_cleft_az_hull`` convex hull used as the Ripley window.
+    Thin wrapper around ``plot_ripley_window_geometry_diagnostic`` (shared with the
+    AZ-center analysis): monomer AuNPs, dimer AuNPs, pre/post membrane surfaces, the
+    ``synaptic_cleft_az_hull`` convex hull used as the Ripley window, and the deterministic
+    edge-correction grid points (the literal points the analysis divides by, not a separate
+    Monte-Carlo preview of the window).
 
-    Also overlays a Monte-Carlo point cloud sampled uniformly inside the hull, colored by
-    whether each point lies in the effective Ripley window (``window``): hull membership,
-    additionally restricted to the angle-betweenness region when
-    ``window.use_angle_betweenness`` is set — i.e. this reflects whichever window
-    definition was actually used for the analysis, not just the raw hull.
-
-    ``dropped_monomer_coords``/``dropped_dimer_coords`` (from ``drop_aunps_outside_hull``)
-    are highlighted separately, distinct from the analyzed monomer/dimer AuNPs.
-
-    XY projection only, split into ``n_z_slices`` equal-width bands through z so points at
-    different depths don't overplot each other. Each panel's hull outline is the 2D hull of
-    only the (densely sampled) hull-defining points within that panel's z-band, so it tracks
-    the true local cross-section instead of the whole hull's full-depth XY shadow.
+    ``dropped_monomer_coords``/``dropped_dimer_coords`` (AuNPs outside the cleft hull, always
+    dropped before the Ripley computation) are highlighted separately, distinct from the
+    analyzed monomer/dimer AuNPs.
     """
-    tomogram_path = Path(tomogram_path)
-    alignment_dir = require_alignment_dir(alignment_dir)
     monomer_coords = np.atleast_2d(np.asarray(monomer_coords, dtype=float))
     dimer_coords = np.atleast_2d(np.asarray(dimer_coords, dtype=float))
     dropped_coords = np.vstack(
@@ -948,119 +985,90 @@ def plot_monomer_dimer_diagnostic(
             else np.zeros((0, 3)),
         ]
     )
-
     pre_outer = np.atleast_2d(np.asarray(az_segmentation.get("presynaptic_outer_coords", []), dtype=float))
     post_outer = np.atleast_2d(np.asarray(az_segmentation.get("postsynaptic_outer_coords", []), dtype=float))
 
-    hull = window.hull
-    hull_pts = hull.points
+    return plot_ripley_window_geometry_diagnostic(
+        tomogram_path,
+        alignment_dir,
+        zone_name,
+        point_groups=[
+            {"coords": monomer_coords, "label": "monomer AuNPs", "color": "tab:purple", "marker": "o", "size": 18},
+            {"coords": dimer_coords, "label": "dimer AuNPs", "color": "tab:green", "marker": "^", "size": 28},
+        ],
+        az_segmentation=az_segmentation,
+        window=window,
+        grid_points=grid_points,
+        grid_spacing_nm=grid_spacing_nm,
+        output_path=output_path,
+        dropped_coords=dropped_coords,
+        title_lines=[
+            f"Monomer ({len(monomer_coords)}) vs dimer ({len(dimer_coords)}) AuNPs "
+            f"({len(pre_outer)}+{len(post_outer)} membrane pts)"
+        ],
+        membrane_max_points=membrane_max_points,
+        n_z_slices=n_z_slices,
+        include_3d_panel=True,
+        print_prefix="Monomer/dimer diagnostic plot",
+    )
 
-    pre_plot = _downsample_points(pre_outer, membrane_max_points, seed=1)
-    post_plot = _downsample_points(post_outer, membrane_max_points, seed=2)
 
-    mc_rng = np.random.default_rng(3)
-    mc_points = _sample_uniform_points_in_hull(hull, n_mc_diagnostic_points, mc_rng)
-    if len(mc_points):
-        mc_pass_mask = _window_contains(window, mc_points)
-    else:
-        mc_pass_mask = np.zeros(len(mc_points), dtype=bool)
-    mc_pass = mc_points[mc_pass_mask]
-    mc_fail = mc_points[~mc_pass_mask]
-    mc_pass_frac = float(np.mean(mc_pass_mask)) if len(mc_points) else float("nan")
-
-    output_path = Path(output_path)
+def _plot_family_observed_vs_controls(
+    *,
+    r_vals: np.ndarray,
+    observed: np.ndarray,
+    perm_curves: np.ndarray,
+    seg_greedy_curves: np.ndarray,
+    fam: str,
+    tomogram_name: str,
+    zone_name: str,
+    n_monomer: int,
+    n_dimer: int,
+    n_perm: int,
+    n_segregation: int,
+    r_max_nm: float,
+    output_path: Path,
+) -> None:
+    """Per-zone observed-vs-null figure for one family (a member of ``ALL_FAMILIES``)."""
+    label = _family_tag(fam)
+    perm_lo, perm_band_mean, perm_hi = _percentile_band(perm_curves)
+    seg_lo, seg_band_mean, seg_hi = _percentile_band(seg_greedy_curves)
+    fig, ax = plt.subplots(figsize=(6.5, 4.5))
+    ax.plot(r_vals, observed, color="C0", lw=2, label=f"Observed monomer→dimer {label}")
+    if len(perm_band_mean) == len(r_vals):
+        ax.plot(r_vals, perm_band_mean, color="0.45", lw=1.5, label="Label-permutation mean")
+        ax.fill_between(
+            r_vals,
+            perm_lo,
+            perm_hi,
+            color="0.8",
+            alpha=0.8,
+            label=f"Label-perm {RIPLEY_PERCENTILE_LO:g}–{RIPLEY_PERCENTILE_HI:g}%",
+        )
+    if len(seg_band_mean) == len(r_vals):
+        ax.plot(r_vals, seg_band_mean, color="C3", lw=1.5, label="Greedy segregation mean")
+        ax.fill_between(
+            r_vals,
+            seg_lo,
+            seg_hi,
+            color="C3",
+            alpha=0.2,
+            label=f"Greedy seg {RIPLEY_PERCENTILE_LO:g}–{RIPLEY_PERCENTILE_HI:g}%",
+        )
+    ax.axhline(1.0 if fam in G_FAMILIES else 0.0, color="0.5", ls="--", lw=0.8)
+    ax.set_xlabel("r (nm)")
+    ax.set_ylabel(f"{label}(r)")
+    ax.set_title(
+        f"{tomogram_name} | {zone_name}\n"
+        f"monomer ({n_monomer}) vs dimer ({n_dimer}) | {label} | "
+        f"{int(n_perm)} label perms, {int(n_segregation)} greedy seg reps"
+    )
+    ax.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else r_max_nm)
+    ax.legend(loc="best", fontsize=7)
+    fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    def _scatter(ax, pts, *, z_lo, z_hi, **kwargs):
-        pts = pts[(pts[:, 2] >= z_lo) & (pts[:, 2] <= z_hi)] if len(pts) else pts
-        if len(pts) == 0:
-            return
-        ax.scatter(pts[:, 0], pts[:, 1], **kwargs)
-
-    n_z_slices = max(1, int(n_z_slices))
-    z_values = np.concatenate(
-        [arr[:, 2] for arr in (hull_pts, pre_outer, post_outer, monomer_coords, dimer_coords, dropped_coords) if len(arr)]
-    )
-    z_min, z_max = float(z_values.min()), float(z_values.max())
-    if z_max <= z_min:
-        z_max = z_min + 1.0
-    z_edges = np.linspace(z_min, z_max, n_z_slices + 1)
-
-    fig, axes = plt.subplots(1, n_z_slices, figsize=(4.0 * n_z_slices, 4.5), squeeze=False)
-    axes = axes[0]
-
-    for k, ax in enumerate(axes):
-        z_lo, z_hi = float(z_edges[k]), float(z_edges[k + 1])
-        # Hull footprint restricted to this z-band: the 2D hull of only the (densely
-        # sampled) defining points whose z falls in this band, so the outline tracks the
-        # true local cross-section instead of the whole hull's full-depth XY shadow.
-        band_hull_pts = hull_pts[(hull_pts[:, 2] >= z_lo) & (hull_pts[:, 2] <= z_hi)]
-        if len(band_hull_pts) >= 3:
-            try:
-                band_hull_2d = ConvexHull(band_hull_pts[:, [0, 1]])
-                band_hull_vertices = band_hull_2d.points[band_hull_2d.vertices]
-                poly = plt.Polygon(
-                    band_hull_vertices, closed=True, fill=True, facecolor="tab:green",
-                    edgecolor="tab:green", alpha=0.08, linewidth=1.0,
-                    label="cleft hull (XY footprint, this z-band)",
-                )
-                ax.add_patch(poly)
-            except Exception:
-                pass
-        _scatter(
-            ax, mc_pass, z_lo=z_lo, z_hi=z_hi, s=4, c="mediumseagreen", alpha=0.3,
-            label="MC: passes angle test", zorder=1,
-        )
-        _scatter(
-            ax, mc_fail, z_lo=z_lo, z_hi=z_hi, s=4, c="lightcoral", alpha=0.3,
-            label="MC: fails angle test", zorder=1,
-        )
-        _scatter(ax, pre_plot, z_lo=z_lo, z_hi=z_hi, s=2, c="tab:blue", alpha=0.12, label="presynaptic membrane")
-        _scatter(ax, post_plot, z_lo=z_lo, z_hi=z_hi, s=2, c="tab:orange", alpha=0.12, label="postsynaptic membrane")
-        _scatter(
-            ax, monomer_coords, z_lo=z_lo, z_hi=z_hi, s=18, c="tab:purple", label="monomer AuNPs",
-            edgecolors="k", linewidths=0.3, zorder=5,
-        )
-        _scatter(
-            ax, dimer_coords, z_lo=z_lo, z_hi=z_hi, s=28, c="tab:green", marker="^", label="dimer AuNPs",
-            edgecolors="k", linewidths=0.3, zorder=5,
-        )
-        _scatter(
-            ax, dropped_coords, z_lo=z_lo, z_hi=z_hi, s=40, c="black", marker="x",
-            label="dropped (outside hull)", linewidths=1.5, zorder=6,
-        )
-        ax.set_xlabel("x (nm)")
-        if k == 0:
-            ax.set_ylabel("y (nm)")
-        ax.set_title(f"z: {z_lo:.0f}–{z_hi:.0f} nm")
-        ax.set_aspect("equal", adjustable="datalim")
-
-    legend_by_label: dict[str, object] = {}
-    for ax in axes:
-        handles, labels = ax.get_legend_handles_labels()
-        for handle, label in zip(handles, labels):
-            legend_by_label.setdefault(label, handle)
-    fig.legend(
-        list(legend_by_label.values()), list(legend_by_label.keys()),
-        loc="lower center", ncol=len(legend_by_label), fontsize=7,
-    )
-
-    dropped_line = (
-        f"\nDropped outside hull: {len(dropped_coords)} AuNP(s)" if len(dropped_coords) else ""
-    )
-    fig.suptitle(
-        f"{tomogram_path.name} | {zone_name}\n"
-        f"Monomer ({len(monomer_coords)}) vs dimer ({len(dimer_coords)}) AuNPs "
-        f"({len(pre_outer)}+{len(post_outer)} membrane pts)\n"
-        f"Angle-test MC acceptance: {mc_pass_frac:.1%} of hull volume "
-        f"({len(mc_pass)}/{len(mc_points)} sampled points)"
-        f"{dropped_line}"
-    )
-    fig.tight_layout(rect=(0.0, 0.06, 1.0, 0.88))
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"  Monomer/dimer diagnostic plot ({zone_name}) -> {output_path}")
-    return output_path
 
 
 def run_monomer_dimer_ripley_for_zone(
@@ -1076,12 +1084,17 @@ def run_monomer_dimer_ripley_for_zone(
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
-    use_angle_betweenness_window: bool = False,
-    drop_aunps_outside_hull: bool = False,
 ) -> dict[str, Path] | None:
-    """Observed monomer→dimer L₁₂ with label-permutation and greedy-segregation controls.
+    """Observed monomer/dimer K/L/g (see ``ALL_FAMILIES``: direct, reversed, and their
+    intensity-weighted combination) with label-permutation and greedy-segregation controls
+    for every family.
 
     Greedy segregation always uses the same replicate count as label permutation (``n_perm``).
+    AuNPs outside the Ripley window are always dropped before any statistic is computed. The
+    Ripley window is always restricted to the region of the synaptic-cleft hull that also
+    sits "between" the pre- and post-synaptic membranes (angle in-betweenness test), matching
+    the AZ-center Ripley analysis, since monomer/dimer AuNP positions are only meaningful
+    relative to the space between the two membranes.
     """
     tomogram_path = Path(tomogram_path)
     alignment_dir = require_alignment_dir(alignment_dir)
@@ -1108,13 +1121,11 @@ def run_monomer_dimer_ripley_for_zone(
     monomer_coords, _ = subset_aunps(loaded.meta, subset="monomer")
     dimer_coords, _ = subset_aunps(loaded.meta, subset="dimer")
 
-    az_segmentation: dict | None = None
-    if use_angle_betweenness_window or write_figures:
-        from .activezone import import_active_zone_segmentations
+    from .activezone import import_active_zone_segmentations
 
-        az_segmentation = import_active_zone_segmentations(
-            tomogram_path, alignment_dir=alignment_dir
-        ).get(zone_name)
+    az_segmentation = import_active_zone_segmentations(
+        tomogram_path, alignment_dir=alignment_dir
+    ).get(zone_name)
 
     rng = np.random.default_rng(seed)
     try:
@@ -1130,38 +1141,37 @@ def run_monomer_dimer_ripley_for_zone(
             post_membrane_coords=(
                 az_segmentation.get("postsynaptic_outer_coords") if az_segmentation is not None else None
             ),
-            use_angle_betweenness=use_angle_betweenness_window,
+            use_angle_betweenness=True,
             rng=rng,
         )
     except Exception as exc:
         print(f"  Skipping monomer/dimer Ripley for {zone_name}: {exc}")
         return None
 
+    # AuNPs outside the Ripley window are always dropped -- Ripley's edge correction and
+    # volume normalization are only valid for points observed inside the window, so
+    # out-of-hull points would bias every statistic rather than just look odd.
     # ``pool_keep_mask`` (pool order: monomer then dimer) also keeps the disk-re-read
     # STAR export in sync below.
-    dropped_monomer_coords = np.zeros((0, 3), dtype=float)
-    dropped_dimer_coords = np.zeros((0, 3), dtype=float)
-    pool_keep_mask: np.ndarray | None = None
-    if drop_aunps_outside_hull:
-        monomer_inside = _points_inside_hull(monomer_coords, window.hull)
-        dimer_inside = _points_inside_hull(dimer_coords, window.hull)
-        dropped_monomer_coords = monomer_coords[~monomer_inside]
-        dropped_dimer_coords = dimer_coords[~dimer_inside]
-        monomer_coords = monomer_coords[monomer_inside]
-        dimer_coords = dimer_coords[dimer_inside]
-        pool_keep_mask = np.concatenate([monomer_inside, dimer_inside])
-        if len(dropped_monomer_coords) or len(dropped_dimer_coords):
-            print(
-                f"  Dropping {len(dropped_monomer_coords)} monomer + "
-                f"{len(dropped_dimer_coords)} dimer AuNP(s) outside the cleft hull for {zone_name}"
-            )
+    monomer_inside = _points_inside_hull(monomer_coords, window.hull)
+    dimer_inside = _points_inside_hull(dimer_coords, window.hull)
+    dropped_monomer_coords = monomer_coords[~monomer_inside]
+    dropped_dimer_coords = dimer_coords[~dimer_inside]
+    monomer_coords = monomer_coords[monomer_inside]
+    dimer_coords = dimer_coords[dimer_inside]
+    pool_keep_mask = np.concatenate([monomer_inside, dimer_inside])
+    if len(dropped_monomer_coords) or len(dropped_dimer_coords):
+        print(
+            f"  Dropping {len(dropped_monomer_coords)} monomer + "
+            f"{len(dropped_dimer_coords)} dimer AuNP(s) outside the cleft hull for {zone_name}"
+        )
 
     n_monomer = len(monomer_coords)
     n_dimer = len(dimer_coords)
     if n_monomer < MIN_POINTS_PER_CLASS or n_dimer < MIN_POINTS_PER_CLASS:
         print(
             f"  Skipping monomer/dimer Ripley for {zone_name}: "
-            f"too few points (monomer={n_monomer}, dimer={n_dimer}; "
+            f"too few points (monomer={n_monomer}, dimer={n_dimer} inside the cleft hull; "
             f"need >= {MIN_POINTS_PER_CLASS} each)"
         )
         return None
@@ -1182,23 +1192,34 @@ def run_monomer_dimer_ripley_for_zone(
         leave=False,
     )
     try:
-        # Edge factors depend only on fixed pooled coordinates — estimate once and reuse
-        # for observed + greedy segregation (label-perm estimates its own pool factors).
-        edge_rng = np.random.default_rng(int(seed) + 7919)
-        pool_edge_factors = _isotropic_edge_factors_for_foci(
-            pool, r_vals, window, edge_rng
+        # Deterministic grid-based edge correction (matching the AZ-center Ripley analysis
+        # rather than Monte Carlo sampling) -- precomputed once for every pooled point as a
+        # potential focus in either direction, and reused for observed + both null
+        # generators. Also reconciles window.volume_nm3 with this grid's own volume estimate
+        # (same trick as the AZ-center analysis) so K's outer V/(n1*n2) scaling and the
+        # edge-factor denominator agree on an identical V.
+        grid_points = build_window_grid_points(window, MONOMER_DIMER_EDGE_GRID_SPACING_NM)
+        grid_volume_nm3 = float(len(grid_points)) * (MONOMER_DIMER_EDGE_GRID_SPACING_NM ** 3)
+        window = dataclasses_replace(window, volume_nm3=grid_volume_nm3)
+        pool_edge_factors = _isotropic_edge_factors_grid(
+            pool, r_vals, grid_points, MONOMER_DIMER_EDGE_GRID_SPACING_NM
         )
+
         pbar.set_postfix_str("observed", refresh=False)
-        observed_l12 = ripley_l12_from_points(
-            monomer_coords,
-            dimer_coords,
-            r_vals,
-            window,
-            rng,
+        k12_obs = cross_k12_3d_isotropic(
+            monomer_coords, dimer_coords, r_vals, window, rng,
             edge_factors=pool_edge_factors[:n_monomer],
         )
+        k21_obs = cross_k12_3d_isotropic(
+            dimer_coords, monomer_coords, r_vals, window, rng,
+            edge_factors=pool_edge_factors[n_monomer:],
+        )
+        observed = derive_symmetric_k_l_g_families(
+            k12_obs, k21_obs, n_monomer, n_dimer, r_vals, g_bin_width_nm=r_step_nm
+        )
         pbar.update(1)
-        perm_curves = label_permutation_l12_curves(
+
+        perm_k = label_permutation_k_bidirectional_curves(
             monomer_coords,
             dimer_coords,
             r_vals,
@@ -1206,10 +1227,16 @@ def run_monomer_dimer_ripley_for_zone(
             n_perm=n_perm_int,
             seed=seed,
             rng=rng,
+            n_workers=n_perm_workers,
             pbar=pbar if n_perm_int > 0 else None,
+            pool_edge_factors=pool_edge_factors,
         )
+        perm_all = derive_symmetric_k_l_g_families(
+            perm_k["k12"], perm_k["k21"], n_monomer, n_dimer, r_vals, g_bin_width_nm=r_step_nm
+        )
+
         seg_rng = np.random.default_rng(int(seed) + 1_000_000)
-        seg_greedy_curves = _greedy_segregation_l12_curves(
+        seg_k = _greedy_segregation_k_bidirectional_curves(
             pool,
             n_monomer,
             n_dimer,
@@ -1222,14 +1249,41 @@ def run_monomer_dimer_ripley_for_zone(
             n_workers=n_perm_workers,
             pbar=pbar if n_segregation_int > 0 else None,
         )
+        seg_all = derive_symmetric_k_l_g_families(
+            seg_k["k12"], seg_k["k21"], n_monomer, n_dimer, r_vals, g_bin_width_nm=r_step_nm
+        )
     finally:
         pbar.close()
-    _, perm_mean, _ = _percentile_band(perm_curves)
-    if len(perm_mean) != len(r_vals):
-        perm_mean = np.full(len(r_vals), np.nan)
-    _, seg_greedy_mean, _ = _percentile_band(seg_greedy_curves)
-    if len(seg_greedy_mean) != len(r_vals):
-        seg_greedy_mean = np.full(len(r_vals), np.nan)
+
+    # Past the radius where a focus's ball has swallowed the entire window, every K value
+    # feeding a shell's difference is forced onto the CSR reference curve by construction
+    # (see _isotropic_edge_factors_grid's docstring) — L correctly reflects this as L→0, but
+    # g's finite difference of two such saturated K values goes spuriously flat near 1
+    # instead of NaN, since pair_correlation_from_k_diff has no visibility into how much
+    # window is actually left. NaN out those shells using the real (fixed) monomer/dimer
+    # coordinates as the reliability yardstick for every curve, observed or null — a given
+    # null replicate's random class1/class2 labeling changes which points play the K12/K21
+    # role, but the window-visibility geometry is governed by where the real points sit, not
+    # by which label they're wearing in a given replicate.
+    g12_unreliable = g_shell_reliability_mask(
+        monomer_coords, grid_points, r_vals, bin_width_nm=r_step_nm
+    )
+    g21_unreliable = g_shell_reliability_mask(
+        dimer_coords, grid_points, r_vals, bin_width_nm=r_step_nm
+    )
+    g_combined_unreliable = g12_unreliable | g21_unreliable
+    for results in (observed, perm_all, seg_all):
+        results["g12"] = np.where(g12_unreliable, np.nan, results["g12"])
+        results["g21"] = np.where(g21_unreliable, np.nan, results["g21"])
+        results["g_combined"] = np.where(g_combined_unreliable, np.nan, results["g_combined"])
+
+    perm_mean_by_family: dict[str, np.ndarray] = {}
+    seg_mean_by_family: dict[str, np.ndarray] = {}
+    for fam in ALL_FAMILIES:
+        _, m, _ = _percentile_band(perm_all[fam])
+        perm_mean_by_family[fam] = m if len(m) == len(r_vals) else np.full(len(r_vals), np.nan)
+        _, m, _ = _percentile_band(seg_all[fam])
+        seg_mean_by_family[fam] = m if len(m) == len(r_vals) else np.full(len(r_vals), np.nan)
 
     tomogram_name = tomogram_path.name
     out_dir = (
@@ -1254,6 +1308,8 @@ def run_monomer_dimer_ripley_for_zone(
                     dimer_coords=dimer_coords,
                     az_segmentation=az_segmentation,
                     window=window,
+                    grid_points=grid_points,
+                    grid_spacing_nm=MONOMER_DIMER_EDGE_GRID_SPACING_NM,
                     dropped_monomer_coords=dropped_monomer_coords,
                     dropped_dimer_coords=dropped_dimer_coords,
                     output_path=figures_dir / "geometry_diagnostic.png",
@@ -1270,13 +1326,12 @@ def run_monomer_dimer_ripley_for_zone(
             monomer_star_pattern=monomer_star_pattern,
             dimer_star_pattern=dimer_star_pattern,
         )
-        if pool_keep_mask is not None:
-            if len(pool_df) != len(pool_keep_mask):
-                raise ValueError(
-                    f"Pool STAR row count ({len(pool_df)}) != pre-drop pooled coords "
-                    f"({len(pool_keep_mask)})"
-                )
-            pool_df = pool_df.loc[pool_keep_mask].reset_index(drop=True)
+        if len(pool_df) != len(pool_keep_mask):
+            raise ValueError(
+                f"Pool STAR row count ({len(pool_df)}) != pre-drop pooled coords "
+                f"({len(pool_keep_mask)})"
+            )
+        pool_df = pool_df.loc[pool_keep_mask].reset_index(drop=True)
         if len(pool_df) != len(pool):
             raise ValueError(
                 f"Pool STAR row count ({len(pool_df)}) != pooled coords ({len(pool)})"
@@ -1292,15 +1347,18 @@ def run_monomer_dimer_ripley_for_zone(
     except Exception as exc:
         print(f"  Warning: could not write simulated null STAR examples for {zone_name}: {exc}")
 
-    curves_df = pd.DataFrame(
+    curves_data: dict = {
+        "active_zone_name": zone_name,
+        "active_zone_index": int(active_zone_index),
+        "window_mode": WINDOW_MODE,
+        "r_nm": r_vals,
+    }
+    for fam in ALL_FAMILIES:
+        curves_data[fam] = observed[fam]
+        curves_data[f"perm_{fam}_mean"] = perm_mean_by_family[fam]
+        curves_data[f"seg_greedy_{fam}_mean"] = seg_mean_by_family[fam]
+    curves_data.update(
         {
-            "active_zone_name": zone_name,
-            "active_zone_index": int(active_zone_index),
-            "window_mode": WINDOW_MODE,
-            "r_nm": r_vals,
-            "l12": observed_l12,
-            "perm_l12_mean": perm_mean,
-            "seg_greedy_l12_mean": seg_greedy_mean,
             "n_monomer": n_monomer,
             "n_dimer": n_dimer,
             "n_permutations": int(n_perm_int),
@@ -1308,38 +1366,40 @@ def run_monomer_dimer_ripley_for_zone(
             "window_volume_nm3": float(window.volume_nm3),
         }
     )
+    curves_df = pd.DataFrame(curves_data)
     curves_path = out_dir / "ripley_l12_curves.csv"
     curves_df.to_csv(curves_path, index=False)
 
     individual_df = build_monomer_dimer_individual_curves_table(
         zone_name=zone_name,
         r_vals=r_vals,
-        observed_l12=observed_l12,
-        perm_curves=perm_curves,
-        seg_greedy_curves=seg_greedy_curves,
+        observed_by_family={fam: observed[fam] for fam in ALL_FAMILIES},
+        perm_curves_by_family={fam: perm_all[fam] for fam in ALL_FAMILIES},
+        seg_greedy_curves_by_family={fam: seg_all[fam] for fam in ALL_FAMILIES},
         n_monomer=n_monomer,
         n_dimer=n_dimer,
         window_volume_nm3=float(window.volume_nm3),
     )
     individual_path = out_dir / "ripley_l12_individual_curves.csv"
     individual_df.to_csv(individual_path, index=False)
-    # Prism-friendly wide tables (one file per curve family).
-    curves_matrix_to_wide_dataframe(
-        np.atleast_2d(observed_l12), r_vals, curve_type="observed"
-    ).to_csv(out_dir / "ripley_l12_individual_observed_wide.csv", index=False)
-    curves_matrix_to_wide_dataframe(
-        perm_curves, r_vals, curve_type="label_permutation"
-    ).to_csv(out_dir / "ripley_l12_individual_label_permutation_wide.csv", index=False)
-    curves_matrix_to_wide_dataframe(
-        seg_greedy_curves, r_vals, curve_type="segregation_greedy"
-    ).to_csv(out_dir / "ripley_l12_individual_segregation_greedy_wide.csv", index=False)
+    # Prism-friendly wide tables (one file per curve family × role).
+    for fam in ALL_FAMILIES:
+        curves_matrix_to_wide_dataframe(
+            np.atleast_2d(observed[fam]), r_vals, curve_type="observed"
+        ).to_csv(out_dir / f"ripley_{fam}_individual_observed_wide.csv", index=False)
+        curves_matrix_to_wide_dataframe(
+            perm_all[fam], r_vals, curve_type="label_permutation"
+        ).to_csv(out_dir / f"ripley_{fam}_individual_label_permutation_wide.csv", index=False)
+        curves_matrix_to_wide_dataframe(
+            seg_all[fam], r_vals, curve_type="segregation_greedy"
+        ).to_csv(out_dir / f"ripley_{fam}_individual_segregation_greedy_wide.csv", index=False)
 
     prism_df = build_monomer_dimer_prism_table(
         zone_name=zone_name,
         r_vals=r_vals,
-        observed_l12=observed_l12,
-        perm_curves=perm_curves,
-        seg_greedy_curves=seg_greedy_curves,
+        observed_by_family={fam: observed[fam] for fam in ALL_FAMILIES},
+        perm_curves_by_family={fam: perm_all[fam] for fam in ALL_FAMILIES},
+        seg_greedy_curves_by_family={fam: seg_all[fam] for fam in ALL_FAMILIES},
         n_monomer=n_monomer,
         n_dimer=n_dimer,
         n_perm=n_perm_int,
@@ -1353,66 +1413,38 @@ def run_monomer_dimer_ripley_for_zone(
     )
 
     if write_figures:
-        perm_lo, perm_band_mean, perm_hi = _percentile_band(perm_curves)
-        seg_lo, seg_band_mean, seg_hi = _percentile_band(seg_greedy_curves)
-        fig, ax = plt.subplots(figsize=(6.5, 4.5))
-        ax.plot(r_vals, observed_l12, color="C0", lw=2, label="Observed monomer→dimer L₁₂")
-        if len(perm_band_mean) == len(r_vals):
-            ax.plot(r_vals, perm_band_mean, color="0.45", lw=1.5, label="Label-permutation mean")
-            ax.fill_between(
-                r_vals,
-                perm_lo,
-                perm_hi,
-                color="0.8",
-                alpha=0.8,
-                label=f"Label-perm {RIPLEY_PERCENTILE_LO:g}–{RIPLEY_PERCENTILE_HI:g}%",
+        for fam in ALL_FAMILIES:
+            _plot_family_observed_vs_controls(
+                r_vals=r_vals,
+                observed=observed[fam],
+                perm_curves=perm_all[fam],
+                seg_greedy_curves=seg_all[fam],
+                fam=fam,
+                tomogram_name=tomogram_name,
+                zone_name=zone_name,
+                n_monomer=n_monomer,
+                n_dimer=n_dimer,
+                n_perm=n_perm_int,
+                n_segregation=n_segregation_int,
+                r_max_nm=r_max_nm,
+                output_path=figures_dir / f"ripley_{fam}_observed_vs_controls.png",
             )
-        if len(seg_band_mean) == len(r_vals):
-            ax.plot(
-                r_vals,
-                seg_band_mean,
-                color="C3",
-                lw=1.5,
-                label="Greedy segregation mean",
-            )
-            ax.fill_between(
-                r_vals,
-                seg_lo,
-                seg_hi,
-                color="C3",
-                alpha=0.2,
-                label=f"Greedy seg {RIPLEY_PERCENTILE_LO:g}–{RIPLEY_PERCENTILE_HI:g}%",
-            )
-        ax.axhline(0.0, color="0.5", ls="--", lw=0.8)
-        ax.set_xlabel("r (nm)")
-        ax.set_ylabel("Ripley L₁₂(r) = (3K₁₂/4π)^(1/3) − r")
-        ax.set_title(
-            f"{tomogram_name} | {zone_name}\n"
-            f"monomer ({n_monomer}) vs dimer ({n_dimer}) | "
-            f"{int(n_perm_int)} label perms, {int(n_segregation_int)} greedy seg reps"
-        )
-        ax.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else r_max_nm)
-        ax.legend(loc="best", fontsize=7)
-        fig.tight_layout()
-        fig.savefig(
-            figures_dir / "ripley_l12_observed_vs_controls.png",
-            dpi=150,
-            bbox_inches="tight",
-        )
-        plt.close(fig)
 
     mad_summary_path, mad_curves_path = _write_mad_outputs(
         out_dir=out_dir,
         figures_dir=figures_dir if write_figures else None,
         zone_name=zone_name,
         r_vals=r_vals,
-        observed_l12=observed_l12,
-        null_named_curves=[
-            ("label_permutation", perm_curves),
-            ("segregation_greedy", seg_greedy_curves),
-        ],
+        observed_by_family={fam: observed[fam] for fam in ALL_FAMILIES},
+        null_curves_by_family={
+            fam: [
+                ("label_permutation", perm_all[fam]),
+                ("segregation_greedy", seg_all[fam]),
+            ]
+            for fam in ALL_FAMILIES
+        },
         write_figures=write_figures,
-        figure_title=(
+        figure_title_prefix=(
             f"{tomogram_name} | {zone_name} | MAD vs nulls "
             f"(run only if n≥{MAD_MIN_NULL_CURVES})"
         ),
@@ -1424,6 +1456,7 @@ def run_monomer_dimer_ripley_for_zone(
         "active_zone_name": zone_name,
         "active_zone_index": int(active_zone_index),
         "window_mode": WINDOW_MODE,
+        "curve_families": list(ALL_FAMILIES),
         "n_monomer": int(n_monomer),
         "n_dimer": int(n_dimer),
         "n_permutations": int(n_perm_int),
@@ -1435,12 +1468,13 @@ def run_monomer_dimer_ripley_for_zone(
         "segregation_cluster_class_choice": "random_per_replicate_monomer_or_dimer",
         "window_volume_nm3": float(window.volume_nm3),
         "window_uses_angle_betweenness": bool(window.use_angle_betweenness),
-        "drop_aunps_outside_hull": bool(drop_aunps_outside_hull),
         "n_monomer_dropped_outside_hull": int(len(dropped_monomer_coords)),
         "n_dimer_dropped_outside_hull": int(len(dropped_dimer_coords)),
         "control_label_permutation": "label_permutation_preserving_class_counts",
         "control_segregation": "greedy_nearest_neighbor_cluster_random_class",
-        "ripley_edge_correction": "isotropic_3d_mc",
+        "ripley_edge_correction": "isotropic_3d_grid",
+        "edge_correction_grid_spacing_nm": float(MONOMER_DIMER_EDGE_GRID_SPACING_NM),
+        "g_estimator": "pair_correlation_from_k_diff",
         "mad_min_null_curves": int(MAD_MIN_NULL_CURVES),
         "mad_nulls": [
             "label_permutation",
@@ -1457,7 +1491,7 @@ def run_monomer_dimer_ripley_for_zone(
         json.dump(meta, f, indent=2)
 
     print(
-        f"  Monomer/dimer Ripley L₁₂ ({zone_name}): "
+        f"  Monomer/dimer Ripley ({zone_name}): "
         f"{n_monomer} monomer, {n_dimer} dimer, {int(n_perm_int)} perms, "
         f"{int(n_segregation_int)} greedy seg reps -> {out_dir}"
     )
@@ -1486,8 +1520,6 @@ def run_monomer_dimer_ripley_for_tomogram(
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
-    use_angle_betweenness_window: bool = False,
-    drop_aunps_outside_hull: bool = False,
 ) -> tuple[list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame]]:
     """Run monomer vs dimer Ripley for all mapped active zones in one tomogram.
 
@@ -1496,6 +1528,8 @@ def run_monomer_dimer_ripley_for_tomogram(
     """
     from .activezone import load_active_zone_mapping
 
+    if n_perm is None:
+        n_perm = MONOMER_DIMER_N_PERM
     tomogram_path = Path(tomogram_path)
     alignment_dir = require_alignment_dir(alignment_dir)
     az_mapping = load_active_zone_mapping(tomogram_path, alignment_dir) or {}
@@ -1539,8 +1573,6 @@ def run_monomer_dimer_ripley_for_tomogram(
             r_step_nm=r_step_nm,
             seed=seed,
             write_figures=write_figures,
-            use_angle_betweenness_window=use_angle_betweenness_window,
-            drop_aunps_outside_hull=drop_aunps_outside_hull,
         )
         if result is None:
             continue
@@ -1570,13 +1602,122 @@ def run_monomer_dimer_ripley_for_tomogram(
     return curve_frames, prism_frames, individual_frames, mad_summary_frames
 
 
+def _plot_pooled_family_figure(
+    grp: pd.DataFrame,
+    *,
+    fam: str,
+    set_name: str,
+    output_dir: Path,
+) -> Path | None:
+    """One pooled observed-vs-null figure for one family (a member of ``ALL_FAMILIES``).
+
+    Returns ``None`` (writes nothing) if ``grp`` doesn't have this family's columns — e.g.
+    pooling older per-zone output written before the six-family extension.
+    """
+    tag = _family_tag(fam)
+    obs_mean_col = f"observed_{tag}_mean"
+    if obs_mean_col not in grp.columns:
+        return None
+
+    r_vals = grp["r_nm"].to_numpy(dtype=float)
+    obs_mean = grp[obs_mean_col].to_numpy(dtype=float)
+    obs_lo = grp[f"observed_{tag}_sd_envelope_lo"].to_numpy(dtype=float)
+    obs_hi = grp[f"observed_{tag}_sd_envelope_hi"].to_numpy(dtype=float)
+    nan_series = pd.Series(np.nan, index=grp.index)
+    ctrl_mean = grp.get(f"control_{tag}_mean", nan_series).to_numpy(dtype=float)
+    ctrl_lo = grp.get(f"control_{tag}_sd_envelope_lo", nan_series).to_numpy(dtype=float)
+    ctrl_hi = grp.get(f"control_{tag}_sd_envelope_hi", nan_series).to_numpy(dtype=float)
+    seg_mean = grp.get(f"segregation_greedy_{tag}_mean", nan_series).to_numpy(dtype=float)
+    seg_lo = grp.get(f"segregation_greedy_{tag}_sd_envelope_lo", nan_series).to_numpy(dtype=float)
+    seg_hi = grp.get(f"segregation_greedy_{tag}_sd_envelope_hi", nan_series).to_numpy(dtype=float)
+    meta = grp.iloc[0]
+    is_l_family = fam in L_FAMILIES
+    direct_suffix = " (of L)" if is_l_family else ""
+    from_k_suffix = " (K→L)" if is_l_family else ""
+
+    set_tag = _safe_name(str(set_name)) or "unspecified"
+    fig, ax = plt.subplots(figsize=(6.5, 4.5))
+
+    ax.plot(r_vals, obs_mean, color="C0", lw=2, label=f"Observed mean{direct_suffix}")
+    from_k_col = f"observed_{tag}_mean_from_k"
+    if from_k_col in grp.columns:
+        ax.plot(
+            r_vals, grp[from_k_col].to_numpy(dtype=float), color="C0", lw=1.5, ls="--",
+            label=f"Observed mean{from_k_suffix}",
+        )
+    ax.fill_between(r_vals, obs_lo, obs_hi, color="C0", alpha=0.25, label=f"Observed ±SD{direct_suffix}")
+    from_k_lo_col = f"observed_{tag}_sd_envelope_lo_from_k"
+    if from_k_lo_col in grp.columns:
+        ax.fill_between(
+            r_vals,
+            grp[from_k_lo_col].to_numpy(dtype=float),
+            grp[f"observed_{tag}_sd_envelope_hi_from_k"].to_numpy(dtype=float),
+            color="C0", alpha=0.12, hatch="///", label=f"Observed ±SD{from_k_suffix}",
+        )
+
+    if np.isfinite(ctrl_mean).any():
+        ax.plot(r_vals, ctrl_mean, color="0.45", lw=1.5, label=f"Label-perm mean{direct_suffix}")
+        from_k_col = f"control_{tag}_mean_from_k"
+        if from_k_col in grp.columns:
+            ax.plot(
+                r_vals, grp[from_k_col].to_numpy(dtype=float), color="0.45", lw=1.3, ls="--",
+                label=f"Label-perm mean{from_k_suffix}",
+            )
+        ax.fill_between(r_vals, ctrl_lo, ctrl_hi, color="0.7", alpha=0.4, label=f"Label-perm ±SD{direct_suffix}")
+        from_k_lo_col = f"control_{tag}_sd_envelope_lo_from_k"
+        if from_k_lo_col in grp.columns:
+            ax.fill_between(
+                r_vals,
+                grp[from_k_lo_col].to_numpy(dtype=float),
+                grp[f"control_{tag}_sd_envelope_hi_from_k"].to_numpy(dtype=float),
+                color="0.45", alpha=0.12, hatch="///", label=f"Label-perm ±SD{from_k_suffix}",
+            )
+
+    if np.isfinite(seg_mean).any():
+        ax.plot(r_vals, seg_mean, color="C3", lw=1.5, label=f"Greedy seg mean{direct_suffix}")
+        from_k_col = f"segregation_greedy_{tag}_mean_from_k"
+        if from_k_col in grp.columns:
+            ax.plot(
+                r_vals, grp[from_k_col].to_numpy(dtype=float), color="C3", lw=1.3, ls="--",
+                label=f"Greedy seg mean{from_k_suffix}",
+            )
+        ax.fill_between(r_vals, seg_lo, seg_hi, color="C3", alpha=0.2, label=f"Greedy seg ±SD{direct_suffix}")
+        from_k_lo_col = f"segregation_greedy_{tag}_sd_envelope_lo_from_k"
+        if from_k_lo_col in grp.columns:
+            ax.fill_between(
+                r_vals,
+                grp[from_k_lo_col].to_numpy(dtype=float),
+                grp[f"segregation_greedy_{tag}_sd_envelope_hi_from_k"].to_numpy(dtype=float),
+                color="C3", alpha=0.1, hatch="///", label=f"Greedy seg ±SD{from_k_suffix}",
+            )
+
+    ax.axhline(1.0 if fam in G_FAMILIES else 0.0, color="0.5", ls="--", lw=0.8)
+    ax.set_xlabel("r (nm)")
+    ax.set_ylabel(f"{tag}(r)")
+    n_curves = int(meta[f"n_zone_curves_{tag}"]) if f"n_zone_curves_{tag}" in grp.columns else int(meta.get("n_zone_curves", 0))
+    ax.set_title(
+        f"Pooled monomer vs dimer ({tag}) — set: {set_name}\n"
+        f"{int(meta['n_tomograms'])} tomogram(s), {int(meta['n_active_zones'])} zone(s), "
+        f"{n_curves} curves"
+    )
+    ax.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else DEFAULT_RIPLEY_R_MAX_NM)
+    ax.legend(loc="best", fontsize=8)
+    fig.tight_layout()
+    out_path = output_dir / f"ripley_{fam}_pooled_observed_vs_null_{set_tag}.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Pooled monomer/dimer {tag} figure (set {set_name}) -> {out_path}")
+    return out_path
+
+
 def plot_pooled_monomer_dimer_ripley_visualizations(
     curves_csv: Path | str = POOLED_CURVES_CSV,
     output_dir: Path | str = POOLED_FIGURES_DIR,
     prism_csv: Path | str = POOLED_PRISM_CSV,
     prism_wide_csv: Path | str = POOLED_PRISM_WIDE_CSV,
 ) -> list[Path]:
-    """Build pooled per-set Prism tables and observed-vs-null L₁₂ figures."""
+    """Build pooled per-set Prism tables and observed-vs-null figures for every family in
+    ``ALL_FAMILIES``."""
     curves_csv = Path(curves_csv)
     output_dir = Path(output_dir)
     prism_csv = Path(prism_csv)
@@ -1608,107 +1749,11 @@ def plot_pooled_monomer_dimer_ripley_visualizations(
 
     for set_name, grp in prism_long.groupby("set_name", sort=False):
         grp = grp.sort_values("r_nm")
-        r_vals = grp["r_nm"].to_numpy(dtype=float)
-        obs_mean = grp["observed_L12_mean"].to_numpy(dtype=float)
-        obs_lo = grp["observed_L12_sd_envelope_lo"].to_numpy(dtype=float)
-        obs_hi = grp["observed_L12_sd_envelope_hi"].to_numpy(dtype=float)
-        ctrl_mean = grp["control_L12_mean"].to_numpy(dtype=float)
-        ctrl_lo = grp["control_L12_sd_envelope_lo"].to_numpy(dtype=float)
-        ctrl_hi = grp["control_L12_sd_envelope_hi"].to_numpy(dtype=float)
-        seg_mean = grp.get(
-            "segregation_greedy_L12_mean", pd.Series(np.nan, index=grp.index)
-        ).to_numpy(dtype=float)
-        seg_lo = grp.get(
-            "segregation_greedy_L12_sd_envelope_lo", pd.Series(np.nan, index=grp.index)
-        ).to_numpy(dtype=float)
-        seg_hi = grp.get(
-            "segregation_greedy_L12_sd_envelope_hi", pd.Series(np.nan, index=grp.index)
-        ).to_numpy(dtype=float)
-        meta = grp.iloc[0]
-
-        set_tag = _safe_name(str(set_name)) or "unspecified"
-        fig, ax = plt.subplots(figsize=(6.5, 4.5))
-        ax.plot(r_vals, obs_mean, color="C0", lw=2, label="Observed mean (of L)")
-        if "observed_L12_mean_from_k" in grp.columns:
-            ax.plot(
-                r_vals,
-                grp["observed_L12_mean_from_k"].to_numpy(dtype=float),
-                color="C0",
-                lw=1.5,
-                ls="--",
-                label="Observed mean (K→L)",
+        for fam in ALL_FAMILIES:
+            out_path = _plot_pooled_family_figure(
+                grp, fam=fam, set_name=set_name, output_dir=output_dir
             )
-        ax.fill_between(r_vals, obs_lo, obs_hi, color="C0", alpha=0.25, label="Observed ±SD (of L)")
-        if "observed_L12_sd_envelope_lo_from_k" in grp.columns:
-            ax.fill_between(
-                r_vals,
-                grp["observed_L12_sd_envelope_lo_from_k"].to_numpy(dtype=float),
-                grp["observed_L12_sd_envelope_hi_from_k"].to_numpy(dtype=float),
-                color="C0",
-                alpha=0.12,
-                hatch="///",
-                label="Observed ±SD (K→L)",
-            )
-        ax.plot(r_vals, ctrl_mean, color="0.45", lw=1.5, label="Label-perm mean (of L)")
-        if "control_L12_mean_from_k" in grp.columns:
-            ax.plot(
-                r_vals,
-                grp["control_L12_mean_from_k"].to_numpy(dtype=float),
-                color="0.45",
-                lw=1.3,
-                ls="--",
-                label="Label-perm mean (K→L)",
-            )
-        ax.fill_between(r_vals, ctrl_lo, ctrl_hi, color="0.7", alpha=0.4, label="Label-perm ±SD (of L)")
-        if "control_L12_sd_envelope_lo_from_k" in grp.columns:
-            ax.fill_between(
-                r_vals,
-                grp["control_L12_sd_envelope_lo_from_k"].to_numpy(dtype=float),
-                grp["control_L12_sd_envelope_hi_from_k"].to_numpy(dtype=float),
-                color="0.45",
-                alpha=0.12,
-                hatch="///",
-                label="Label-perm ±SD (K→L)",
-            )
-        if np.isfinite(seg_mean).any():
-            ax.plot(r_vals, seg_mean, color="C3", lw=1.5, label="Greedy seg mean (of L)")
-            if "segregation_greedy_L12_mean_from_k" in grp.columns:
-                ax.plot(
-                    r_vals,
-                    grp["segregation_greedy_L12_mean_from_k"].to_numpy(dtype=float),
-                    color="C3",
-                    lw=1.3,
-                    ls="--",
-                    label="Greedy seg mean (K→L)",
-                )
-            ax.fill_between(
-                r_vals, seg_lo, seg_hi, color="C3", alpha=0.2, label="Greedy seg ±SD (of L)"
-            )
-            if "segregation_greedy_L12_sd_envelope_lo_from_k" in grp.columns:
-                ax.fill_between(
-                    r_vals,
-                    grp["segregation_greedy_L12_sd_envelope_lo_from_k"].to_numpy(dtype=float),
-                    grp["segregation_greedy_L12_sd_envelope_hi_from_k"].to_numpy(dtype=float),
-                    color="C3",
-                    alpha=0.1,
-                    hatch="///",
-                    label="Greedy seg ±SD (K→L)",
-                )
-        ax.axhline(0.0, color="0.5", ls="--", lw=0.8)
-        ax.set_xlabel("r (nm)")
-        ax.set_ylabel("Ripley L₁₂(r) = (3K₁₂/4π)^(1/3) − r")
-        ax.set_title(
-            f"Pooled monomer vs dimer — set: {set_name}\n"
-            f"{int(meta['n_tomograms'])} tomogram(s), {int(meta['n_active_zones'])} zone(s), "
-            f"{int(meta['n_zone_curves'])} curves"
-        )
-        ax.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else DEFAULT_RIPLEY_R_MAX_NM)
-        ax.legend(loc="best", fontsize=8)
-        fig.tight_layout()
-        out_path = output_dir / f"ripley_l12_pooled_observed_vs_null_{set_tag}.png"
-        fig.savefig(out_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        print(f"Pooled monomer/dimer Ripley figure (set {set_name}) -> {out_path}")
-        written.append(out_path)
+            if out_path is not None:
+                written.append(out_path)
 
     return written
