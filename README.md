@@ -12,7 +12,7 @@ A Python toolkit for running various analyses on cryo-electron tomography (cryo-
 ## 🚀 STT Features
 
 - GUI and Command-line interface for easy pipeline execution
-- Wrapper to "FindingAMPA" repo for tomogram preprocessing steps
+- Wrapper to [FindingAMPA](https://github.com/jojoelfe/findingampa) for tomogram preprocessing steps
 - Synaptic cleft identification
 - Vesicle fitting
 - AuNP analyses (DBSCAN clustering, density, AuNP-AuNP nearest neighbor and AuNP-membrane distances)
@@ -20,7 +20,7 @@ A Python toolkit for running various analyses on cryo-electron tomography (cryo-
 
 ## ⏯️ Workflow
 
-Before running analysis modules, tilt series should first be processed using Etomo and then tomograms should be reconstructed and further processed using the FindingAMPA preprocessing pipeline (which is a standalone repo, or is installed as a python package within the SynapticTomoTools environment). Within the findingampa pipeline, tomogram reconstruction, denoising (wrapper to DeepDeWedge with pretrained models), membrane segmentation (wrapper to Membrain), membrane and vesicle annotation (wrapper to Blender-based manual annotation platform), and AuNP picking (template-matching approach constrained to cleft regions) need to be completed.
+Before running analysis modules, tilt series should first be processed using Etomo and then tomograms should be reconstructed and further processed using the [FindingAMPA](https://github.com/jojoelfe/findingampa) preprocessing pipeline (which is a standalone repo, or is installed as a python package within the SynapticTomoTools environment). Within the findingampa pipeline, tomogram reconstruction, denoising (wrapper to DeepDeWedge with pretrained models), membrane segmentation (wrapper to Membrain), membrane and vesicle annotation (wrapper to Blender-based manual annotation platform), and AuNP picking (template-matching approach constrained to cleft regions) need to be completed.
 
 Following pre-processing, the following analysis modules can be run.
 
@@ -65,7 +65,7 @@ You can run the analysis pipeline using a graphical interface:
   - A Home tab to select your tomogram CSV and root directory
   ![SynapticTomoTools GUI](figures/gui_screenshot_1.png)
 
-  - A Pre-Processing tab to run commands from the FindingAMPA github repo (preprocessing for this workflow)
+  - A Pre-Processing tab to run commands from the [FindingAMPA](https://github.com/jojoelfe/findingampa) github repo (preprocessing for this workflow)
   ![SynapticTomoTools GUI](figures/gui_screenshot_2.png)
 
   - Tabs for each analysis step individually (Cleft, Vesicles, AuNPs, Pose Prediction, Visualization)
