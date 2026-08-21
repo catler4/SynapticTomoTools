@@ -179,8 +179,6 @@ Tomograms are grouped by experimental set under a root directory (GUI: Home tab 
                     └── visualizations/
 ```
 
-FindingAMPA names these regions **active zones**; STT names them **clefts**. Pick STAR filenames still use `active_zone` in the name; analysis outputs and the optional CSV column use `cleft` / `cleft_IDs`.
-
 ### Input files by analysis
 
 | Analysis | Required inputs under `{alignment_dir}/` |
