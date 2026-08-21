@@ -38,26 +38,18 @@ Modules should be run in the following order:
 
 Requires **Python ≥ 3.8**, conda (or mamba), git, and network access (FindingAMPA is installed from GitHub).
 
-Dependency lists in `requirements.txt` and `pyproject.toml` are kept in sync. Either of the following is enough; the editable install is preferred so CLI entry points are registered.
-
 ```bash
 git clone https://github.com/catler4/SynapticTomoTools.git
 cd SynapticTomoTools
 
-# Recommended: dedicated conda environment
 conda create -n STT python=3.11
 conda activate STT
 
-# Install SynapticTomoTools + all runtime dependencies (editable)
+# Installs this package (editable) and all runtime dependencies from pyproject.toml
 pip install -e .
 ```
 
-Equivalent alternative (same dependency set, then register this package):
-
-```bash
-pip install -r requirements.txt
-pip install -e .
-```
+After install, launch the GUI with `python scripts/pipeline_gui.py`, or use the CLI via `python -m src.synaptic_tomo_tools.cli --help` or `synaptic-tomo-tools --help`.
 
 ---
 
