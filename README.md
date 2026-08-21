@@ -5,7 +5,7 @@
 ╚═╗└┬┘│││├─┤├─┘ │ ││   ║ │ │││││ │ ║ │ ││ ││  └─┐
 ╚═╝ ┴ ┘└┘┴ ┴┴   ┴ ┴└─┘ ╩ └─┘┴ ┴└─┘ ╩ └─┘└─┘┴─┘└─┘
 ```
-A Python toolkit for running various analyses on cryo-electron tomography (cryo-ET) data, with a focus on analyzing AuNP labels within brain tissue-derived synapses.
+A Python toolkit for running various analyses on cryo-electron tomography (cryo-ET) data, with a focus on analyzing ~2 nm AuNP labels within brain tissue-derived synapse tomograms.
 
 ---
 
