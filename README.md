@@ -189,7 +189,7 @@ Tomograms are grouped by experimental set under a root directory (GUI: Home tab 
 | **Pose Prediction** | same AuNP pick STAR pattern, `aunps/postsynapticmembranes.glb` |
 | **Visualization** | `*ddw.mrc`, membrane `*_*.txt`, plus prior cleft / vesicle / AuNP `STT_results/` outputs |
 
-Optional AuNP analyses (GUI checkboxes) may also use monomer/dimer pick STARs:
+Optional AuNP analyses (GUI checkboxes) may also use monomer/dimer pick STARs (used for dual labeled tomograms):
 
 - `aunp_tm_BP_active_zone_*_manual_refined_monomer.star`
 - `aunp_tm_BP_active_zone_*_manual_refined_dimer.star`
