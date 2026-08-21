@@ -1066,11 +1066,6 @@ def main():
                     missing_files.append("synaptic cleft pre files (*_pre_outer.txt)")
                 if not az_post:
                     missing_files.append("synaptic cleft post files (*_post_outer.txt)")
-            # Check for MemBrain segmentation
-            membrain_dir = base / "membrain"
-            membrain_files = list(membrain_dir.glob("*.mrc"))
-            if not membrain_files:
-                missing_files.append("MemBrain segmentation (*.mrc)")
             if missing_files:
                 missing = True
                 print(f"[MISSING] {Path(tomo).name}:")

@@ -36,7 +36,7 @@ Modules should be run in the following order:
 
 ## 📦 Installation
 
-Requires **Python ≥ 3.8**, git, and network access (FindingAMPA is installed from GitHub).
+Requires **Python ≥ 3.8**, conda (or mamba), git, and network access (FindingAMPA is installed from GitHub).
 
 Dependency lists in `requirements.txt` and `pyproject.toml` are kept in sync. Either of the following is enough; the editable install is preferred so CLI entry points are registered.
 
@@ -44,9 +44,9 @@ Dependency lists in `requirements.txt` and `pyproject.toml` are kept in sync. Ei
 git clone https://github.com/catler4/SynapticTomoTools.git
 cd SynapticTomoTools
 
-# Recommended: use a dedicated environment
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+# Recommended: dedicated conda environment
+conda create -n STT python=3.11
+conda activate STT
 
 # Install SynapticTomoTools + all runtime dependencies (editable)
 pip install -e .
@@ -58,8 +58,6 @@ Equivalent alternative (same dependency set, then register this package):
 pip install -r requirements.txt
 pip install -e .
 ```
-
-Then launch the GUI with `python scripts/pipeline_gui.py`, or use the CLI via `python -m src.synaptic_tomo_tools.cli --help` or `synaptic-tomo-tools --help`.
 
 ---
 
@@ -104,7 +102,7 @@ You can also run the analysis from the command line. Commands to run pipeline ca
 Outputs are written in two places:
 
 1. **Repo-level** under `results/` (pooled CSVs, combined figures/PDFs)
-2. **Per-tomogram** under `{tomogram}/{alignment_dir}/STT_results/` (and pose outputs under `STT_results/poses/`)
+2. **Per-tomogram** under `{tomogram}/{alignment_dir}/STT_results/`
 
 `alignment_dir` comes from each CSV row (e.g. `best_alignment`).
 
@@ -129,9 +127,9 @@ Outputs are written in two places:
 - `results/aunps/aunps_results.csv` — per-cleft AuNP summary rows
 - `results/aunps/all_aunp_distances.csv` — per-AuNP distances / metrics
 - `results/aunps/aunp_cluster_results.csv` — cluster summaries pooled across tomograms
-- `results/aunps/close_vesicles_aunp_histograms_bin5.csv` — AuNP distance histograms from close-vesicle fusion points
-- `results/aunps/fusing_vesicles_aunp_histograms_bin5.csv` — same for fusing vesicles
-- Optional / checkbox-gated analyses also under `results/aunps/` (Ripley curves, Prism envelopes, fusion-point distance tables, packing-density CSVs, and related figures under `results/aunps/figures/`)
+- `results/aunps/close_vesicles_fusion_point_to_aunp_distances.csv` — per-(vesicle, AuNP) distances from close-vesicle fusion points
+- `results/aunps/fusing_vesicles_fusion_point_to_aunp_distances.csv` — same for fusing vesicles
+- Optional / checkbox-gated analyses also under `results/aunps/` (Ripley curves, Prism envelopes, packing-density CSVs, and related figures under `results/aunps/figures/`)
 - Per tomogram: `{alignment_dir}/STT_results/aunps/`
   - `aunp_clusters.csv`, `aunp_clusters.star`
   - nearest-neighbor / distance tables and other AuNP analysis files
@@ -170,7 +168,6 @@ Tomograms are grouped by experimental set under a root directory (GUI: Home tab 
         └── {tomoname}/
             └── {alignment_dir}/
                 ├── {tomoname}_ddw.mrc          # DeepDeWedge volume (viz; optional for some analyses)
-                ├── membrain/                   # MemBrain segmentations (checked by --check-files)
                 ├── aunps/                      # primary analysis inputs
                 │   ├── presynapticmembranes.glb
                 │   ├── postsynapticmembranes.glb
