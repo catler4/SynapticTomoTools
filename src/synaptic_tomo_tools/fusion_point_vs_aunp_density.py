@@ -2,7 +2,7 @@
 Fusion-point vs AuNP density analysis with presynaptic tangential-shuffle controls.
 
 For each close/fusing vesicle fusion point, samples random tangential offsets at
-several distances d on the presynaptic active zone, snaps to the AZ point cloud,
+several distances d on the presynaptic synaptic cleft, snaps to the AZ point cloud,
 and looks up packing density from the same scan-vertex tables used in production.
 
 Also runs standardized bivariate Ripley H12 on postsynaptic-projected fusion,
@@ -34,7 +34,7 @@ from .aunps import (
     load_aunp_pick_star_dataframes,
     normalize_aunp_pick_star_pattern,
 )
-from .vesicles import import_presynaptic_membranes_and_active_zones
+from .vesicles import import_presynaptic_membranes_and_clefts
 
 # Probe radii (nm) for fusion-point control lookups and Ripley analysis (not used for main packing heat map).
 PACKING_DENSITY_PROBE_RADII_NM = (10.0, 20.0, 30.0, 40.0, 50.0)
@@ -125,7 +125,7 @@ def sample_tangential_control_on_az(
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
     """
     Move fusion_xyz by offset_nm in a random tangent direction on the presynaptic AZ,
-    then snap to the nearest presynaptic active-zone point.
+    then snap to the nearest presynaptic synaptic-cleft point.
 
     Retries up to max_attempts when the snapped point is too close to the fusion point
     or the candidate lies farther than max_snap_distance_nm from the AZ surface.
@@ -164,7 +164,7 @@ def lookup_packing_at_point(
         "packing_coefficient": float(row["packing_coefficient"]),
         "aunp_count_in_cylinder": int(row["aunp_count_in_cylinder"]),
         "aunp_density_per_nm2": float(row["aunp_density_per_nm2"]),
-        "nearest_scan_active_zone_name": row["active_zone_name"],
+        "nearest_scan_cleft_name": row["cleft_name"],
         "nearest_scan_vertex_index": int(row["scan_vertex_index"]),
         "nearest_scan_vertex_x_nm": float(row["vertex_x_nm"]),
         "nearest_scan_vertex_y_nm": float(row["vertex_y_nm"]),
@@ -210,14 +210,14 @@ def load_or_compute_scan_df(
                 return subset
 
     print(f"  Computing scan vertices for probe r={probe_radius_nm:.0f} nm...")
-    from .activezone import (
+    from .cleft import (
         define_active_zonogram,
         find_active_zones_from_glb,
         import_membrane_segmentations_from_glb,
     )
     membrane_data = import_membrane_segmentations_from_glb(tomogram_path, alignment_dir=alignment_dir)
-    active_zones_glb = find_active_zones_from_glb(membrane_data, distance_range=(10.0, 40.0))
-    zonogram_results = define_active_zonogram(active_zones_glb)
+    clefts_glb = find_active_zones_from_glb(membrane_data, distance_range=(10.0, 40.0))
+    zonogram_results = define_active_zonogram(clefts_glb)
 
     aunp_coords = _combined_aunp_pick_coordinates(
         tomogram_path,
@@ -227,7 +227,7 @@ def load_or_compute_scan_df(
 
     tomogram_name = tomogram_path.name
     rows: list[dict] = []
-    for zone_name, zone_data in active_zones_glb["active_zones"].items():
+    for zone_name, zone_data in clefts_glb["clefts"].items():
         if "active_postsynaptic_mesh" not in zone_data:
             continue
         if zone_name not in zonogram_results["zonogram_data"]:
@@ -246,7 +246,7 @@ def load_or_compute_scan_df(
                 {
                     "tomogram_name": tomogram_name,
                     "alignment_dir": alignment_dir,
-                    "active_zone_name": zone_name,
+                    "cleft_name": zone_name,
                     "scan_vertex_index": scan_idx,
                     "vertex_x_nm": float(vertex[0]),
                     "vertex_y_nm": float(vertex[1]),
@@ -279,7 +279,7 @@ def build_control_table(
         membrane = fp.get("closest_membrane")
         if not membrane or membrane not in membrane_az_pairs:
             continue
-        az_xyz = membrane_az_pairs[membrane]["active_zone_points"]
+        az_xyz = membrane_az_pairs[membrane]["cleft_points"]
         if az_xyz is None or len(az_xyz) == 0:
             continue
         az_tree = cKDTree(az_xyz)
@@ -345,14 +345,14 @@ def build_control_table(
 
 
 def zone_name_for_presynaptic_membrane(membrane_name: str | None) -> str | None:
-    """Map ``presynapticmembranes_N`` key to ``active_zone_preN_postN`` zone name."""
+    """Map ``presynapticmembranes_N`` key to ``cleft_preN_postN`` zone name."""
     if not membrane_name or not str(membrane_name).startswith("presynapticmembranes_"):
         return None
     try:
         idx = int(str(membrane_name).removeprefix("presynapticmembranes_"))
     except ValueError:
         return None
-    return f"active_zone_pre{idx}_post{idx}"
+    return f"cleft_pre{idx}_post{idx}"
 
 
 def compute_40nm_shifted_fusion_point_aunp_pairwise_distances(
@@ -390,7 +390,7 @@ def compute_40nm_shifted_fusion_point_aunp_pairwise_distances(
     if not fusion_rows:
         return pd.DataFrame()
 
-    membrane_az_pairs = import_presynaptic_membranes_and_active_zones(
+    membrane_az_pairs = import_presynaptic_membranes_and_clefts(
         tomogram_path, alignment_dir=alignment_dir
     )
     rng = np.random.default_rng(seed)
@@ -400,7 +400,7 @@ def compute_40nm_shifted_fusion_point_aunp_pairwise_distances(
         membrane = fp.get("closest_membrane")
         if not membrane or membrane not in membrane_az_pairs:
             continue
-        az_xyz = membrane_az_pairs[membrane]["active_zone_points"]
+        az_xyz = membrane_az_pairs[membrane]["cleft_points"]
         if az_xyz is None or len(az_xyz) == 0:
             continue
         az_tree = cKDTree(az_xyz)
@@ -432,7 +432,7 @@ def compute_40nm_shifted_fusion_point_aunp_pairwise_distances(
                     {
                         "tomogram_name": fp["tomogram_name"],
                         "alignment_dir": alignment_dir,
-                        "active_zone_name": zone_name,
+                        "cleft_name": zone_name,
                         "shift_replicate_id": int(shift_replicate_id),
                         "vesicle_id": fp["vesicle_id"],
                         "vesicle_name": fp["vesicle_name"],
@@ -463,7 +463,7 @@ def compute_label_permutation_fusion_point_aunp_pairwise_distances(
     tomogram_path: Path,
     alignment_dir: str,
     aunp_coords: np.ndarray,
-    aunp_active_zone_ids: np.ndarray,
+    aunp_cleft_ids: np.ndarray,
     az_mapping: dict[int, str],
     *,
     vesicle_distance_threshold: float = 20.0,
@@ -474,16 +474,16 @@ def compute_label_permutation_fusion_point_aunp_pairwise_distances(
     """
     Per-(permuted fusion site, AuNP) distances under Ripley-style label permutation.
 
-    For each active zone and permutation replicate (default 10), fusion vs AuNP labels
+    For each synaptic cleft and permutation replicate (default 10), fusion vs AuNP labels
     are reassigned on the pooled fusion + zone AuNP positions (same index pool as
     Ripley H₁₂ label-permutation null). Exactly ``n_fusion`` positions receive the
-    fusion label each round; each is projected onto the presynaptic active zone
+    fusion label each round; each is projected onto the presynaptic synaptic cleft
     surface before 3D distance calculation to every AuNP in that zone.
     """
     tomogram_path = Path(tomogram_path)
     alignment_dir = require_alignment_dir(alignment_dir)
     aunp_coords = np.atleast_2d(np.asarray(aunp_coords, dtype=float))
-    aunp_active_zone_ids = np.asarray(aunp_active_zone_ids, dtype=int)
+    aunp_cleft_ids = np.asarray(aunp_cleft_ids, dtype=int)
     if aunp_coords.size == 0:
         return pd.DataFrame()
 
@@ -511,7 +511,7 @@ def compute_label_permutation_fusion_point_aunp_pairwise_distances(
         az_ids = [idx for idx, zname in az_mapping.items() if zname == zone_name]
         if not az_ids:
             continue
-        aunp_mask = np.isin(aunp_active_zone_ids, az_ids)
+        aunp_mask = np.isin(aunp_cleft_ids, az_ids)
         if not np.any(aunp_mask):
             continue
         zone_aunp_coords = aunp_coords[aunp_mask]
@@ -575,7 +575,7 @@ def compute_label_permutation_fusion_point_aunp_pairwise_distances(
                     row = {
                         "tomogram_name": tomogram_name,
                         "alignment_dir": alignment_dir,
-                        "active_zone_name": zone_name,
+                        "cleft_name": zone_name,
                         "permutation_id": int(perm_id),
                         "fusion_site_index": int(fusion_site_idx),
                         "pool_index": pool_idx,
@@ -623,18 +623,18 @@ def _find_precalculated_zonogram_mrc(
     return matches[0] if matches else None
 
 
-def _load_zone_transform_from_active_zone_results(
+def _load_zone_transform_from_cleft_results(
     tomogram_path: Path,
     alignment_dir: str,
     zone_name: str,
 ) -> dict:
     """
-    Reconstruct zonogram center / transformation / extent from saved active-zone analysis.
+    Reconstruct zonogram center / transformation / extent from saved synaptic-cleft analysis.
 
     Matches the coordinate system used when STT visualizations render active zonograms
     (same define_active_zonogram path as visualization.run_combined_zonogram_analysis).
     """
-    from .activezone import (
+    from .cleft import (
         define_active_zonogram,
         find_active_zones_from_glb,
         import_membrane_segmentations_from_glb,
@@ -645,8 +645,8 @@ def _load_zone_transform_from_active_zone_results(
         str(tomogram_path),
         alignment_dir=alignment_dir,
     )
-    active_zones_data = find_active_zones_from_glb(membrane_data, distance_range=(10.0, 40.0))
-    zonogram_results = define_active_zonogram(active_zones_data)
+    clefts_data = find_active_zones_from_glb(membrane_data, distance_range=(10.0, 40.0))
+    zonogram_results = define_active_zonogram(clefts_data)
     zonogram_data = zonogram_results.get("zonogram_data", {})
     if zone_name not in zonogram_data:
         available = ", ".join(sorted(zonogram_data))
@@ -659,7 +659,7 @@ def _load_precalculated_zonogram_for_zone(
     alignment_dir: str,
     zone_name: str,
 ):
-    """Return (zonogram_findingampa, zone_data) using saved MRC + active-zone transform."""
+    """Return (zonogram_findingampa, zone_data) using saved MRC + synaptic-cleft transform."""
     import mrcfile
     import torch
     from .visualization import transform_positions_to_zonogram_coords
@@ -673,7 +673,7 @@ def _load_precalculated_zonogram_for_zone(
 
     with mrcfile.open(mrc_path, mode="r") as mrc:
         vol = torch.tensor(np.asarray(mrc.data, dtype=np.float32))
-    zone_data = _load_zone_transform_from_active_zone_results(
+    zone_data = _load_zone_transform_from_cleft_results(
         tomogram_path,
         alignment_dir,
         zone_name,
@@ -695,9 +695,9 @@ def _plot_fusion_vs_control_zonogram(
     from matplotlib import cm
     from .visualization import render_mini_zonogram_xy_only
 
-    zone_col = "nearest_scan_active_zone_name"
+    zone_col = "nearest_scan_cleft_name"
     if zone_col not in real.columns:
-        print("Skipping zonogram XY plot: nearest_scan_active_zone_name missing.")
+        print("Skipping zonogram XY plot: nearest_scan_cleft_name missing.")
         return
 
     offsets = sorted(d for d in ctrl["control_offset_nm"].unique() if d > 0)
@@ -794,12 +794,12 @@ def _plot_fusion_vs_control_zonogram(
         print(f"  Zonogram overlay from {mrc_path.name} -> {save_path}")
 
 
-def _count_active_zone_instances(df: pd.DataFrame) -> int | None:
+def _count_cleft_instances(df: pd.DataFrame) -> int | None:
     """Count tomogram×active-zone instances (additive across tomograms), not unique zone names."""
     if df.empty:
         return None
     zone_col = None
-    for col in ("active_zone_name", "nearest_scan_active_zone_name"):
+    for col in ("cleft_name", "nearest_scan_cleft_name"):
         if col in df.columns:
             zone_col = col
             break
@@ -832,9 +832,9 @@ def _fusing_vesicle_sample_note(
         n_tomograms = 1 if default_n_tomograms is None else int(default_n_tomograms)
 
     parts = [f"n_fusing_vesicles={n_vesicles}", f"n_tomograms={n_tomograms}"]
-    n_zones = _count_active_zone_instances(real)
+    n_zones = _count_cleft_instances(real)
     if n_zones is not None and n_zones > 0:
-        parts.append(f"n_active_zones={n_zones}")
+        parts.append(f"n_clefts={n_zones}")
     return ", ".join(parts)
 
 
@@ -875,13 +875,13 @@ def _load_az_surface_txt(path: Path) -> np.ndarray:
     return data.astype(float)
 
 
-def _load_postsynaptic_active_zone_surface(
+def _load_postsynaptic_cleft_surface(
     tomogram_path: Path,
     alignment_dir: str,
     zone_name: str,
 ) -> np.ndarray:
-    """Full postsynaptic active-zone patch (outer + inner) for one zone."""
-    az_dir = tomogram_path / alignment_dir / "STT_results" / "activezone"
+    """Full postsynaptic synaptic-cleft patch (outer + inner) for one zone."""
+    az_dir = tomogram_path / alignment_dir / "STT_results" / "cleft"
     parts: list[np.ndarray] = []
     for suffix in ("post_outer", "post_inner"):
         path = az_dir / f"{zone_name}_{suffix}.txt"
@@ -930,7 +930,7 @@ def cross_k12(
     Empirical bivariate cross-K on a surface point pattern.
 
     Uses 3D chord distances between projected surface points with 2D normalization
-    (πr²), appropriate for active-zone patches embedded in 3D.
+    (πr²), appropriate for synaptic-cleft patches embedded in 3D.
     """
     x = np.atleast_2d(np.asarray(x, dtype=float))
     y = np.atleast_2d(np.asarray(y, dtype=float))
@@ -1950,7 +1950,7 @@ def _load_aunp_coordinates_for_zone(
     aunp_pick_star_pattern: str | None = None,
 ) -> np.ndarray:
     import starfile
-    from .activezone import load_active_zone_mapping
+    from .cleft import load_cleft_mapping
     from .aunps import _read_aunp_pick_star_dataframe
 
     aunps_dir = tomogram_path / alignment_dir / "STT_results" / "aunps"
@@ -1958,7 +1958,7 @@ def _load_aunp_coordinates_for_zone(
     if not star_path.is_file():
         pick_pattern = normalize_aunp_pick_star_pattern(aunp_pick_star_pattern)
         aunps_pick_dir = tomogram_path / alignment_dir / "aunps"
-        mapping = load_active_zone_mapping(tomogram_path, alignment_dir)
+        mapping = load_cleft_mapping(tomogram_path, alignment_dir)
         az_ids: list[int] | None = None
         if mapping:
             mapping = {int(k): v for k, v in mapping.items()}
@@ -1991,13 +1991,13 @@ def _load_aunp_coordinates_for_zone(
     else:
         aunp_df = star_data
 
-    if "active_zone" in aunp_df.columns:
-        mapping = load_active_zone_mapping(tomogram_path, alignment_dir)
+    if "cleft" in aunp_df.columns:
+        mapping = load_cleft_mapping(tomogram_path, alignment_dir)
         if mapping:
             mapping = {int(k): v for k, v in mapping.items()}
             az_ids = [idx for idx, zname in mapping.items() if zname == zone_name]
             if az_ids:
-                aunp_df = aunp_df[aunp_df["active_zone"].isin(az_ids)]
+                aunp_df = aunp_df[aunp_df["cleft"].isin(az_ids)]
 
     coords = aunp_df[["faCoordinateX", "faCoordinateY", "faCoordinateZ"]].to_numpy(dtype=float)
     if len(coords) == 0:
@@ -2058,9 +2058,9 @@ def run_ripley_postsynaptic_analysis(
     #1: fusion vs controls-at-d — per-vesicle 2.5–97.5% bands + median, per d.
     #2: label-permutation null on pooled fusion + AuNP projected positions.
     """
-    zone_col = "nearest_scan_active_zone_name"
+    zone_col = "nearest_scan_cleft_name"
     if zone_col not in df.columns:
-        print("Skipping Ripley analysis: nearest_scan_active_zone_name missing.")
+        print("Skipping Ripley analysis: nearest_scan_cleft_name missing.")
         return None
 
     real = df[df["point_type"] == "fusion"].copy()
@@ -2083,7 +2083,7 @@ def run_ripley_postsynaptic_analysis(
 
     for zone_name in sorted(real[zone_col].dropna().unique()):
         try:
-            post_surface = _load_postsynaptic_active_zone_surface(tomogram_path, alignment_dir, str(zone_name))
+            post_surface = _load_postsynaptic_cleft_surface(tomogram_path, alignment_dir, str(zone_name))
         except FileNotFoundError as exc:
             print(f"Skipping Ripley for {zone_name}: {exc}")
             continue
@@ -2437,9 +2437,9 @@ def run_ripley_o_membrain_postsynaptic_analysis(
         print(f"Skipping Ripley's O analysis: {exc}")
         return None
 
-    zone_col = "nearest_scan_active_zone_name"
+    zone_col = "nearest_scan_cleft_name"
     if zone_col not in df.columns:
-        print("Skipping Ripley's O analysis: nearest_scan_active_zone_name missing.")
+        print("Skipping Ripley's O analysis: nearest_scan_cleft_name missing.")
         return None
 
     real = df[df["point_type"] == "fusion"].copy()
@@ -2463,7 +2463,7 @@ def run_ripley_o_membrain_postsynaptic_analysis(
 
     for zone_name in sorted(real[zone_col].dropna().unique()):
         try:
-            post_surface = _load_postsynaptic_active_zone_surface(tomogram_path, alignment_dir, str(zone_name))
+            post_surface = _load_postsynaptic_cleft_surface(tomogram_path, alignment_dir, str(zone_name))
         except FileNotFoundError as exc:
             print(f"Skipping Ripley's O for {zone_name}: {exc}")
             continue
@@ -2977,11 +2977,11 @@ def plot_results(
 
 
 def presynaptic_membrane_name_for_zone(zone_name: str, zone_data: dict | None = None) -> str:
-    """Map active zone name to presynaptic membrane key used by vesicle results."""
+    """Map synaptic cleft name to presynaptic membrane key used by vesicle results."""
     if zone_data and zone_data.get("presynaptic_membrane_index") is not None:
         pre_idx = int(zone_data["presynaptic_membrane_index"])
     else:
-        # active_zone_pre1_post1 -> 1
+        # cleft_pre1_post1 -> 1
         pre_part = zone_name.split("_")[2]
         pre_idx = int(pre_part.replace("pre", ""))
     return f"presynapticmembranes_{pre_idx}"
@@ -2992,8 +2992,8 @@ def load_presynaptic_az_points_for_zone(
     alignment_dir: str,
     zone_name: str,
 ) -> np.ndarray:
-    """Presynaptic outer + inner active-zone points for one zone."""
-    az_dir = tomogram_path / alignment_dir / "STT_results" / "activezone"
+    """Presynaptic outer + inner synaptic-cleft points for one zone."""
+    az_dir = tomogram_path / alignment_dir / "STT_results" / "cleft"
     parts: list[np.ndarray] = []
     for suffix in ("pre_outer", "pre_inner"):
         path = az_dir / f"{zone_name}_{suffix}.txt"
@@ -3013,7 +3013,7 @@ def membrane_az_pairs_for_zone(
     zone_data: dict | None,
     membrane_az_pairs: dict,
 ) -> dict:
-    """Presynaptic membrane entry with zone-specific active-zone points for controls."""
+    """Presynaptic membrane entry with zone-specific synaptic-cleft points for controls."""
     membrane_name = presynaptic_membrane_name_for_zone(zone_name, zone_data)
     if membrane_name not in membrane_az_pairs:
         return {}
@@ -3024,7 +3024,7 @@ def membrane_az_pairs_for_zone(
     return {
         membrane_name: {
             **base,
-            "active_zone_points": az_xyz,
+            "cleft_points": az_xyz,
         }
     }
 
@@ -3085,12 +3085,12 @@ def scan_by_radius_for_zone(
     scan_by_radius: dict[float, pd.DataFrame],
     zone_name: str,
 ) -> dict[float, pd.DataFrame]:
-    """Restrict tomogram-wide scan tables to one active zone."""
+    """Restrict tomogram-wide scan tables to one synaptic cleft."""
     zone_scans: dict[float, pd.DataFrame] = {}
     for radius, scan_df in scan_by_radius.items():
-        if scan_df.empty or "active_zone_name" not in scan_df.columns:
+        if scan_df.empty or "cleft_name" not in scan_df.columns:
             continue
-        subset = scan_df[scan_df["active_zone_name"] == zone_name]
+        subset = scan_df[scan_df["cleft_name"] == zone_name]
         if not subset.empty:
             zone_scans[float(radius)] = subset
     return zone_scans
@@ -3132,7 +3132,7 @@ def run_fusion_point_vs_aunp_density_for_zone(
     skip_ripley_o: bool = False,
     aunp_pick_star_pattern: str | None = None,
 ) -> pd.DataFrame | None:
-    """Run tangential-shuffle control analysis for one active zone."""
+    """Run tangential-shuffle control analysis for one synaptic cleft."""
     if not scan_by_radius:
         return None
 
@@ -3162,7 +3162,7 @@ def run_fusion_point_vs_aunp_density_for_zone(
         return None
 
     df = df.copy()
-    df["active_zone_name"] = zone_name
+    df["cleft_name"] = zone_name
     df["tomogram_name"] = tomogram_path.name
     df["alignment_dir"] = alignment_dir
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -3171,7 +3171,7 @@ def run_fusion_point_vs_aunp_density_for_zone(
     meta = {
         "tomogram_name": tomogram_path.name,
         "alignment_dir": alignment_dir,
-        "active_zone_name": zone_name,
+        "cleft_name": zone_name,
         "probe_radii_nm": sorted(scan_by_radius),
         "offset_distances_nm": list(offset_distances_nm),
         "n_directions": int(n_directions),
@@ -3226,7 +3226,7 @@ def run_fusion_point_vs_aunp_density_for_tomogram(
     alignment_dir: str,
     *,
     fusion_rows: Sequence[dict],
-    active_zones_glb: dict,
+    clefts_glb: dict,
     probe_radii: Sequence[float] = PACKING_DENSITY_PROBE_RADII_NM,
     receptor_crosssection: float = 122.0,
     aunps_per_receptor: float = 2.0,
@@ -3238,7 +3238,7 @@ def run_fusion_point_vs_aunp_density_for_tomogram(
     write_figures: bool = True,
     aunp_pick_star_pattern: str | None = None,
 ) -> list[pd.DataFrame]:
-    """Run fusion-point vs AuNP density analysis for each active zone in one tomogram."""
+    """Run fusion-point vs AuNP density analysis for each synaptic cleft in one tomogram."""
     tomogram_path = Path(tomogram_path)
     if not fusion_rows:
         return []
@@ -3267,11 +3267,11 @@ def run_fusion_point_vs_aunp_density_for_tomogram(
         aunp_pick_star_pattern=aunp_pick_star_pattern,
     )
 
-    membrane_az_pairs = import_presynaptic_membranes_and_active_zones(
+    membrane_az_pairs = import_presynaptic_membranes_and_clefts(
         tomogram_path, alignment_dir=alignment_dir
     )
     zone_frames: list[pd.DataFrame] = []
-    for zone_name, zone_data in active_zones_glb.get("active_zones", {}).items():
+    for zone_name, zone_data in clefts_glb.get("clefts", {}).items():
         zone_scans = scan_by_radius_for_zone(scan_by_radius, zone_name)
         if not zone_scans:
             continue
@@ -3312,7 +3312,7 @@ def collect_per_tomogram_fusion_point_vs_aunp_density_tables(
     h12_frames: list[pd.DataFrame] = []
     o_frames: list[pd.DataFrame] = []
 
-    for tomo, _set_name, _aunp_active_zones, alignment_dir in tomo_paths:
+    for tomo, _set_name, _cleft_ids, alignment_dir in tomo_paths:
         tomogram_path = Path(tomo)
         tomogram_name = tomogram_path.name
         base = (
@@ -3433,9 +3433,9 @@ def _collect_ripley_vesicle_artifacts(
     tomo_paths: Iterable[tuple[Any, Any, Any, str]],
     artifact_name: str,
 ) -> list[dict[str, np.ndarray | str]]:
-    """Load all saved per-vesicle Ripley artifacts across tomograms and active zones."""
+    """Load all saved per-vesicle Ripley artifacts across tomograms and synaptic clefts."""
     artifacts: list[dict[str, np.ndarray | str]] = []
-    for tomo, _set_name, _aunp_active_zones, alignment_dir in tomo_paths:
+    for tomo, _set_name, _cleft_ids, alignment_dir in tomo_paths:
         base = (
             Path(tomo)
             / alignment_dir
@@ -3464,7 +3464,7 @@ def _stack_nonempty_curves(parts: list[np.ndarray]) -> np.ndarray:
 def _ripley_artifact_pool_summary(
     artifacts: Sequence[dict[str, np.ndarray | str]],
 ) -> tuple[int, int, int]:
-    """Return (n_fusion_vesicle_curves, n_tomograms, n_active_zones) for pooled Ripley plots."""
+    """Return (n_fusion_vesicle_curves, n_tomograms, n_clefts) for pooled Ripley plots."""
     n_tomograms = len({str(a.get("tomogram_name", "")) for a in artifacts if a.get("tomogram_name")})
     n_zones = len(
         {
@@ -3522,7 +3522,7 @@ def plot_pooled_ripley_h12_from_vesicle_artifacts(
     *,
     file_tag: str = "pooled",
 ) -> pd.DataFrame | None:
-    """Stack saved per-vesicle H₁₂ curves from all tomograms and active zones."""
+    """Stack saved per-vesicle H₁₂ curves from all tomograms and synaptic clefts."""
     artifacts = _collect_ripley_vesicle_artifacts(tomo_paths, RIPLEY_H12_VESICLE_CURVES_NPZ)
     if not artifacts:
         print("Skipping pooled Ripley H₁₂: no saved vesicle-curve artifacts found.")
@@ -3544,10 +3544,10 @@ def plot_pooled_ripley_h12_from_vesicle_artifacts(
         print("Skipping pooled Ripley H₁₂: empty vesicle curves.")
         return None
 
-    n_fusion_vesicles, n_tomograms, n_active_zones = _ripley_artifact_pool_summary(artifacts)
+    n_fusion_vesicles, n_tomograms, n_clefts = _ripley_artifact_pool_summary(artifacts)
     pool_note = (
         f"n_fusion_vesicles={n_fusion_vesicles}, n_tomograms={n_tomograms}, "
-        f"n_active_zones={n_active_zones}"
+        f"n_clefts={n_clefts}"
     )
 
     h12_obs = np.mean(np.vstack(obs_parts), axis=0)
@@ -3620,7 +3620,7 @@ def plot_pooled_ripley_h12_from_vesicle_artifacts(
                 "p_value_depletion": float(pl),
                 "n_fusion_vesicles": n_fusion_vesicles,
                 "n_tomograms": n_tomograms,
-                "n_active_zones": n_active_zones,
+                "n_clefts": n_clefts,
             }
         )
 
@@ -3695,7 +3695,7 @@ def plot_pooled_ripley_h12_from_vesicle_artifacts(
                     "n_fusion_vesicles": len(fusion_curves),
                     "n_control_vesicles": len(ctrl_curves),
                     "n_tomograms": n_tomograms,
-                    "n_active_zones": n_active_zones,
+                    "n_clefts": n_clefts,
                 }
             )
 
@@ -3739,7 +3739,7 @@ def plot_pooled_ripley_o_from_vesicle_artifacts(
     *,
     file_tag: str = "pooled",
 ) -> pd.DataFrame | None:
-    """Stack saved per-vesicle Ripley's O curves from all tomograms and active zones."""
+    """Stack saved per-vesicle Ripley's O curves from all tomograms and synaptic clefts."""
     artifacts = _collect_ripley_vesicle_artifacts(tomo_paths, RIPLEY_O_VESICLE_CURVES_NPZ)
     if not artifacts:
         print("Skipping pooled Ripley's O: no saved vesicle-curve artifacts found.")
@@ -3761,10 +3761,10 @@ def plot_pooled_ripley_o_from_vesicle_artifacts(
         print("Skipping pooled Ripley's O: empty vesicle curves.")
         return None
 
-    n_fusion_vesicles, n_tomograms, n_active_zones = _ripley_artifact_pool_summary(artifacts)
+    n_fusion_vesicles, n_tomograms, n_clefts = _ripley_artifact_pool_summary(artifacts)
     pool_note = (
         f"n_fusion_vesicles={n_fusion_vesicles}, n_tomograms={n_tomograms}, "
-        f"n_active_zones={n_active_zones}"
+        f"n_clefts={n_clefts}"
     )
 
     o_obs = np.mean(np.vstack(obs_parts), axis=0)
@@ -3808,7 +3808,7 @@ def plot_pooled_ripley_o_from_vesicle_artifacts(
                 "p_value_depletion": float(pl),
                 "n_fusion_vesicles": n_fusion_vesicles,
                 "n_tomograms": n_tomograms,
-                "n_active_zones": n_active_zones,
+                "n_clefts": n_clefts,
             }
         )
 
@@ -3907,7 +3907,7 @@ def plot_pooled_ripley_o_from_vesicle_artifacts(
                     "n_fusion_vesicles": len(fusion_curves),
                     "n_control_vesicles": len(ctrl_curves),
                     "n_tomograms": n_tomograms,
-                    "n_active_zones": n_active_zones,
+                    "n_clefts": n_clefts,
                 }
             )
 
@@ -4026,7 +4026,7 @@ def aggregate_fusion_point_per_tomogram_visualizations(
         return
 
     print("Generating per-tomogram packing summary plots (with zonogram overlays)...")
-    for tomo, _set_name, _aunp_active_zones, alignment_dir in tomo_paths:
+    for tomo, _set_name, _cleft_ids, alignment_dir in tomo_paths:
         tomogram_path = Path(tomo)
         tomogram_name = tomogram_path.name
         sub_df = fusion_df[fusion_df["tomogram_name"] == tomogram_name]
@@ -4159,7 +4159,7 @@ def main() -> None:
         type=str,
         default=None,
         help=(
-            "Per-AZ AuNP pick STAR filename pattern with one '*' for the active zone index "
+            "Per-AZ AuNP pick STAR filename pattern with one '*' for the synaptic cleft index "
             f"(default: {DEFAULT_AUNP_PICK_STAR_PATTERN!r})"
         ),
     )
@@ -4192,7 +4192,7 @@ def main() -> None:
     if not fusion_rows:
         raise SystemExit("No fusion points found.")
 
-    membrane_az_pairs = import_presynaptic_membranes_and_active_zones(
+    membrane_az_pairs = import_presynaptic_membranes_and_clefts(
         tomogram_path, alignment_dir=args.alignment_dir
     )
 

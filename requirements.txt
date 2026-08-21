@@ -1,8 +1,14 @@
+# SynapticTomoTools runtime dependencies
+# Keep in sync with [project.dependencies] in pyproject.toml
+
 # Core scientific libraries
 numpy>=1.21
 scipy>=1.7
 pandas>=1.3
 pulp>=2.6
+networkx>=2.6
+einops>=0.6
+requests>=2.25
 
 # 3D mesh processing (for GLB file handling)
 trimesh>=3.9
@@ -13,32 +19,34 @@ mrcfile>=1.4
 
 # Plotting and visualization
 matplotlib>=3.4
+seaborn>=0.11
 aquarel
-
-# Progress bars and CLI tools
-tqdm>=4.62
-
-# Image processing and computer vision
-scikit-image>=0.19
-opencv-python>=4.5
-
-# Deep learning (for SAM segmentation)
-torch>=1.9
-segment-anything>=1.0
-
-# Video and animation
-imageio>=2.9
-
-# System monitoring and memory management
-psutil>=5.8
-
-# Optional dependencies for analysis scripts
-seaborn>=0.11       # Used in analysis scripts for enhanced plotting
-streamlit>=1.28     # For zonogram viewer: streamlit run scripts/zonogram_viewer.py
-membrain-stats>=0.0.3  # Geodesic Ripley's O in fusion packing controls test
-potpourri3d            # Heat-method geodesics (membrain-stats dependency)
 reportlab
 pillow
 PyPDF2
 
-git+https://github.com/jojoelfe/findingampa.git
+# Progress / system
+tqdm>=4.62
+psutil>=5.8
+
+# Image processing and computer vision
+scikit-image>=0.19
+scikit-learn
+opencv-python>=4.5
+imageio>=2.9
+
+# Deep learning / transforms (zonogram extraction and related)
+torch>=1.9
+segment-anything>=1.0
+torch-transform-image
+torch-affine-utils
+
+# Geodesic Ripley's O (fusion packing controls)
+membrain-stats>=0.0.3
+potpourri3d
+
+# Utilities
+streamlit>=1.28  # zonogram viewer: streamlit run scripts/utilities/zonogram_viewer.py
+
+# Preprocessing pipeline (FindingAMPA GUI / Pre-Processing tab)
+findingampa @ git+https://github.com/jojoelfe/findingampa.git

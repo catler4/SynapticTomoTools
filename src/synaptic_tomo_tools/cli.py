@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import os
 import shutil
-from .activezone import define_active_zone, calculate_cleft_width, build_activezone_per_zone_rows, upsert_activezone_per_zone_csv
+from .cleft import define_cleft, calculate_cleft_width, build_cleft_per_zone_rows, upsert_cleft_per_zone_csv
 from .vesicles import detect_vesicles, measure_distances_to_az
 from .aunps import analyze_aunps
 from .results_manager import ResultsManager
@@ -29,55 +29,69 @@ if not TOMO_ROOT_BASE:
 # This allows any set name from the CSV to work without hardcoding
 SET_ROOTS = {}
 
-def load_tomograms(csv_path, analysis_type, set_name=None):
+def parse_cleft_ids(value):
+    """Parse CSV/CLI ``cleft_IDs`` to a list of ints, or None for all clefts."""
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        if len(value) == 0:
+            return None
+        out = []
+        for x in value:
+            try:
+                out.append(int(float(x)))
+            except (TypeError, ValueError):
+                continue
+        return out or None
+    s = str(value).strip()
+    if s == "" or s.lower() == "nan":
+        return None
+    # Allow comma- and/or whitespace-separated values
+    parts = s.replace(",", " ").split()
+    out = []
+    for x in parts:
+        x = x.strip()
+        if not x:
+            continue
+        try:
+            out.append(int(float(x)))
+        except ValueError:
+            continue
+    return out or None
+
+
+def load_tomograms(csv_path, analysis_type=None, set_name=None):
     """
-    Load filtered tomogram paths based on analysis type and set,
-    with support for per-set data root directories.
-    Returns a list of (path, set_name, aunp_active_zones, alignment_dir) tuples.
+    Load tomogram paths from CSV.
+
+    ``analysis_type`` is kept for call-site compatibility but no longer filters rows;
+    every CSV row is included (optionally filtered by ``set_name``). Analyses to run
+    are chosen by CLI/GUI (``--analysis`` / selected tabs), not by per-row flags.
+
+    Returns a list of ``(path, set_name, cleft_ids, alignment_dir)`` tuples.
+    ``cleft_ids`` is the raw CSV ``cleft_IDs`` cell (empty string if absent).
     """
     df = pd.read_csv(csv_path)
 
-    # Handle 'all' and 'visualizations' analysis types - include tomograms that have any analysis enabled
-    if analysis_type in ['all', 'visualizations']:
-        # Include tomograms that have at least one analysis enabled
-        analysis_columns = ['activezone', 'vesicles', 'aunps']
-        available_columns = [col for col in analysis_columns if col in df.columns]
-        if not available_columns:
-            raise ValueError(f"No analysis columns found in {csv_path}.")
-        
-        # Create a mask for tomograms that have any analysis enabled
-        analysis_mask = df[available_columns].any(axis=1)
-        filtered = df[analysis_mask]
-    else:
-        # For individual analysis types, check if the column exists
-        if analysis_type not in df.columns:
-            raise ValueError(f"Column '{analysis_type}' not found in {csv_path}.")
-        filtered = df[df[analysis_type] == True]
-    
+    for required in ("tomoname", "set", "alignment_dir"):
+        if required not in df.columns:
+            raise ValueError(
+                f"Column '{required}' not found in {csv_path}."
+            )
+
+    filtered = df
     if set_name:
         filtered = filtered[filtered["set"] == set_name]
 
-    # Ensure filtered is a DataFrame (for linter and runtime safety)
     assert isinstance(filtered, pd.DataFrame)
-    # type: ignore[union-attr]
 
-    # Require explicit alignment_dir in CSV (no fallback).
-    if "alignment_dir" not in df.columns:
-        raise ValueError(
-            f"Column 'alignment_dir' not found in {csv_path}. "
-            "Each CSV row must specify alignment_dir (e.g., best_alignment, liza_az0)."
-        )
-
-    # Construct full paths based on set-specific root
-    # Dynamically construct paths using TOMO_ROOT_BASE (same approach as GUI)
     paths = []
     for _, row in filtered.iterrows():
         row: pd.Series  # type hint for linter
-        set_name = str(row["set"])
-        # Dynamically construct path if not already in SET_ROOTS
-        if set_name not in SET_ROOTS:
-            SET_ROOTS[set_name] = Path(TOMO_ROOT_BASE) / set_name / "TOP_TOMOS"
-        root = SET_ROOTS[set_name]
+        row_set = str(row["set"])
+        if row_set not in SET_ROOTS:
+            SET_ROOTS[row_set] = Path(TOMO_ROOT_BASE) / row_set / "TOP_TOMOS"
+        root = SET_ROOTS[row_set]
         full_path = root / row["tomoname"]
         alignment_dir = str(row["alignment_dir"]).strip()
         if alignment_dir == "" or alignment_dir.lower() == "nan":
@@ -85,9 +99,13 @@ def load_tomograms(csv_path, analysis_type, set_name=None):
                 f"Missing alignment_dir for tomogram '{row['tomoname']}' in {csv_path}. "
                 "Please set alignment_dir explicitly for every row."
             )
-        # Get aunp_active_zones if present, else empty string
-        aunp_active_zones = row.get("aunp_active_zones", "") if "aunp_active_zones" in row else ""
-        paths.append((full_path, set_name, aunp_active_zones, alignment_dir))
+        if "cleft_IDs" in row.index:
+            cleft_ids = row.get("cleft_IDs", "")
+            if pd.isna(cleft_ids):
+                cleft_ids = ""
+        else:
+            cleft_ids = ""
+        paths.append((full_path, row_set, cleft_ids, alignment_dir))
 
     return paths
 
@@ -122,11 +140,11 @@ SYNAPTIC TOMO TOOLS
 """
     print(synapse_art)
 
-def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True, az_distance_min=None, az_distance_max=None,
+def run_cleft(tomo_paths, results_manager, rerun=False, print_ascii=True, az_distance_min=None, az_distance_max=None,
                    aunp_pick_star_pattern=None):
     if print_ascii:
         print_synapse_ascii_art()
-    for i, (tomo, set_name, aunp_active_zones, alignment_dir) in enumerate(tomo_paths):
+    for i, (tomo, set_name, cleft_ids, alignment_dir) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
         analysis_name = f"{tomogram_name}__{alignment_dir}"
         print(f"\n{'='*33} TOMOGRAM {i+1}/{len(tomo_paths)} {'='*33}")
@@ -134,34 +152,19 @@ def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True, a
         print("="*80)
         
         # Check if analysis already completed successfully
-        existing_results = results_manager.get_tomogram_results(analysis_name, 'activezone')
+        existing_results = results_manager.get_tomogram_results(analysis_name, 'cleft')
         has_completed = (existing_results and 
                         'results' in existing_results and 
-                        'active_zone' in existing_results['results'] and
-                        existing_results['results']['active_zone'].get('status') == 'completed')
+                        'cleft' in existing_results['results'] and
+                        existing_results['results']['cleft'].get('status') == 'completed')
         
         if has_completed and not rerun:
-            print(f"Skipping active zone analysis for {analysis_name} (already completed successfully)")
+            print(f"Skipping synaptic cleft analysis for {analysis_name} (already completed successfully)")
             continue
         
-        print(f"Running active zone analysis on {analysis_name}")
+        print(f"Running synaptic cleft analysis on {analysis_name}")
         try:
-            # Parse aunp_active_zones to get active zone indices (same as in run_aunps and run_vesicles)
-            az_str = str(aunp_active_zones) if aunp_active_zones is not None else ""
-            if az_str.strip() == "" or az_str.lower() == "nan":
-                az_indices = None
-            else:
-                # Handle both integer strings and float strings (e.g., "0.0" -> 0)
-                az_indices = []
-                for x in az_str.split(","):
-                    x = x.strip()
-                    if x.isdigit():
-                        az_indices.append(int(x))
-                    elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
-                        az_indices.append(int(float(x)))
-                # If parsing resulted in empty list, treat as None (use all active zones)
-                if len(az_indices) == 0:
-                    az_indices = None
+            az_indices = parse_cleft_ids(cleft_ids)
             
             # Use custom distance range if provided, otherwise use defaults
             distance_range = None
@@ -170,22 +173,22 @@ def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True, a
                 max_dist = az_distance_max if az_distance_max is not None else 40.0
                 distance_range = (min_dist, max_dist)
             
-            az_results = define_active_zone(
+            az_results = define_cleft(
                 tomo,
-                active_zone_indices=az_indices,
+                cleft_indices=az_indices,
                 distance_range=distance_range,
                 alignment_dir=alignment_dir,
                 aunp_pick_star_pattern=aunp_pick_star_pattern,
             )
-            cleft_results = calculate_cleft_width(tomo, active_zone_indices=az_indices, set_name=set_name, alignment_dir=alignment_dir)
+            cleft_results = calculate_cleft_width(tomo, cleft_indices=az_indices, set_name=set_name, alignment_dir=alignment_dir)
             combined_results = {
-                'active_zone': az_results,
+                'cleft': az_results,
                 'cleft_width': cleft_results
             }
             results_manager.store_tomogram_results(
-                analysis_name, 'activezone', combined_results, overwrite=rerun, set_name=set_name, alignment_dir=alignment_dir
+                analysis_name, 'cleft', combined_results, overwrite=rerun, set_name=set_name, alignment_dir=alignment_dir
             )
-            per_zone_rows = build_activezone_per_zone_rows(
+            per_zone_rows = build_cleft_per_zone_rows(
                 tomogram_name=tomogram_name,
                 set_name=set_name or "",
                 alignment_dir=alignment_dir,
@@ -193,17 +196,17 @@ def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True, a
                 cleft_results=cleft_results,
             )
             if per_zone_rows:
-                upsert_activezone_per_zone_csv(
+                upsert_cleft_per_zone_csv(
                     per_zone_rows,
                     tomogram_name=tomogram_name,
                     alignment_dir=alignment_dir,
                     results_dir=str(results_manager.results_dir),
                 )
         except Exception as e:
-            print(f"Error in active zone analysis for {analysis_name}: {e}")
+            print(f"Error in synaptic cleft analysis for {analysis_name}: {e}")
             # Store error results so we know this analysis failed
             error_results = {
-                'active_zone': {
+                'cleft': {
                     'status': 'error',
                     'error': str(e)
                 },
@@ -213,7 +216,7 @@ def run_activezone(tomo_paths, results_manager, rerun=False, print_ascii=True, a
                 }
             }
             results_manager.store_tomogram_results(
-                analysis_name, 'activezone', error_results, overwrite=True, set_name=set_name, alignment_dir=alignment_dir
+                analysis_name, 'cleft', error_results, overwrite=True, set_name=set_name, alignment_dir=alignment_dir
             )
 
 def run_vesicles(
@@ -226,7 +229,7 @@ def run_vesicles(
 ):
     if print_ascii:
         print_synapse_ascii_art()
-    for i, (tomo, set_name, aunp_active_zones, alignment_dir) in enumerate(tomo_paths):
+    for i, (tomo, set_name, cleft_ids, alignment_dir) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
         analysis_name = f"{tomogram_name}__{alignment_dir}"
         if i > 0:
@@ -248,9 +251,9 @@ def run_vesicles(
         
         print(f"Running vesicle analysis on {analysis_name}")
         try:
-            # Note: Active zones are already filtered by the active zone analysis step
+            # Note: Synaptic clefts are already filtered by the synaptic cleft analysis step
             # to only include zones with AuNPs, so vesicle analysis will automatically
-            # use only the relevant active zones
+            # use only the relevant synaptic clefts
             # Use custom vesicle distance threshold if provided, otherwise use default (20.0)
             threshold = vesicle_distance_threshold if vesicle_distance_threshold is not None else 20.0
             fusing_threshold = fusing_perimeter_threshold if fusing_perimeter_threshold is not None else 1.0
@@ -312,7 +315,7 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
     base_viz_dir = Path(results_manager.results_dir) / 'visualizations'
     base_viz_dir.mkdir(parents=True, exist_ok=True)
     
-    for i, (tomo, set_name, aunp_active_zones, alignment_dir) in enumerate(tomo_paths):
+    for i, (tomo, set_name, cleft_ids, alignment_dir) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
         analysis_name = f"{tomogram_name}__{alignment_dir}"
 
@@ -335,19 +338,7 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
         print(f"[{i+1}/{len(tomo_paths)}] Processing {tomogram_name}...", end=" ", flush=True)
         
         try:
-            # Parse aunp_active_zones string to list of ints or None
-            az_str = str(aunp_active_zones) if aunp_active_zones is not None else ""
-            if az_str.strip() == "" or az_str.lower() == "nan":
-                az_indices = None
-            else:
-                # Handle both integer strings and float strings (e.g., "0.0" -> 0)
-                az_indices = []
-                for x in az_str.split(","):
-                    x = x.strip()
-                    if x.isdigit():
-                        az_indices.append(int(x))
-                    elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
-                        az_indices.append(int(float(x)))
+            az_indices = parse_cleft_ids(cleft_ids)
             # Per-alignment under results/visualizations (same tomogram + different alignment_dir → separate dirs)
             tomogram_viz_dir = base_viz_dir / tomogram_name / alignment_dir / 'aunps_and_vesicles'
             tomogram_viz_dir.mkdir(parents=True, exist_ok=True)
@@ -372,7 +363,7 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
                                    aunp_distance_cutoff_value=aunp_distance_cutoff_value)
 
             zonogram_result = run_combined_zonogram_analysis_single_tomogram(
-                tomo, None, aunp_active_zones, rerun,
+                tomo, None, cleft_ids, rerun,
                 alignment_dir=alignment_dir,
                 vesicle_distance_threshold=vdist,
                 fusing_perimeter_threshold=vfuse,
@@ -462,7 +453,7 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
             traceback.print_exc()
 
 # Canonical order of pipeline steps for `--analysis all`.
-PIPELINE_STEPS = ("activezone", "vesicles", "aunps", "visualizations")
+PIPELINE_STEPS = ("cleft", "vesicles", "aunps", "visualizations")
 
 
 def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None, 
@@ -483,7 +474,7 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
                      monomer_dimer_ripley_n_perm=None,
                      steps=None,
                      generate_combined_pdf=False):
-    """Run selected pipeline steps in canonical order: activezone, vesicles, aunps, visualizations.
+    """Run selected pipeline steps in canonical order: cleft, vesicles, aunps, visualizations.
 
     steps: iterable of step names to run (subset of PIPELINE_STEPS). None = all steps.
     """
@@ -503,11 +494,11 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
     print("Selected steps (canonical order): " + " → ".join(steps_to_run))
     print("="*80)
 
-    if "activezone" in steps_to_run:
+    if "cleft" in steps_to_run:
         print("\n" + "="*80)
         print("STEP: ACTIVE ZONE ANALYSIS")
         print("="*80)
-        run_activezone(tomo_paths, results_manager, rerun, print_ascii=False, 
+        run_cleft(tomo_paths, results_manager, rerun, print_ascii=False, 
                        az_distance_min=az_distance_min, az_distance_max=az_distance_max,
                        aunp_pick_star_pattern=aunp_pick_star_pattern)
     
@@ -577,7 +568,7 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
               monomer_dimer_ripley_n_perm=None):
     if print_ascii:
         print_synapse_ascii_art()
-    for i, (tomo, set_name, aunp_active_zones, alignment_dir) in enumerate(tomo_paths):
+    for i, (tomo, set_name, cleft_ids, alignment_dir) in enumerate(tomo_paths):
         tomogram_name = Path(tomo).name
         analysis_name = f"{tomogram_name}__{alignment_dir}"
         
@@ -602,19 +593,7 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
         print(f"Running AuNP analysis on {analysis_name}")
         
         try:
-            # Parse aunp_active_zones string to list of ints or None
-            az_str = str(aunp_active_zones) if aunp_active_zones is not None else ""
-            if az_str.strip() == "" or az_str.lower() == "nan":
-                az_indices = None
-            else:
-                # Handle both integer strings and float strings (e.g., "0.0" -> 0)
-                az_indices = []
-                for x in az_str.split(","):
-                    x = x.strip()
-                    if x.isdigit():
-                        az_indices.append(int(x))
-                    elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
-                        az_indices.append(int(float(x)))
+            az_indices = parse_cleft_ids(cleft_ids)
             # Use custom parameters if provided, otherwise use defaults
             vesicle_threshold = vesicle_distance_threshold if vesicle_distance_threshold is not None else 20.0
             eps = dbscan_eps if dbscan_eps is not None else 16.0
@@ -782,9 +761,9 @@ def check_analysis_status(results_manager, results_key, analysis_type):
                 return 'failed'
             elif status == 'completed':
                 return 'completed'
-    elif analysis_type == 'activezone':
-        if 'active_zone' in existing_results['results']:
-            status = existing_results['results']['active_zone'].get('status')
+    elif analysis_type == 'cleft':
+        if 'cleft' in existing_results['results']:
+            status = existing_results['results']['cleft'].get('status')
             if status == 'error':
                 return 'failed'
             elif status == 'completed':
@@ -806,7 +785,7 @@ def print_analysis_summary(results_manager, tomos):
     print("ANALYSIS STATUS SUMMARY")
     print("="*80)
     
-    analysis_types = ['activezone', 'vesicles', 'aunps']
+    analysis_types = ['cleft', 'vesicles', 'aunps']
     status_counts = {analysis_type: {'completed': 0, 'failed': 0, 'not_run': 0} for analysis_type in analysis_types}
     
     for tomo_path, _set_name, _, alignment_dir in tomos:
@@ -838,14 +817,14 @@ def main():
         description="Run SynapticTomoTools analysis on selected tomograms."
     )
     parser.add_argument(
-        "--analysis", required=True, choices=["activezone", "vesicles", "aunps", "visualizations", "all"],
-        help="Which analysis to run. Use 'all' to run activezone, vesicles, aunps, and visualizations in sequence. Use 'visualizations' to generate images from existing analysis results."
+        "--analysis", required=True, choices=["cleft", "vesicles", "aunps", "visualizations", "all"],
+        help="Which analysis to run. Use 'all' to run cleft, vesicles, aunps, and visualizations in sequence. Use 'visualizations' to generate images from existing analysis results."
     )
     parser.add_argument(
         "--steps", default=None,
         help=(
             "Only used with --analysis all. Comma-separated subset of pipeline steps to run "
-            "(choices: activezone, vesicles, aunps, visualizations). Steps always run in canonical "
+            "(choices: cleft, vesicles, aunps, visualizations). Steps always run in canonical "
             "order regardless of listing order. Default: all four steps."
         ),
     )
@@ -897,11 +876,11 @@ def main():
     # Custom parameter arguments
     parser.add_argument(
         "--az-distance-min", type=float, default=None,
-        help="Custom minimum distance for active zone definition (nm). Default: 10.0"
+        help="Custom minimum distance for synaptic cleft definition (nm). Default: 10.0"
     )
     parser.add_argument(
         "--az-distance-max", type=float, default=None,
-        help="Custom maximum distance for active zone definition (nm). Default: 40.0"
+        help="Custom maximum distance for synaptic cleft definition (nm). Default: 40.0"
     )
     parser.add_argument(
         "--vesicle-distance-threshold", type=float, default=None,
@@ -970,12 +949,12 @@ def main():
     )
     parser.add_argument(
         "--fusing-perimeter-threshold", type=float, default=None,
-        help="Minimum vesicle-segmentation-point to presynaptic active-zone distance (nm) for classifying fusing vesicles. Default: 1.0"
+        help="Minimum vesicle-segmentation-point to presynaptic synaptic-cleft distance (nm) for classifying fusing vesicles. Default: 1.0"
     )
     parser.add_argument(
         "--aunp-pick-star-pattern", type=str, default=None,
         help=(
-            "Per-active-zone AuNP pick STAR filename pattern; use '*' for the active zone index "
+            "Per-synaptic-cleft AuNP pick STAR filename pattern; use '*' for the synaptic cleft index "
             "(default: aunp_tm_BP_active_zone_*_manual_refined.star)"
         ),
     )
@@ -992,14 +971,14 @@ def main():
     parser.add_argument(
         "--monomer-star-pattern", type=str, default=None,
         help=(
-            "Per-active-zone monomer AuNP STAR filename pattern; use '*' for the active zone index "
+            "Per-synaptic-cleft monomer AuNP STAR filename pattern; use '*' for the synaptic cleft index "
             "(default: aunp_tm_BP_active_zone_*_manual_refined_monomer.star)"
         ),
     )
     parser.add_argument(
         "--dimer-star-pattern", type=str, default=None,
         help=(
-            "Per-active-zone dimer AuNP STAR filename pattern; use '*' for the active zone index "
+            "Per-synaptic-cleft dimer AuNP STAR filename pattern; use '*' for the synaptic cleft index "
             "(default: aunp_tm_BP_active_zone_*_manual_refined_dimer.star)"
         ),
     )
@@ -1009,7 +988,7 @@ def main():
         action=argparse.BooleanOptionalAction,
         default=False,
         help=(
-            "Run 3D Ripley L₁₂ of AuNP positions relative to the active zone center "
+            "Run 3D Ripley L₁₂ of AuNP positions relative to the synaptic cleft center "
             "(default: disabled). Use --aunp-vs-az-center-ripley to enable."
         ),
     )
@@ -1078,15 +1057,15 @@ def main():
                 missing_files.append("presynaptic membrane files (presynapticmembranes_*.txt)")
             if not post_mem:
                 missing_files.append("postsynaptic membrane files (postsynapticmembranes_*.txt)")
-            # Check for active zone segmentations only if not running activezone or all
-            if args.analysis not in ["activezone", "all"]:
-                az_dir = base / "STT_results" / "activezone"
+            # Check for synaptic cleft segmentations only if not running cleft or all
+            if args.analysis not in ["cleft", "all"]:
+                az_dir = base / "STT_results" / "cleft"
                 az_pre = list(az_dir.glob("*_pre_outer.txt"))
                 az_post = list(az_dir.glob("*_post_outer.txt"))
                 if not az_pre:
-                    missing_files.append("active zone pre files (*_pre_outer.txt)")
+                    missing_files.append("synaptic cleft pre files (*_pre_outer.txt)")
                 if not az_post:
-                    missing_files.append("active zone post files (*_post_outer.txt)")
+                    missing_files.append("synaptic cleft post files (*_post_outer.txt)")
             # Check for MemBrain segmentation
             membrain_dir = base / "membrain"
             membrain_files = list(membrain_dir.glob("*.mrc"))
@@ -1129,10 +1108,10 @@ def main():
 
     # Show what will be run
     if args.analysis == "all":
-        print("\nWill run: activezone → vesicles → aunps → visualizations")
+        print("\nWill run: cleft → vesicles → aunps → visualizations")
         print("Analyses that have already completed successfully will be skipped.")
         print("Use --rerun to force re-run of completed analyses.")
-    elif args.analysis in ["activezone", "vesicles", "aunps"]:
+    elif args.analysis in ["cleft", "vesicles", "aunps"]:
         print(f"\nWill run: {args.analysis} analysis")
         print("Analyses that have already completed successfully will be skipped.")
         print("Use --rerun to force re-run of completed analyses.")
@@ -1169,8 +1148,8 @@ def main():
     dimer_star_pattern = args.dimer_star_pattern
     monomer_dimer_ripley_n_perm = args.monomer_dimer_ripley_n_perm
     
-    if args.analysis == "activezone":
-        run_activezone(tomos, results_manager, rerun=args.rerun, 
+    if args.analysis == "cleft":
+        run_cleft(tomos, results_manager, rerun=args.rerun, 
                        az_distance_min=az_distance_min, az_distance_max=az_distance_max,
                        aunp_pick_star_pattern=aunp_pick_star_pattern)
     elif args.analysis == "vesicles":

@@ -3,11 +3,11 @@
 
 Uses raw tomogram coordinates (no postsynaptic projection) except label-permutation
 sites that land on an original AuNP pool index — those are snapped to the presynaptic
-active zone. Tangential 40 nm presynaptic shifts use the same placement rules as the
+synaptic cleft. Tangential 40 nm presynaptic shifts use the same placement rules as the
 legacy fusion-point control code.
 
 Ripley window: ``synaptic_cleft_az_hull`` — convex hull of all presynaptic + postsynaptic
-active-zone surface points, always additionally restricted to the angle in-betweenness
+synaptic-cleft surface points, always additionally restricted to the angle in-betweenness
 region (matching the AZ-center and monomer/dimer Ripley analyses) since fusion sites and
 AuNP positions are only meaningful relative to the space between the two membranes. Edge
 correction uses the deterministic grid quadrature method (``_isotropic_edge_factors_grid``)
@@ -72,7 +72,7 @@ from .ripley_library import (
     derive_symmetric_k_l_g_families,
     g_shell_reliability_mask,
     load_monomer_dimer_aunps_for_zone,
-    load_synaptic_cleft_active_zone_points,
+    load_synaptic_cleft_cleft_points,
     mad_result_to_curves_dataframe,
     mad_result_to_summary_row,
     pair_correlation_from_k_diff,
@@ -82,7 +82,7 @@ from .ripley_library import (
     run_mad_tests_over_r_ranges,
     subset_aunps,
 )
-from .vesicles import import_presynaptic_membranes_and_active_zones
+from .vesicles import import_presynaptic_membranes_and_clefts
 
 WindowMode = Literal["synaptic_cleft_az_hull"]
 RIPLEY_WINDOW_MODES: tuple[WindowMode, ...] = ("synaptic_cleft_az_hull",)
@@ -182,7 +182,7 @@ def _shift_sites_by_replicate(
         membrane = fp.get("closest_membrane")
         if not membrane or membrane not in membrane_az_pairs:
             continue
-        az_xyz = membrane_az_pairs[membrane]["active_zone_points"]
+        az_xyz = membrane_az_pairs[membrane]["cleft_points"]
         if az_xyz is None or len(az_xyz) == 0:
             continue
         az_tree = cKDTree(az_xyz)
@@ -469,7 +469,7 @@ def build_ripley_l12_prism_envelope_table(
         for i, r_nm in enumerate(r_vals):
             rows.append(
                 {
-                    "active_zone_name": zone_name,
+                    "cleft_name": zone_name,
                     "aunp_subset": aunp_subset,
                     "window_mode": window.defining_mode,
                     "control_comparison": comparison,
@@ -544,7 +544,7 @@ def build_ripley_l12_prism_wide_table(
     if prism_long.empty:
         return prism_long.copy()
     if id_cols is None:
-        id_cols = ["active_zone_name", "aunp_subset", "window_mode", "control_comparison"]
+        id_cols = ["cleft_name", "aunp_subset", "window_mode", "control_comparison"]
     value_cols = [
         col
         for col in (
@@ -570,7 +570,7 @@ def build_ripley_l12_prism_wide_table(
             "n_control_curves",
             "n_aunp_partners",
             "n_tomograms",
-            "n_active_zones",
+            "n_clefts",
             "window_volume_nm3",
         )
         if col in prism_long.columns
@@ -609,7 +609,7 @@ def build_ripley_g12_prism_envelope_table(
         for i, r_nm in enumerate(r_vals):
             rows.append(
                 {
-                    "active_zone_name": zone_name,
+                    "cleft_name": zone_name,
                     "aunp_subset": aunp_subset,
                     "window_mode": window.defining_mode,
                     "control_comparison": comparison,
@@ -650,7 +650,7 @@ def build_ripley_g12_prism_wide_table(
     if prism_long.empty:
         return prism_long.copy()
     if id_cols is None:
-        id_cols = ["active_zone_name", "aunp_subset", "window_mode", "control_comparison"]
+        id_cols = ["cleft_name", "aunp_subset", "window_mode", "control_comparison"]
     value_cols = [
         col
         for col in (
@@ -668,7 +668,7 @@ def build_ripley_g12_prism_wide_table(
             "n_control_curves",
             "n_aunp_partners",
             "n_tomograms",
-            "n_active_zones",
+            "n_clefts",
             "window_volume_nm3",
         )
         if col in prism_long.columns
@@ -1022,14 +1022,14 @@ def run_ripley_for_zone_window(
                 mad_result_to_summary_row(
                     mad,
                     extra_cols={
-                        "active_zone_name": zone_name,
+                        "cleft_name": zone_name,
                         "aunp_subset": aunp_subset,
                         "window_mode": mode_tag,
                     },
                 )
             )
             mad_curves = mad_result_to_curves_dataframe(mad, r_vals, observed=obs_mean)
-            mad_curves.insert(0, "active_zone_name", zone_name)
+            mad_curves.insert(0, "cleft_name", zone_name)
             mad_curves.insert(1, "aunp_subset", aunp_subset)
             mad_curves.insert(2, "window_mode", mode_tag)
             mad_curve_frames.append(mad_curves)
@@ -1128,7 +1128,7 @@ def run_ripley_for_zone_window(
             for r_val, l_val in zip(r_vals, curve):
                 rows.append(
                     {
-                        "active_zone_name": zone_name,
+                        "cleft_name": zone_name,
                         "aunp_subset": aunp_subset,
                         "window_mode": mode_tag,
                         "curve_type": curve_type,
@@ -1152,7 +1152,7 @@ def run_ripley_for_zone_window(
             for r_val, g_val in zip(r_g_vals, curve):
                 g_rows.append(
                     {
-                        "active_zone_name": zone_name,
+                        "cleft_name": zone_name,
                         "aunp_subset": aunp_subset,
                         "window_mode": mode_tag,
                         "curve_type": curve_type,
@@ -1283,7 +1283,7 @@ def run_bidirectional_ripley_for_zone_window(
                 for r_val, val in zip(r_vals, fam[fam_name]):
                     rows.append(
                         {
-                            "active_zone_name": zone_name,
+                            "cleft_name": zone_name,
                             "aunp_subset": aunp_subset,
                             "window_mode": mode_tag,
                             "curve_type": curve_type,
@@ -1337,7 +1337,7 @@ def _extract_curves_matrix(
 
     r_vals = np.sort(sub["r_nm"].unique())
     n_r = len(r_vals)
-    id_cols = ["tomogram_name", "alignment_dir", "active_zone_name", "replicate_index"]
+    id_cols = ["tomogram_name", "alignment_dir", "cleft_name", "replicate_index"]
     for col in id_cols:
         if col not in sub.columns:
             sub = sub.copy()
@@ -1386,7 +1386,7 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
             )
             n_tomograms = int(sub_df["tomogram_name"].nunique())
             n_zones = int(
-                sub_df[["tomogram_name", "alignment_dir", "active_zone_name"]]
+                sub_df[["tomogram_name", "alignment_dir", "cleft_name"]]
                 .drop_duplicates()
                 .shape[0]
             )
@@ -1498,7 +1498,7 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
                             "n_fusing_curves": int(len(obs_curves)),
                             "n_control_curves": n_control,
                             "n_tomograms": n_tomograms,
-                            "n_active_zones": n_zones,
+                            "n_clefts": n_zones,
                             "envelope_percentile_lo": float(RIPLEY_PERCENTILE_LO),
                             "envelope_percentile_hi": float(RIPLEY_PERCENTILE_HI),
                         }
@@ -1578,7 +1578,7 @@ def plot_pooled_fusion_point_aunp_ripley_l12_visualizations(
             title=(
                 f"Pooled | window={window_mode} | AuNPs={subset} | vs {comparison}\n"
                 f"{int(meta_row['n_tomograms'])} tomogram(s), "
-                f"{int(meta_row['n_active_zones'])} zone(s) | "
+                f"{int(meta_row['n_clefts'])} zone(s) | "
                 f"{int(meta_row['n_fusing_curves'])} fusing curves, "
                 f"{int(meta_row['n_control_curves'])} control curves"
             ),
@@ -1617,7 +1617,7 @@ def build_pooled_ripley_g12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
             fusing_sd = _prism_sd_envelope_columns(obs_curves, r_vals, prefix="fusing_G12")
             n_tomograms = int(sub_df["tomogram_name"].nunique())
             n_zones = int(
-                sub_df[["tomogram_name", "alignment_dir", "active_zone_name"]]
+                sub_df[["tomogram_name", "alignment_dir", "cleft_name"]]
                 .drop_duplicates()
                 .shape[0]
             )
@@ -1681,7 +1681,7 @@ def build_pooled_ripley_g12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
                             "n_fusing_curves": int(len(obs_curves)),
                             "n_control_curves": n_control,
                             "n_tomograms": n_tomograms,
-                            "n_active_zones": n_zones,
+                            "n_clefts": n_zones,
                             "envelope_percentile_lo": float(RIPLEY_PERCENTILE_LO),
                             "envelope_percentile_hi": float(RIPLEY_PERCENTILE_HI),
                         }
@@ -1758,7 +1758,7 @@ def plot_pooled_fusion_point_aunp_ripley_g12_visualizations(
             title=(
                 f"Pooled | window={window_mode} | AuNPs={subset} | vs {comparison}\n"
                 f"{int(meta_row['n_tomograms'])} tomogram(s), "
-                f"{int(meta_row['n_active_zones'])} zone(s) | "
+                f"{int(meta_row['n_clefts'])} zone(s) | "
                 f"{int(meta_row['n_fusing_curves'])} fusing curves, "
                 f"{int(meta_row['n_control_curves'])} control curves"
             ),
@@ -1786,7 +1786,7 @@ def _extract_bidir_curves_matrix(
 
     r_vals = np.sort(sub["r_nm"].unique())
     n_r = len(r_vals)
-    id_cols = ["tomogram_name", "alignment_dir", "active_zone_name", "replicate_index"]
+    id_cols = ["tomogram_name", "alignment_dir", "cleft_name", "replicate_index"]
     for col in id_cols:
         if col not in sub.columns:
             sub = sub.copy()
@@ -1825,7 +1825,7 @@ def build_pooled_bidirectional_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                 obs_mean = np.nanmean(obs_curves, axis=0)
                 n_tomograms = int(sub_df["tomogram_name"].nunique())
                 n_zones = int(
-                    sub_df[["tomogram_name", "alignment_dir", "active_zone_name"]]
+                    sub_df[["tomogram_name", "alignment_dir", "cleft_name"]]
                     .drop_duplicates()
                     .shape[0]
                 )
@@ -1852,7 +1852,7 @@ def build_pooled_bidirectional_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                                 "n_fusing_curves": int(len(obs_curves)),
                                 "n_control_curves": n_control,
                                 "n_tomograms": n_tomograms,
-                                "n_active_zones": n_zones,
+                                "n_clefts": n_zones,
                             }
                         )
     return pd.DataFrame(rows)
@@ -1907,7 +1907,7 @@ def plot_pooled_fusion_point_aunp_ripley_bidirectional_visualizations(
             output_path=out_path,
             title=(
                 f"Pooled | window={window_mode} | AuNPs={subset} | {family} | vs {comparison}\n"
-                f"{int(meta_row['n_tomograms'])} tomogram(s), {int(meta_row['n_active_zones'])} zone(s) | "
+                f"{int(meta_row['n_tomograms'])} tomogram(s), {int(meta_row['n_clefts'])} zone(s) | "
                 f"{int(meta_row['n_fusing_curves'])} fusing curves, {int(meta_row['n_control_curves'])} control curves"
             ),
         )
@@ -1924,7 +1924,7 @@ def run_fusion_point_aunp_analyses_for_zone(
     tomogram_path: Path,
     alignment_dir: str,
     zone_name: str,
-    active_zone_index: int,
+    cleft_index: int,
     *,
     vesicle_distance_threshold: float = 20.0,
     fusion_point_threshold: float = 20.0,
@@ -1941,7 +1941,7 @@ def run_fusion_point_aunp_analyses_for_zone(
     tomogram_name = tomogram_path.name
 
     membrane_name = presynaptic_membrane_name_for_zone(zone_name)
-    membrane_az_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir=alignment_dir)
+    membrane_az_pairs = import_presynaptic_membranes_and_clefts(tomogram_path, alignment_dir=alignment_dir)
 
     fusing_rows = filter_fusion_rows_for_zone(
         enumerate_close_vesicle_fusion_points(
@@ -1976,7 +1976,7 @@ def run_fusion_point_aunp_analyses_for_zone(
         loaded = load_monomer_dimer_aunps_for_zone(
             tomogram_path,
             alignment_dir,
-            active_zone_index,
+            cleft_index,
             monomer_star_pattern=monomer_star_pattern,
             dimer_star_pattern=dimer_star_pattern,
         )
@@ -2017,9 +2017,9 @@ def run_fusion_point_aunp_analyses_for_zone(
         mode: None for mode in RIPLEY_WINDOW_MODES
     }
 
-    from .activezone import import_active_zone_segmentations
+    from .cleft import import_cleft_segmentations
 
-    az_segmentation = import_active_zone_segmentations(
+    az_segmentation = import_cleft_segmentations(
         tomogram_path, alignment_dir=alignment_dir
     ).get(zone_name)
     pre_membrane_coords = (
@@ -2030,7 +2030,7 @@ def run_fusion_point_aunp_analyses_for_zone(
     )
 
     try:
-        cleft_coords = load_synaptic_cleft_active_zone_points(
+        cleft_coords = load_synaptic_cleft_cleft_points(
             tomogram_path, alignment_dir, zone_name
         )
         ripley_windows["synaptic_cleft_az_hull"] = build_ripley_window_3d(
@@ -2186,7 +2186,7 @@ def run_fusion_point_aunp_analyses_for_zone(
         meta_out.insert(0, "aunp_subset", subset)
         meta_out.insert(1, "tomogram_name", tomogram_name)
         meta_out.insert(2, "alignment_dir", alignment_dir)
-        meta_out.insert(3, "active_zone_name", zone_name)
+        meta_out.insert(3, "cleft_name", zone_name)
 
         df_orig = build_distance_wide_csv(sub_coords, meta_out, original_cols)
         df_close = build_distance_wide_csv(sub_coords, meta_out, close_cols)
@@ -2399,8 +2399,8 @@ def run_fusion_point_aunp_analyses_for_zone(
     meta = {
         "tomogram_name": tomogram_name,
         "alignment_dir": alignment_dir,
-        "active_zone_name": zone_name,
-        "active_zone_index": int(active_zone_index),
+        "cleft_name": zone_name,
+        "cleft_index": int(cleft_index),
         "n_fusing_vesicles": len(fusing_rows),
         "n_close_vesicles": len(close_rows),
         "n_aunp_monomer": n_monomer,
@@ -2411,7 +2411,7 @@ def run_fusion_point_aunp_analyses_for_zone(
         "ripley_window_modes": list(RIPLEY_WINDOW_MODES),
         "ripley_windows": {
             mode: {
-                "defining_from": "presynaptic_and_postsynaptic_active_zone_surface_points",
+                "defining_from": "presynaptic_and_postsynaptic_cleft_surface_points",
                 "volume_nm3": float(win.volume_nm3),
                 "uses_angle_betweenness": bool(win.use_angle_betweenness),
                 "n_defining_points": int(len(cleft_coords)) if cleft_coords is not None else None,
@@ -2475,7 +2475,7 @@ def build_fusion_null_query_point_dataframes_for_zonograms(
     if not az_mapping:
         return {"40nm_shift": pd.DataFrame(), "label_permutation": pd.DataFrame()}
 
-    membrane_az_pairs = import_presynaptic_membranes_and_active_zones(
+    membrane_az_pairs = import_presynaptic_membranes_and_clefts(
         tomogram_path, alignment_dir=alignment_dir
     )
     shift_rows: list[dict] = []
@@ -2542,7 +2542,7 @@ def build_fusion_null_query_point_dataframes_for_zonograms(
                 query = ves_map[vid]
                 shift_rows.append(
                     {
-                        "active_zone_name": zone_name,
+                        "cleft_name": zone_name,
                         "shift_replicate_id": int(rep_id),
                         "vesicle_id": vid,
                         "vesicle_name": fp.get("vesicle_name"),
@@ -2561,7 +2561,7 @@ def build_fusion_null_query_point_dataframes_for_zonograms(
                 q = np.asarray(query, dtype=float).reshape(3)
                 perm_rows.append(
                     {
-                        "active_zone_name": zone_name,
+                        "cleft_name": zone_name,
                         "permutation_id": int(perm_id),
                         "fusion_site_index": int(fusion_site_idx),
                         "query_point_x_nm": float(q[0]),
@@ -2580,7 +2580,7 @@ def run_fusion_point_aunp_analyses_for_tomogram(
     tomogram_path: Path,
     alignment_dir: str,
     *,
-    active_zone_indices: Sequence[int] | None = None,
+    cleft_indices: Sequence[int] | None = None,
     vesicle_distance_threshold: float = 20.0,
     fusion_point_threshold: float = 20.0,
     n_replicates: int = DEFAULT_NULL_REPLICATES_N,
@@ -2590,17 +2590,17 @@ def run_fusion_point_aunp_analyses_for_tomogram(
     dimer_star_pattern: Optional[str] = None,
 ) -> tuple[list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame]]:
     """Returns ``(ripley_l12_frames, l12_prism_frames, g12_frames, g12_prism_frames, bidirectional_frames)``."""
-    from .activezone import load_active_zone_mapping
+    from .cleft import load_cleft_mapping
 
     tomogram_path = Path(tomogram_path)
     alignment_dir = require_alignment_dir(alignment_dir)
-    az_mapping = load_active_zone_mapping(tomogram_path, alignment_dir) or {}
+    az_mapping = load_cleft_mapping(tomogram_path, alignment_dir) or {}
     if not az_mapping:
-        print("No active zone mapping; skipping fusion-point/AuNP 3D analyses")
+        print("No synaptic cleft mapping; skipping fusion-point/AuNP 3D analyses")
         return [], [], [], [], []
 
     az_mapping = {int(k): v for k, v in az_mapping.items()}
-    indices = list(active_zone_indices) if active_zone_indices is not None else sorted(az_mapping)
+    indices = list(cleft_indices) if cleft_indices is not None else sorted(az_mapping)
     ripley_frames: list[pd.DataFrame] = []
     prism_frames: list[pd.DataFrame] = []
     g_ripley_frames: list[pd.DataFrame] = []

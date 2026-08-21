@@ -3,7 +3,7 @@
 Synaptic Tomogram Results Visualization Script
 
 This script generates visualizations for analyzed synaptic tomograms, including overlays
-of membranes, vesicles, active zones, and AuNPs. It processes all available tomograms
+of membranes, vesicles, synaptic clefts, and AuNPs. It processes all available tomograms
 and saves the figures as output files.
 """
 
@@ -24,7 +24,7 @@ from datetime import datetime
 from scipy.spatial import KDTree
 
 # Import from the same package
-from .activezone import extract_active_zonogram
+from .cleft import extract_active_zonogram
 from .alignment_utils import require_alignment_dir
 
 # Tomogram slice overlays: vesicle distance-class edge colors (nm semantics in legends elsewhere)
@@ -36,7 +36,7 @@ VESICLE_VIZ_EDGE_FAR = "pink"
 def unpack_tomo_csv_row(tomo_info):
     """
     Normalize CLI/GUI tomogram entries to
-    (tomo_path, set_name, aunp_active_zones, alignment_dir).
+    (tomo_path, set_name, cleft_ids, alignment_dir).
 
     ``alignment_dir`` must come from the tomogram CSV ``alignment_dir`` column (fourth tuple element).
     """
@@ -48,7 +48,7 @@ def unpack_tomo_csv_row(tomo_info):
         return tomo_info[0], tomo_info[1], tomo_info[2], adir
     raise ValueError(
         "Each tomogram entry must be a tuple "
-        "(tomo_path, set_name, aunp_active_zones, alignment_dir) "
+        "(tomo_path, set_name, cleft_ids, alignment_dir) "
         "with alignment_dir read from the CSV. Got: "
         f"{type(tomo_info).__name__} with length "
         f"{len(tomo_info) if isinstance(tomo_info, tuple) else 'n/a'}."
@@ -110,11 +110,11 @@ def load_membrane_coords(tomo_path, kind='presynaptic', *, alignment_dir: str):
     coords = [np.loadtxt(f) for f in files if f.exists()]
     return coords
 
-def load_active_zone_coords(tomo_path, *, alignment_dir: str):
-    """Load active zone coordinates."""
+def load_cleft_coords(tomo_path, *, alignment_dir: str):
+    """Load synaptic cleft coordinates."""
     alignment_dir = require_alignment_dir(alignment_dir)
-    az_dir = Path(tomo_path) / alignment_dir / 'STT_results' / 'activezone'
-    files = sorted(az_dir.glob('active_zone_pre*_post*_pre_outer.txt'))
+    az_dir = Path(tomo_path) / alignment_dir / 'STT_results' / 'cleft'
+    files = sorted(az_dir.glob('cleft_pre*_post*_pre_outer.txt'))
     coords = [np.loadtxt(f) for f in files if f.exists()]
     return coords
 
@@ -126,7 +126,7 @@ def load_vesicles(tomo_path, *, alignment_dir: str):
         data = json.load(f)
     return data['vesicles']
 
-def load_aunps(tomo_path, active_zone_indices=None, *, alignment_dir: str):
+def load_aunps(tomo_path, cleft_indices=None, *, alignment_dir: str):
     """Load AuNP coordinates from ``STT_results/aunps/aunp_clusters.star``.
 
     Raises ``FileNotFoundError`` if that file is missing (run AuNP analysis first).
@@ -165,42 +165,42 @@ def load_aunps(tomo_path, active_zone_indices=None, *, alignment_dir: str):
         print("[viz] Error: Unexpected star file format")
         return None
     
-    # Filter by active_zone_indices if specified
-    if active_zone_indices is not None:
-        if 'active_zone' not in df.columns:
-            print("[viz] Warning: 'active_zone' column not found in filtered AuNP file")
+    # Filter by cleft_indices if specified
+    if cleft_indices is not None:
+        if 'cleft' not in df.columns:
+            print("[viz] Warning: 'cleft' column not found in filtered AuNP file")
             return None
         
-        # Convert active_zone column to int if needed, and handle any NaN values
-        df['active_zone'] = pd.to_numeric(df['active_zone'], errors='coerce').astype('Int64')
+        # Convert cleft column to int if needed, and handle any NaN values
+        df['cleft'] = pd.to_numeric(df['cleft'], errors='coerce').astype('Int64')
         
-        # Show what active zones are actually in the file for debugging
-        unique_azs = sorted(df['active_zone'].dropna().unique().tolist())
-        print(f"[viz] Active zones in file: {unique_azs}, filtering for: {active_zone_indices}")
+        # Show what synaptic clefts are actually in the file for debugging
+        unique_azs = sorted(df['cleft'].dropna().unique().tolist())
+        print(f"[viz] Synaptic clefts in file: {unique_azs}, filtering for: {cleft_indices}")
         
-        # Filter by active zone indices (convert to same type for comparison)
-        active_zone_indices_int = [int(az) for az in active_zone_indices]
-        df_filtered = df[df['active_zone'].isin(active_zone_indices_int)].copy()
+        # Filter by synaptic cleft indices (convert to same type for comparison)
+        cleft_indices_int = [int(az) for az in cleft_indices]
+        df_filtered = df[df['cleft'].isin(cleft_indices_int)].copy()
         
         if len(df_filtered) == 0:
-            # If no AuNPs found, check if all active_zone values are 0 (common issue from old data)
-            # This can happen if the input files had active_zone=0 instead of the file index
-            unique_azs = sorted(df['active_zone'].dropna().unique().tolist())
+            # If no AuNPs found, check if all cleft values are 0 (common issue from old data)
+            # This can happen if the input files had cleft=0 instead of the file index
+            unique_azs = sorted(df['cleft'].dropna().unique().tolist())
             if len(unique_azs) == 1 and unique_azs[0] == 0:
-                print(f"[viz] Warning: All AuNPs have active_zone=0, but filtering for {active_zone_indices}")
-                print(f"[viz] This suggests the analysis needs to be re-run with the fixed active_zone assignment.")
-                print(f"[viz] Returning empty result - please re-run AuNP analysis to fix active_zone values.")
+                print(f"[viz] Warning: All AuNPs have cleft=0, but filtering for {cleft_indices}")
+                print(f"[viz] This suggests the analysis needs to be re-run with the fixed cleft assignment.")
+                print(f"[viz] Returning empty result - please re-run AuNP analysis to fix cleft values.")
             else:
-                print(f"[viz] Warning: No AuNPs found in active zones {active_zone_indices}")
-                print(f"[viz] Available active zones in file: {unique_azs}")
+                print(f"[viz] Warning: No AuNPs found in synaptic clefts {cleft_indices}")
+                print(f"[viz] Available synaptic clefts in file: {unique_azs}")
         
         df = df_filtered
-        print(f"[viz] Filtered to {len(df)} AuNPs in active zones {active_zone_indices}")
+        print(f"[viz] Filtered to {len(df)} AuNPs in synaptic clefts {cleft_indices}")
     
     return df
 
 def load_fusion_points(tomo_path, *, alignment_dir: str, vesicle_distance_threshold: float = 20.0):
-    """Load fusion points for vesicles near the presynaptic active zone (see ``compute_fusion_points``)."""
+    """Load fusion points for vesicles near the presynaptic synaptic cleft (see ``compute_fusion_points``)."""
     alignment_dir = require_alignment_dir(alignment_dir)
     try:
         from scipy.spatial import KDTree
@@ -231,12 +231,12 @@ def filter_vesicles_near_slice(vesicles, z_center, z_thresh):
     return [v for v in vesicles if abs(v['center'][2] - z_center) <= z_thresh]
 
 def filter_aunps_near_slice(aunps, z_center, z_thresh):
-    """Filter AuNPs with active_zone != -1 and z within z_thresh of z_center."""
+    """Filter AuNPs with cleft != -1 and z within z_thresh of z_center."""
     if aunps is None or aunps.empty:
         return None
-    if 'active_zone' not in aunps.columns:
+    if 'cleft' not in aunps.columns:
         return None
-    mask = (aunps['active_zone'] != -1) & (np.abs(aunps['faCoordinateZ'] - z_center) <= z_thresh)
+    mask = (aunps['cleft'] != -1) & (np.abs(aunps['faCoordinateZ'] - z_center) <= z_thresh)
     filtered = aunps[mask]
     return filtered if not filtered.empty else None
 
@@ -279,17 +279,17 @@ def filter_coords_in_slice(coords_list, z_center, z_thresh, max_segment_size=Non
                 filtered.append(segment_coords)
     return filtered
 
-def load_postsynaptic_active_zone_coords(tomo_path, *, alignment_dir: str):
-    """Load postsynaptic active zone coordinates."""
+def load_postsynaptic_cleft_coords(tomo_path, *, alignment_dir: str):
+    """Load postsynaptic synaptic cleft coordinates."""
     alignment_dir = require_alignment_dir(alignment_dir)
-    az_dir = Path(tomo_path) / alignment_dir / 'STT_results' / 'activezone'
-    files = sorted(az_dir.glob('active_zone_pre*_post*_post_outer.txt'))
+    az_dir = Path(tomo_path) / alignment_dir / 'STT_results' / 'cleft'
+    files = sorted(az_dir.glob('cleft_pre*_post*_post_outer.txt'))
     coords = [np.loadtxt(f) for f in files if f.exists()]
     return coords
 
 
 def _load_optional_az_surface_txt(path: Path) -> np.ndarray:
-    """Load Nx3 coordinates from an active-zone surface txt; return empty (0, 3) if missing or invalid."""
+    """Load Nx3 coordinates from an synaptic-cleft surface txt; return empty (0, 3) if missing or invalid."""
     if not path.exists():
         return np.zeros((0, 3))
     try:
@@ -304,46 +304,46 @@ def _load_optional_az_surface_txt(path: Path) -> np.ndarray:
         return np.zeros((0, 3))
 
 
-def load_specific_active_zone_coords(tomo_path, active_zone_indices, aunps, *, alignment_dir: str):
-    """Load outer and inner active zone coordinates for the given indices, using saved mapping."""
-    from .activezone import load_active_zone_mapping
+def load_specific_cleft_coords(tomo_path, cleft_indices, aunps, *, alignment_dir: str):
+    """Load outer and inner synaptic cleft coordinates for the given indices, using saved mapping."""
+    from .cleft import load_cleft_mapping
     
     alignment_dir = require_alignment_dir(alignment_dir)
-    az_dir = Path(tomo_path) / alignment_dir / "STT_results" / "activezone"
+    az_dir = Path(tomo_path) / alignment_dir / "STT_results" / "cleft"
     
     azs_pre = []
     azs_post = []
     azs_pre_inner = []
     azs_post_inner = []
     
-    if active_zone_indices is not None:
+    if cleft_indices is not None:
         # Load saved mapping
-        az_mapping = load_active_zone_mapping(tomo_path, alignment_dir)
+        az_mapping = load_cleft_mapping(tomo_path, alignment_dir)
         
         if not az_mapping:
             # No mapping found - use all available zone files as fallback but print error
-            print(f"No saved active zone mapping found for {Path(tomo_path).name}. Active zone analysis must be run first with smart matching to create the mapping.")
-            print(f"FALLBACK: Loading all available active zone files (no filtering applied).")
+            print(f"No saved synaptic cleft mapping found for {Path(tomo_path).name}. Active zone analysis must be run first with smart matching to create the mapping.")
+            print(f"FALLBACK: Loading all available synaptic cleft files (no filtering applied).")
             # Load all available zone files
-            pre_files = sorted(list(az_dir.glob('active_zone_pre*_post*_pre_outer.txt')))
-            post_files = sorted(list(az_dir.glob('active_zone_pre*_post*_post_outer.txt')))
+            pre_files = sorted(list(az_dir.glob('cleft_pre*_post*_pre_outer.txt')))
+            post_files = sorted(list(az_dir.glob('cleft_pre*_post*_post_outer.txt')))
             
-            # Group files by active zone name to ensure paired matching
-            active_zone_groups = {}
+            # Group files by synaptic cleft name to ensure paired matching
+            cleft_groups = {}
             for pre_file in pre_files:
                 zone_name = pre_file.name.replace('_pre_outer.txt', '')
-                if zone_name not in active_zone_groups:
-                    active_zone_groups[zone_name] = {'pre': None, 'post': None}
-                active_zone_groups[zone_name]['pre'] = pre_file
+                if zone_name not in cleft_groups:
+                    cleft_groups[zone_name] = {'pre': None, 'post': None}
+                cleft_groups[zone_name]['pre'] = pre_file
             
             for post_file in post_files:
                 zone_name = post_file.name.replace('_post_outer.txt', '')
-                if zone_name not in active_zone_groups:
-                    active_zone_groups[zone_name] = {'pre': None, 'post': None}
-                active_zone_groups[zone_name]['post'] = post_file
+                if zone_name not in cleft_groups:
+                    cleft_groups[zone_name] = {'pre': None, 'post': None}
+                cleft_groups[zone_name]['post'] = post_file
             
             # Load all paired zones
-            for zone_name, files in active_zone_groups.items():
+            for zone_name, files in cleft_groups.items():
                 if files['pre'] is not None and files['post'] is not None:
                     try:
                         pre_coords = np.loadtxt(files['pre'])
@@ -360,7 +360,7 @@ def load_specific_active_zone_coords(tomo_path, active_zone_indices, aunps, *, a
             az_mapping = {int(k): v for k, v in az_mapping.items()}
             
             # Use saved mapping to load zones directly
-            for az_id in active_zone_indices:
+            for az_id in cleft_indices:
                 if az_id in az_mapping:
                     zone_name = az_mapping[az_id]
                     pre_file = az_dir / f"{zone_name}_pre_outer.txt"
@@ -379,29 +379,29 @@ def load_specific_active_zone_coords(tomo_path, active_zone_indices, aunps, *, a
                     else:
                         raise ValueError(f"Files not found for zone {zone_name} from saved mapping. Expected files: {pre_file} and {post_file}")
                 else:
-                    raise ValueError(f"Active zone index {az_id} not found in saved mapping. This indicates the active zone analysis was run with different indices.")
+                    raise ValueError(f"Active zone index {az_id} not found in saved mapping. This indicates the synaptic cleft analysis was run with different indices.")
     
     return azs_pre, azs_post, azs_pre_inner, azs_post_inner
 
-def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None, rerun=False, *, alignment_dir: str,
+def plot_tomogram_overlays(tomo_path, output_dir, aunp_cleft_indices=None, rerun=False, *, alignment_dir: str,
                            vesicle_distance_threshold: float = 20.0,
                            fusing_perimeter_threshold: float = 1.0,
                            sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None,
                            aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None):
-    """Generate 2D overlay plot and save to file. Only processes CSV-specified active zones."""
+    """Generate 2D overlay plot and save to file. Only processes CSV-specified synaptic clefts."""
     alignment_dir = require_alignment_dir(alignment_dir)
     vesicles = load_vesicles(tomo_path, alignment_dir=alignment_dir)
     pre_mem = load_membrane_coords(tomo_path, 'presynaptic', alignment_dir=alignment_dir)
     post_mem = load_membrane_coords(tomo_path, 'postsynaptic', alignment_dir=alignment_dir)
-    aunps = load_aunps(tomo_path, aunp_active_zone_indices, alignment_dir=alignment_dir)
+    aunps = load_aunps(tomo_path, aunp_cleft_indices, alignment_dir=alignment_dir)
     fusion_points = load_fusion_points(
         tomo_path, alignment_dir=alignment_dir, vesicle_distance_threshold=vesicle_distance_threshold
     )
     
-    # Process active zones - auto-detect if none specified in CSV
-    if aunp_active_zone_indices is None or len(aunp_active_zone_indices) == 0:
-        print("No active zones specified in CSV, auto-detecting all available active zones")
-        # Auto-detect all available active zone numbers from filtered AuNP file
+    # Process synaptic clefts - auto-detect if none specified in CSV
+    if aunp_cleft_indices is None or len(aunp_cleft_indices) == 0:
+        print("No synaptic clefts specified in CSV, auto-detecting all available synaptic clefts")
+        # Auto-detect all available synaptic cleft numbers from filtered AuNP file
         aunps_results_dir = Path(tomo_path) / alignment_dir / "STT_results" / "aunps"
         cluster_star = aunps_results_dir / "aunp_clusters.star"
         if not cluster_star.exists():
@@ -420,45 +420,45 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
         else:
             df = star_data
 
-        if df is not None and 'active_zone' in df.columns:
-            aunp_az_numbers = sorted(df['active_zone'].unique().tolist())
-            # Remove -1 if present (means "not in any active zone")
+        if df is not None and 'cleft' in df.columns:
+            aunp_az_numbers = sorted(df['cleft'].unique().tolist())
+            # Remove -1 if present (means "not in any synaptic cleft")
             aunp_az_numbers = [az for az in aunp_az_numbers if az != -1]
-            aunp_active_zone_indices = aunp_az_numbers
-            print(f"Auto-detected active zones from filtered AuNP file: {aunp_active_zone_indices}")
+            aunp_cleft_indices = aunp_az_numbers
+            print(f"Auto-detected synaptic clefts from filtered AuNP file: {aunp_cleft_indices}")
         else:
             raise ValueError(
-                f"Could not read active zones from {cluster_star}: missing DataFrame or 'active_zone' column."
+                f"Could not read synaptic clefts from {cluster_star}: missing DataFrame or 'cleft' column."
             )
     
-    # Load only the active zone membranes for CSV-specified or auto-detected active zones, matched by distance to AuNPs
-    azs_pre, azs_post, azs_pre_inner, azs_post_inner = load_specific_active_zone_coords(
-        tomo_path, aunp_active_zone_indices, aunps, alignment_dir=alignment_dir
+    # Load only the synaptic cleft membranes for CSV-specified or auto-detected synaptic clefts, matched by distance to AuNPs
+    azs_pre, azs_post, azs_pre_inner, azs_post_inner = load_specific_cleft_coords(
+        tomo_path, aunp_cleft_indices, aunps, alignment_dir=alignment_dir
     )
     
-    if len(aunp_active_zone_indices) == 0:
-        print("No active zones found, using middle of tomogram")
-        # Fallback to middle of tomogram if no active zones found
+    if len(aunp_cleft_indices) == 0:
+        print("No synaptic clefts found, using middle of tomogram")
+        # Fallback to middle of tomogram if no synaptic clefts found
         slice2d, z_center = load_tomogram_slice(tomo_path, None, alignment_dir=alignment_dir)
         if slice2d is None:
             print(f"Could not load tomogram slice for {tomo_path}")
             return
         _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center, vesicles, 
                                          pre_mem, post_mem, [], [], [], [], aunps, fusion_points, 
-                                         aunp_active_zone_indices, rerun, alignment_dir,
+                                         aunp_cleft_indices, rerun, alignment_dir,
                                          vesicle_distance_threshold, fusing_perimeter_threshold, "middle")
     else:
-        # Generate visualizations for each active zone (CSV-specified or auto-detected)
-        for az_id in aunp_active_zone_indices:
-            # Processing active zone
+        # Generate visualizations for each synaptic cleft (CSV-specified or auto-detected)
+        for az_id in aunp_cleft_indices:
+            # Processing synaptic cleft
             
-            # Calculate z_center based on AuNPs within this specific active zone
-            z_center = _calculate_active_zone_center_from_aunps(aunps, az_id)
+            # Calculate z_center based on AuNPs within this specific synaptic cleft
+            z_center = _calculate_cleft_center_from_aunps(aunps, az_id)
             if z_center is None:
-                print(f"Warning: No AuNPs found for active zone {az_id}, skipping visualization")
+                print(f"Warning: No AuNPs found for synaptic cleft {az_id}, skipping visualization")
                 continue
             
-            # Generating visualizations for active zone
+            # Generating visualizations for synaptic cleft
             
             slice2d, zc = load_tomogram_slice(tomo_path, z_center, alignment_dir=alignment_dir)
             if slice2d is None:
@@ -468,27 +468,27 @@ def plot_tomogram_overlays(tomo_path, output_dir, aunp_active_zone_indices=None,
             _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center, vesicles, 
                                              pre_mem, post_mem, azs_pre, azs_post, azs_pre_inner, azs_post_inner,
                                              aunps, fusion_points, 
-                                             aunp_active_zone_indices, rerun, alignment_dir,
+                                             aunp_cleft_indices, rerun, alignment_dir,
                                              vesicle_distance_threshold, fusing_perimeter_threshold, f"az{az_id}")
 
-def _calculate_active_zone_center_from_aunps(aunps, active_zone_id):
-    """Calculate the z_center of an active zone based on the center of AuNPs within that active zone."""
+def _calculate_cleft_center_from_aunps(aunps, cleft_id):
+    """Calculate the z_center of an synaptic cleft based on the center of AuNPs within that synaptic cleft."""
     if aunps is None or aunps.empty:
         return None
     
-    # Filter AuNPs for this specific active zone
-    if 'active_zone' in aunps.columns:
-        aunps_in_az = aunps[aunps['active_zone'] == active_zone_id]
+    # Filter AuNPs for this specific synaptic cleft
+    if 'cleft' in aunps.columns:
+        aunps_in_az = aunps[aunps['cleft'] == cleft_id]
     else:
-        # If no active_zone column, we can't filter by active zone
-        print(f"Warning: No 'active_zone' column in AuNP data, cannot calculate center for active zone {active_zone_id}")
+        # If no cleft column, we can't filter by synaptic cleft
+        print(f"Warning: No 'cleft' column in AuNP data, cannot calculate center for synaptic cleft {cleft_id}")
         return None
     
     if aunps_in_az.empty:
-        print(f"Warning: No AuNPs found in active zone {active_zone_id}")
+        print(f"Warning: No AuNPs found in synaptic cleft {cleft_id}")
         return None
     
-    # Calculate the mean Z coordinate of AuNPs in this active zone
+    # Calculate the mean Z coordinate of AuNPs in this synaptic cleft
     z_center = int(np.mean(aunps_in_az['faCoordinateZ']))
     # Active zone AuNPs and z_center calculated
     
@@ -655,7 +655,7 @@ def _vesicle_distance_class_edge_style(
 def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center, vesicles, 
                                      pre_mem, post_mem, azs_pre, azs_post, azs_pre_inner, azs_post_inner,
                                      aunps, fusion_points, 
-                                     aunp_active_zone_indices, rerun, alignment_dir: str,
+                                     aunp_cleft_indices, rerun, alignment_dir: str,
                                      vesicle_distance_threshold: float = 20.0,
                                      fusing_perimeter_threshold: float = 1.0,
                                      suffix: str = ""):
@@ -668,7 +668,7 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
     
     # Filter objects for the slice
     z_thresh = 5  # Increased from 2 to 5 pixels
-    z_thresh_az = 1  # Stricter threshold for active zones
+    z_thresh_az = 1  # Stricter threshold for synaptic clefts
     z_thresh_aunps_fusion = 10  # 10 nm threshold for AuNPs and fusion sites
     z_thresh_vesicles = 1  # 1 pixel threshold - vesicle must intersect with slice
     vesicles_in_slice = filter_vesicles_in_slice(vesicles, z_center, z_thresh_vesicles)
@@ -693,8 +693,8 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
     
     # Debug output (simplified)
     
-    # Version 1: Vesicles and Active Zones
-    output_file1 = output_dir / f"{tomo_name}_vesicles_active_zones_{suffix}.png"
+    # Version 1: Vesicles and Clefts
+    output_file1 = output_dir / f"{tomo_name}_vesicles_clefts_{suffix}.png"
     if output_file1.exists() and not rerun:
         print(f"Skipping {output_file1}, already exists.")
     else:
@@ -749,7 +749,7 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
                 )
                 ax1.add_patch(circ)
         
-        # Inner active zones (faded; underneath outer)
+        # Inner synaptic clefts (faded; underneath outer)
         for coords in azs_pre_inner_in_slice:
             ax1.scatter(coords[:, 0], coords[:, 1], color=inner_pre_rgb, s=3, alpha=inner_az_alpha,
                         label='Presynaptic AZ (inner)' if 'Presynaptic AZ (inner)' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
@@ -757,12 +757,12 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
             ax1.scatter(coords[:, 0], coords[:, 1], color=inner_post_rgb, s=3, alpha=inner_az_alpha,
                         label='Postsynaptic AZ (inner)' if 'Postsynaptic AZ (inner)' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
         
-        # Overlay presynaptic active zone (outer)
+        # Overlay presynaptic synaptic cleft (outer)
         for coords in azs_pre_in_slice:
             ax1.scatter(coords[:,0], coords[:,1], color='red', s=3, alpha=0.1, 
                     label='Presynaptic AZ (outer)' if 'Presynaptic AZ (outer)' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
         
-        # Overlay postsynaptic active zone (outer)
+        # Overlay postsynaptic synaptic cleft (outer)
         for coords in azs_post_in_slice:
             ax1.scatter(coords[:,0], coords[:,1], color='green', s=3, alpha=0.1, 
                     label='Postsynaptic AZ (outer)' if 'Postsynaptic AZ (outer)' not in [l.get_label() for l in ax1.get_legend_handles_labels()[0]] else '')
@@ -778,16 +778,16 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
             Line2D([0], [0], color='green', lw=1.5, label='Postsynaptic AZ (outer)'),
         ]
         ax1.legend(handles=legend_elements)
-        ax1.set_title(f'Vesicles and Active Zones - {tomo_name}')
+        ax1.set_title(f'Vesicles and Clefts - {tomo_name}')
         ax1.set_xlabel('X (pixels)')
         ax1.set_ylabel('Y (pixels)')
         
         plt.savefig(output_file1, dpi=300, bbox_inches='tight')
         plt.close()
-        print(f"  ✓ Saved vesicles and active zones: {output_file1.name}")
+        print(f"  ✓ Saved vesicles and synaptic clefts: {output_file1.name}")
 
     # Version 1b: All vesicles (XY projection on same slice), same class coloring as Version 1
-    output_file1_all = output_dir / f"{tomo_name}_vesicles_active_zones_all_{suffix}.png"
+    output_file1_all = output_dir / f"{tomo_name}_vesicles_clefts_all_{suffix}.png"
     vesicles_all_xy = list(vesicles) if vesicles is not None else []
     if output_file1_all.exists() and not rerun:
         print(f"Skipping {output_file1_all}, already exists.")
@@ -903,7 +903,7 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
         ]
         ax1b.legend(handles=legend_all)
         ax1b.set_title(
-            f"All vesicles (XY projection) and active zones — {tomo_name} (slice z≈{z_center})"
+            f"All vesicles (XY projection) and synaptic clefts — {tomo_name} (slice z≈{z_center})"
         )
         ax1b.set_xlabel("X (pixels)")
         ax1b.set_ylabel("Y (pixels)")
@@ -1003,7 +1003,7 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
         plt.close()
         print(f"  ✓ Saved vesicles and AuNPs: {output_file2.name}")
     
-    # Version 3: Combined - Vesicles, Active Zones, AuNPs, and Fusion Sites
+    # Version 3: Combined - Vesicles, Clefts, AuNPs, and Fusion Sites
     output_file3 = output_dir / f"{tomo_name}_combined_{suffix}.png"
     if output_file3.exists() and not rerun:
         print(f"Skipping {output_file3}, already exists.")
@@ -1038,7 +1038,7 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
             )
             ax3.add_patch(circ)
         
-        # Inner active zones (faded; underneath outer)
+        # Inner synaptic clefts (faded; underneath outer)
         for coords in azs_pre_inner_in_slice:
             ax3.scatter(coords[:, 0], coords[:, 1], color=inner_pre_rgb, s=3, alpha=inner_az_alpha,
                         label='Presynaptic AZ (inner)' if 'Presynaptic AZ (inner)' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
@@ -1046,12 +1046,12 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
             ax3.scatter(coords[:, 0], coords[:, 1], color=inner_post_rgb, s=3, alpha=inner_az_alpha,
                         label='Postsynaptic AZ (inner)' if 'Postsynaptic AZ (inner)' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
         
-        # Overlay presynaptic active zone (outer)
+        # Overlay presynaptic synaptic cleft (outer)
         for coords in azs_pre_in_slice:
             ax3.scatter(coords[:,0], coords[:,1], color='red', s=3, alpha=0.1, 
                     label='Presynaptic AZ (outer)' if 'Presynaptic AZ (outer)' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
         
-        # Overlay postsynaptic active zone (outer)
+        # Overlay postsynaptic synaptic cleft (outer)
         for coords in azs_post_in_slice:
             ax3.scatter(coords[:,0], coords[:,1], color='green', s=3, alpha=0.1, 
                     label='Postsynaptic AZ (outer)' if 'Postsynaptic AZ (outer)' not in [l.get_label() for l in ax3.get_legend_handles_labels()[0]] else '')
@@ -1106,7 +1106,7 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
             plt.scatter([], [], color='orange', s=100, marker='*', label='Fusion Sites')
         ]
         ax3.legend(handles=legend_elements)
-        ax3.set_title(f'Combined - Vesicles, Active Zones, AuNPs, and Fusion Sites - {tomo_name}')
+        ax3.set_title(f'Combined - Vesicles, Clefts, AuNPs, and Fusion Sites - {tomo_name}')
         ax3.set_xlabel('X (pixels)')
         ax3.set_ylabel('Y (pixels)')
         
@@ -1114,7 +1114,7 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
         plt.savefig(output_file3, dpi=300, bbox_inches='tight')
         print(f"  ✓ Saved combined visualization: {output_file3.name}")
         
-        # Also save without suffix for PDF compatibility (only for the first active zone)
+        # Also save without suffix for PDF compatibility (only for the first synaptic cleft)
         if suffix == "az0" or suffix == "middle":
             output_file3_pdf = output_dir / f"{tomo_name}_combined.png"
             plt.savefig(output_file3_pdf, dpi=300, bbox_inches='tight')
@@ -1357,7 +1357,7 @@ def _generate_visualizations_for_slice(tomo_path, output_dir, slice2d, z_center,
                     edgecolors="none",
                 )
                 ax_syn.set_title(
-                    f"{tomo_name} - AuNPs by synaptic designation (with active zone membranes)"
+                    f"{tomo_name} - AuNPs by synaptic designation (with synaptic cleft membranes)"
                 )
                 ax_syn.set_xlabel("X (pixels)")
                 ax_syn.set_ylabel("Y (pixels)")
@@ -1412,8 +1412,8 @@ def run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=Non
     """Run active zonogram analysis for all tomograms and generate PDF summaries."""
     try:
         # Import the combined zonogram analysis function
-        from .activezone import (
-            define_active_zone, define_active_zonogram, extract_active_zonogram,
+        from .cleft import (
+            define_cleft, define_active_zonogram, extract_active_zonogram,
             import_membrane_segmentations_from_glb, find_active_zones_from_glb
         )
         
@@ -1426,7 +1426,7 @@ def run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=Non
         failed_count = 0
         
         for i, tomo_info in enumerate(tomo_paths, 1):
-            tomo_path, set_name, aunp_active_zones, alignment_dir = unpack_tomo_csv_row(tomo_info)
+            tomo_path, set_name, cleft_ids, alignment_dir = unpack_tomo_csv_row(tomo_info)
             
             tomogram_name = Path(tomo_path).name
             print(f"[{i}/{len(tomo_paths)}] Processing {tomogram_name} ({alignment_dir})...", end=" ", flush=True)
@@ -1434,7 +1434,7 @@ def run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=Non
             try:
                 # Run the combined active zonogram analysis for this tomogram
                 result = run_combined_zonogram_analysis_single_tomogram(
-                    tomo_path, None, aunp_active_zones, rerun,
+                    tomo_path, None, cleft_ids, rerun,
                     alignment_dir=alignment_dir,
                     sphere_size=sphere_size, sphere_color=sphere_color,
                     aunp_distance_min=aunp_distance_min, aunp_distance_max=aunp_distance_max,
@@ -1590,12 +1590,12 @@ def _packing_density_heatmap_only_path(overlay_path: Path) -> Path:
     return overlay_path.with_name(f"{overlay_path.stem}_heatmap_only{overlay_path.suffix}")
 
 
-def _active_zonogram_figure_layout(active_zone_data):
+def _active_zonogram_figure_layout(cleft_data):
     """
     Figure size and GridSpec ratios matching ``render_active_zonograms_findingampa_style``,
     so overlay and heatmap-only PNGs share identical canvas geometry.
     """
-    res_ddw = active_zone_data[2]
+    res_ddw = cleft_data[2]
     figsize = (
         (res_ddw.shape[2] + res_ddw.shape[0]) / 50,
         (res_ddw.shape[1] + res_ddw.shape[0]) / 50,
@@ -1981,7 +1981,7 @@ def save_packing_density_zonogram_overlay(
     return created_or_present
 
 
-def render_active_zonograms_findingampa_style(active_zone_data):
+def render_active_zonograms_findingampa_style(cleft_data):
     """
     Render active zonogram using the exact same approach as findingampa.
     Based on findingampa/src/findingampa/utils/analysis.py:render_active_zonograms()
@@ -1990,7 +1990,7 @@ def render_active_zonograms_findingampa_style(active_zone_data):
     import matplotlib.pyplot as plt
     from matplotlib import gridspec
     
-    res_ddw = active_zone_data[2]
+    res_ddw = cleft_data[2]
     width = (res_ddw.shape[2] + res_ddw.shape[0]) / 50
     height = (res_ddw.shape[1] + res_ddw.shape[0]) / 50
     fig = plt.figure(figsize=(width, height))
@@ -2022,7 +2022,7 @@ def render_active_zonograms_findingampa_style(active_zone_data):
     plt.tight_layout()
     return fig
 
-def render_mini_zonogram_xy_only(active_zone_data, include_legend_space=False, extra_width_multiplier=1.5):
+def render_mini_zonogram_xy_only(cleft_data, include_legend_space=False, extra_width_multiplier=1.5):
     """
     Render mini zonogram showing only the xy slice (top-left view from regular zonograms).
     If include_legend_space is True, creates a wider figure to accommodate legend on the right.
@@ -2030,7 +2030,7 @@ def render_mini_zonogram_xy_only(active_zone_data, include_legend_space=False, e
     import torch
     import matplotlib.pyplot as plt
     
-    res_ddw = active_zone_data[2]
+    res_ddw = cleft_data[2]
     # Use square aspect ratio for mini zonogram
     fig_size = max(res_ddw.shape[1], res_ddw.shape[2]) / 50
     
@@ -2057,11 +2057,11 @@ def render_mini_zonogram_xy_only(active_zone_data, include_legend_space=False, e
     plt.tight_layout()
     return fig, axxy
 
-def select_aunps_findingampa_style(active_zone_data, aunp_data, tomogram_path, active_zone_id=0, original_zone_data=None,
+def select_aunps_findingampa_style(cleft_data, aunp_data, tomogram_path, cleft_id=0, original_zone_data=None,
                                    *, alignment_dir: str):
     """
     Select AuNPs for visualization using findingampa-style approach.
-    Only includes AuNPs that belong to the specified active zone.
+    Only includes AuNPs that belong to the specified synaptic cleft.
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     from pathlib import Path
@@ -2093,10 +2093,10 @@ def select_aunps_findingampa_style(active_zone_data, aunp_data, tomogram_path, a
         else:
             return []
         
-        # Filter AuNPs by active zone
-        if 'active_zone' not in aunp_df.columns:
+        # Filter AuNPs by synaptic cleft
+        if 'cleft' not in aunp_df.columns:
             return []
-        aunp_df = aunp_df[aunp_df['active_zone'] == active_zone_id]
+        aunp_df = aunp_df[aunp_df['cleft'] == cleft_id]
         if aunp_df.empty:
             return []
         aunp_positions = aunp_df[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values
@@ -2112,10 +2112,10 @@ def select_aunps_findingampa_style(active_zone_data, aunp_data, tomogram_path, a
         coordinate_system = original_zone_data['transformation_matrix'][:3, :3]
         
         selected_aunp_pos_transformed = (aunp_positions - center) @ coordinate_system.T
-        selected_aunp_pos_transformed += np.floor(np.array(active_zone_data[2].shape)[[2,1,0]]/2)
+        selected_aunp_pos_transformed += np.floor(np.array(cleft_data[2].shape)[[2,1,0]]/2)
         
         # Filter points within the volume
-        valid_mask = np.all(selected_aunp_pos_transformed > 0, axis=1) & np.all(selected_aunp_pos_transformed < np.array(active_zone_data[2].shape)[[2,1,0]], axis=1)
+        valid_mask = np.all(selected_aunp_pos_transformed > 0, axis=1) & np.all(selected_aunp_pos_transformed < np.array(cleft_data[2].shape)[[2,1,0]], axis=1)
         selected_aunp_positions = selected_aunp_pos_transformed[valid_mask]
         
         return selected_aunp_positions
@@ -2221,9 +2221,9 @@ def _compute_fusion_null_query_point_dataframes(
 
 
 def _unique_shift_query_points_for_zone(df: pd.DataFrame, zone_name: str) -> np.ndarray:
-    if df is None or df.empty or "active_zone_name" not in df.columns:
+    if df is None or df.empty or "cleft_name" not in df.columns:
         return np.zeros((0, 3), dtype=float)
-    sub = df[df["active_zone_name"] == zone_name]
+    sub = df[df["cleft_name"] == zone_name]
     if sub.empty:
         return np.zeros((0, 3), dtype=float)
     cols = ["query_point_x_nm", "query_point_y_nm", "query_point_z_nm"]
@@ -2231,9 +2231,9 @@ def _unique_shift_query_points_for_zone(df: pd.DataFrame, zone_name: str) -> np.
 
 
 def _unique_label_perm_query_points_for_zone(df: pd.DataFrame, zone_name: str) -> np.ndarray:
-    if df is None or df.empty or "active_zone_name" not in df.columns:
+    if df is None or df.empty or "cleft_name" not in df.columns:
         return np.zeros((0, 3), dtype=float)
-    sub = df[df["active_zone_name"] == zone_name]
+    sub = df[df["cleft_name"] == zone_name]
     if sub.empty:
         return np.zeros((0, 3), dtype=float)
     cols = ["query_point_x_nm", "query_point_y_nm", "query_point_z_nm"]
@@ -2250,7 +2250,7 @@ def _fusing_fusion_points_by_zone(
     vesicle_distance_threshold: float = 20.0,
     fusion_point_threshold: float = 20.0,
 ) -> dict[str, np.ndarray]:
-    """Real fusing-vesicle fusion points grouped by active zone name."""
+    """Real fusing-vesicle fusion points grouped by synaptic cleft name."""
     from .aunps import enumerate_close_vesicle_fusion_points
     from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
         zone_name_for_presynaptic_membrane,
@@ -2411,12 +2411,12 @@ def _postsynaptic_center_distance_column(aunp_df: "pd.DataFrame") -> Optional[st
     return None
 
 
-def select_aunps_with_distances_findingampa_style(active_zone_data, aunp_data, tomogram_path, active_zone_id=0, original_zone_data=None,
+def select_aunps_with_distances_findingampa_style(cleft_data, aunp_data, tomogram_path, cleft_id=0, original_zone_data=None,
                                                    *, alignment_dir: str):
     """
-    Select AuNPs for visualization with distance to postsynaptic active-zone center
+    Select AuNPs for visualization with distance to postsynaptic synaptic-cleft center
     (mean of inner/outer active membrane distances from analyze_aunps).
-    Only includes AuNPs that belong to the specified active zone.
+    Only includes AuNPs that belong to the specified synaptic cleft.
     Returns a dict with 'positions' and 'distances' arrays.
     """
     alignment_dir = require_alignment_dir(alignment_dir)
@@ -2449,10 +2449,10 @@ def select_aunps_with_distances_findingampa_style(active_zone_data, aunp_data, t
         else:
             return {'positions': np.array([]), 'distances': np.array([])}
         
-        # Filter AuNPs by active zone
-        if 'active_zone' not in aunp_df.columns:
+        # Filter AuNPs by synaptic cleft
+        if 'cleft' not in aunp_df.columns:
             return {'positions': np.array([]), 'distances': np.array([])}
-        aunp_df = aunp_df[aunp_df['active_zone'] == active_zone_id]
+        aunp_df = aunp_df[aunp_df['cleft'] == cleft_id]
         if aunp_df.empty:
             return {'positions': np.array([]), 'distances': np.array([])}
         
@@ -2463,7 +2463,7 @@ def select_aunps_with_distances_findingampa_style(active_zone_data, aunp_data, t
         if dist_col is None:
             print(
                 "Warning: distance_to_postsynaptic_active_outer_inner_mean not found in "
-                "aunp_clusters.star (re-run AuNP analysis to compute active-zone center distances)"
+                "aunp_clusters.star (re-run AuNP analysis to compute synaptic-cleft center distances)"
             )
             return {'positions': np.array([]), 'distances': np.array([])}
         # Coerce to float so downstream np.isnan works even if the STAR column
@@ -2481,10 +2481,10 @@ def select_aunps_with_distances_findingampa_style(active_zone_data, aunp_data, t
         coordinate_system = original_zone_data['transformation_matrix'][:3, :3]
         
         selected_aunp_pos_transformed = (aunp_positions - center) @ coordinate_system.T
-        selected_aunp_pos_transformed += np.floor(np.array(active_zone_data[2].shape)[[2,1,0]]/2)
+        selected_aunp_pos_transformed += np.floor(np.array(cleft_data[2].shape)[[2,1,0]]/2)
         
         # Filter points within the volume
-        valid_mask = np.all(selected_aunp_pos_transformed > 0, axis=1) & np.all(selected_aunp_pos_transformed < np.array(active_zone_data[2].shape)[[2,1,0]], axis=1)
+        valid_mask = np.all(selected_aunp_pos_transformed > 0, axis=1) & np.all(selected_aunp_pos_transformed < np.array(cleft_data[2].shape)[[2,1,0]], axis=1)
         selected_aunp_positions = selected_aunp_pos_transformed[valid_mask]
         selected_distances = post_distances[valid_mask]
         
@@ -2494,11 +2494,11 @@ def select_aunps_with_distances_findingampa_style(active_zone_data, aunp_data, t
         return {'positions': np.array([]), 'distances': np.array([])}
 
 
-def select_aunps_by_cluster_findingampa_style(active_zone_data, cluster_data, tomogram_path, active_zone_id=0, original_zone_data=None,
+def select_aunps_by_cluster_findingampa_style(cleft_data, cluster_data, tomogram_path, cleft_id=0, original_zone_data=None,
                                                *, alignment_dir: str):
     """
     Select AuNPs by cluster for visualization using findingampa-style approach.
-    Only includes AuNPs that belong to the specified active zone.
+    Only includes AuNPs that belong to the specified synaptic cleft.
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     from pathlib import Path
@@ -2530,10 +2530,10 @@ def select_aunps_by_cluster_findingampa_style(active_zone_data, cluster_data, to
         else:
             return [], []
         
-        # Filter AuNPs by active zone
-        if 'active_zone' not in cluster_df.columns:
+        # Filter AuNPs by synaptic cleft
+        if 'cleft' not in cluster_df.columns:
             return [], []
-        cluster_df = cluster_df[cluster_df['active_zone'] == active_zone_id]
+        cluster_df = cluster_df[cluster_df['cleft'] == cleft_id]
         if cluster_df.empty:
             return [], []
         aunp_positions = cluster_df[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values
@@ -2553,10 +2553,10 @@ def select_aunps_by_cluster_findingampa_style(active_zone_data, cluster_data, to
         coordinate_system = original_zone_data['transformation_matrix'][:3, :3]
         
         selected_aunp_pos_transformed = (aunp_positions - center) @ coordinate_system.T
-        selected_aunp_pos_transformed += np.floor(np.array(active_zone_data[2].shape)[[2,1,0]]/2)
+        selected_aunp_pos_transformed += np.floor(np.array(cleft_data[2].shape)[[2,1,0]]/2)
         
         # Filter points within the volume
-        valid_mask = np.all(selected_aunp_pos_transformed > 0, axis=1) & np.all(selected_aunp_pos_transformed < np.array(active_zone_data[2].shape)[[2,1,0]], axis=1)
+        valid_mask = np.all(selected_aunp_pos_transformed > 0, axis=1) & np.all(selected_aunp_pos_transformed < np.array(cleft_data[2].shape)[[2,1,0]], axis=1)
         selected_aunp_positions = selected_aunp_pos_transformed[valid_mask]
         selected_cluster_assignments = cluster_assignments[valid_mask]
         
@@ -2566,15 +2566,15 @@ def select_aunps_by_cluster_findingampa_style(active_zone_data, cluster_data, to
         return [], []
 
 
-def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_active_zones=None, rerun=False,
+def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, cleft_ids=None, rerun=False,
                                                     *, alignment_dir: str,
                                                     sphere_size=None, sphere_color=None, aunp_distance_min=None, aunp_distance_max=None,
                                                     aunp_distance_cutoff_direction=None, aunp_distance_cutoff_value=None,
                                                     vesicle_distance_threshold: float = 20.0,
                                                     fusing_perimeter_threshold: float = 1.0):
     """Run combined active zonogram analysis for a single tomogram - EXACT SAME CODE as original script."""
-    from .activezone import (
-        define_active_zone, define_active_zonogram, extract_active_zonogram,
+    from .cleft import (
+        define_cleft, define_active_zonogram, extract_active_zonogram,
         import_membrane_segmentations_from_glb, find_active_zones_from_glb
     )
     from scipy.spatial import KDTree
@@ -2595,17 +2595,17 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
     tomogram_name = Path(tomo_path).name
     
     try:
-        # Step 1: Load membrane data and active zones (shared between both analyses)
+        # Step 1: Load membrane data and synaptic clefts (shared between both analyses)
         membrane_data = import_membrane_segmentations_from_glb(tomogram_path, alignment_dir=alignment_dir)
         
-        # Find active zones
-        active_zones_data = find_active_zones_from_glb(membrane_data, distance_range=(10.0, 40.0))
+        # Find synaptic clefts
+        clefts_data = find_active_zones_from_glb(membrane_data, distance_range=(10.0, 40.0))
         
-        if not active_zones_data['active_zones']:
-            print("No active zones found. Skipping active zonogram analysis.")
-            return {"success": False, "reason": "No active zones found"}
+        if not clefts_data['clefts']:
+            print("No synaptic clefts found. Skipping active zonogram analysis.")
+            return {"success": False, "reason": "No synaptic clefts found"}
         
-        # Load AuNP data to match active zones (required)
+        # Load AuNP data to match synaptic clefts (required)
         aunp_star_path = Path(tomogram_path) / alignment_dir / "STT_results" / "aunps" / "aunp_clusters.star"
         if not aunp_star_path.exists():
             raise FileNotFoundError(
@@ -2625,16 +2625,16 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
         if aunp_data is None:
             raise ValueError(f"Could not read AuNP DataFrame from {aunp_star_path}")
         
-        # Filter active zones based on CSV specification using smart matching
-        if aunp_active_zones is not None and aunp_active_zones != []:
+        # Filter synaptic clefts based on CSV specification using smart matching
+        if cleft_ids is not None and cleft_ids != []:
             # Handle both list and string inputs
-            if isinstance(aunp_active_zones, list):
+            if isinstance(cleft_ids, list):
                 # Already parsed list from CLI
-                selected_az_indices = aunp_active_zones
-                # CSV specified active zones
+                selected_az_indices = cleft_ids
+                # CSV specified synaptic clefts
             else:
-                # Parse active zone indices from CSV string (handle floats like "2.0")
-                az_str = str(aunp_active_zones) if aunp_active_zones is not None else ""
+                # Parse synaptic cleft indices from CSV string (handle floats like "2.0")
+                az_str = str(cleft_ids) if cleft_ids is not None else ""
                 if az_str.strip() != "" and az_str.lower() != "nan":
                     try:
                         selected_az_indices = []
@@ -2644,19 +2644,19 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                                 selected_az_indices.append(int(x))
                             elif x.replace(".", "").isdigit():  # Handle floats like "2.0"
                                 selected_az_indices.append(int(float(x)))
-                        # CSV specified active zones
+                        # CSV specified synaptic clefts
                     except Exception as e:
-                        print(f"Warning: Error parsing active zone indices from CSV '{aunp_active_zones}': {e}")
-                        print("Proceeding with all active zones")
+                        print(f"Warning: Error parsing synaptic cleft indices from CSV '{cleft_ids}': {e}")
+                        print("Proceeding with all synaptic clefts")
                         selected_az_indices = None
                 else:
-                    print("No active zones specified in CSV, proceeding with all active zones")
+                    print("No synaptic clefts specified in CSV, proceeding with all synaptic clefts")
                     selected_az_indices = None
         else:
-            print("No active zone filtering specified, proceeding with all active zones")
+            print("No synaptic cleft filtering specified, proceeding with all synaptic clefts")
             selected_az_indices = None
         
-        # If no specific active zones were specified, get all available active zone numbers from filtered AuNP file
+        # If no specific synaptic clefts were specified, get all available synaptic cleft numbers from filtered AuNP file
         if selected_az_indices is None:
             aunps_results_dir = Path(tomogram_path) / alignment_dir / "STT_results" / "aunps"
             cluster_star = aunps_results_dir / "aunp_clusters.star"
@@ -2676,66 +2676,66 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
             else:
                 df = star_data
 
-            if df is not None and 'active_zone' in df.columns:
-                aunp_az_numbers = sorted(df['active_zone'].unique().tolist())
-                # Remove -1 if present (means "not in any active zone")
+            if df is not None and 'cleft' in df.columns:
+                aunp_az_numbers = sorted(df['cleft'].unique().tolist())
+                # Remove -1 if present (means "not in any synaptic cleft")
                 aunp_az_numbers = [az for az in aunp_az_numbers if az != -1]
                 selected_az_indices = aunp_az_numbers
-                print(f"Using all available active zones from filtered AuNP file: {selected_az_indices}")
+                print(f"Using all available synaptic clefts from filtered AuNP file: {selected_az_indices}")
             else:
                 raise ValueError(
-                    f"Could not read active zones from {cluster_star}: missing DataFrame or 'active_zone' column."
+                    f"Could not read synaptic clefts from {cluster_star}: missing DataFrame or 'cleft' column."
                 )
         
-        # Use saved mapping from activezone.py (created by define_active_zone)
-        from .activezone import load_active_zone_mapping
+        # Use saved mapping from cleft.py (created by define_cleft)
+        from .cleft import load_cleft_mapping
         
         # Load saved mapping
-        az_mapping = load_active_zone_mapping(tomogram_path, alignment_dir)
+        az_mapping = load_cleft_mapping(tomogram_path, alignment_dir)
         
         if not az_mapping:
-            # No mapping found - use all active zones as fallback but print error
-            print(f"No saved active zone mapping found for {tomogram_name}. Active zone analysis must be run first with smart matching to create the mapping.")
-            print(f"FALLBACK: Using all {len(active_zones_data['active_zones'])} active zones found from GLB (no filtering applied).")
+            # No mapping found - use all synaptic clefts as fallback but print error
+            print(f"No saved synaptic cleft mapping found for {tomogram_name}. Active zone analysis must be run first with smart matching to create the mapping.")
+            print(f"FALLBACK: Using all {len(clefts_data['clefts'])} synaptic clefts found from GLB (no filtering applied).")
             # Use all zones, no filtering
-            filtered_active_zones = active_zones_data['active_zones']
+            filtered_clefts = clefts_data['clefts']
             # Create a dummy mapping for filename generation (use zone names as-is)
             az_mapping = {}
-            for idx, zone_name in enumerate(active_zones_data['active_zones'].keys()):
+            for idx, zone_name in enumerate(clefts_data['clefts'].keys()):
                 az_mapping[idx] = zone_name
         else:
             # Convert string keys to int (JSON stores dict keys as strings)
             az_mapping = {int(k): v for k, v in az_mapping.items()}
             
             # Filter to only include zones in the mapping
-            filtered_active_zones = {}
+            filtered_clefts = {}
             for az_index in selected_az_indices:
                 if az_index in az_mapping:
                     zone_name = az_mapping[az_index]
-                    if zone_name in active_zones_data['active_zones']:
-                        filtered_active_zones[zone_name] = active_zones_data['active_zones'][zone_name]
+                    if zone_name in clefts_data['clefts']:
+                        filtered_clefts[zone_name] = clefts_data['clefts'][zone_name]
                     else:
-                        raise ValueError(f"Zone {zone_name} from saved mapping not found in active zones data. This indicates a mismatch between the mapping and current active zones.")
+                        raise ValueError(f"Zone {zone_name} from saved mapping not found in synaptic clefts data. This indicates a mismatch between the mapping and current synaptic clefts.")
                 else:
-                    raise ValueError(f"Active zone index {az_index} not found in saved mapping. This indicates the active zone analysis was run with different indices.")
+                    raise ValueError(f"Active zone index {az_index} not found in saved mapping. This indicates the synaptic cleft analysis was run with different indices.")
             
-            print(f"Using saved active zone mapping for {len(filtered_active_zones)} zones")
+            print(f"Using saved synaptic cleft mapping for {len(filtered_clefts)} zones")
         
         # Store the mapping for later use in filename generation
-        active_zones_data['az_mapping'] = az_mapping
-        active_zones_data['active_zones'] = filtered_active_zones
+        clefts_data['az_mapping'] = az_mapping
+        clefts_data['clefts'] = filtered_clefts
         
         # Step 2: Regular Active Zonogram Analysis
         
         # Define active zonograms
-        zonogram_results = define_active_zonogram(active_zones_data)
+        zonogram_results = define_active_zonogram(clefts_data)
         
         if zonogram_results['status'] == 'completed':
             # Defined active zonograms
             
             # Extract and save zonograms
             extracted_results = extract_active_zonogram(
-                zonogram_results, active_zones_data, tomogram_path, alignment_dir=alignment_dir
+                zonogram_results, clefts_data, tomogram_path, alignment_dir=alignment_dir
             )
             
             if extracted_results and isinstance(extracted_results, dict) and 'rendered_zonograms' in extracted_results and extracted_results.get('rendered_zonograms'):
@@ -2755,7 +2755,7 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                 fusion_null_query_dfs = _compute_fusion_null_query_point_dataframes(
                     Path(tomogram_path),
                     alignment_dir,
-                    active_zones_data.get("az_mapping", {}),
+                    clefts_data.get("az_mapping", {}),
                     vesicle_distance_threshold=vesicle_distance_threshold,
                 )
                 fusing_fusion_points_by_zone = _fusing_fusion_points_by_zone(
@@ -2765,9 +2765,9 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                 )
                 
                 # Create filename suffix using the az_mapping (define once for all zones)
-                if 'az_mapping' in active_zones_data:
-                    # Use the first active zone index from the mapping as the default suffix
-                    first_az_index = list(active_zones_data['az_mapping'].keys())[0] if active_zones_data['az_mapping'] else 0
+                if 'az_mapping' in clefts_data:
+                    # Use the first synaptic cleft index from the mapping as the default suffix
+                    first_az_index = list(clefts_data['az_mapping'].keys())[0] if clefts_data['az_mapping'] else 0
                     default_suffix = f"_az{first_az_index}"
                 else:
                     # Fallback if no az_mapping available
@@ -2781,10 +2781,10 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                     zonogram_findingampa = (np.eye(3), np.zeros(3), torch.tensor(zone_data['transformed_tomogram']), ())
                     
                     # Create filename suffix using the az_mapping for this specific zone
-                    if 'az_mapping' in active_zones_data:
-                        # Find which active zone index maps to this zone_name
+                    if 'az_mapping' in clefts_data:
+                        # Find which synaptic cleft index maps to this zone_name
                         az_index = None
-                        for idx, mapped_zone in active_zones_data['az_mapping'].items():
+                        for idx, mapped_zone in clefts_data['az_mapping'].items():
                             if mapped_zone == zone_name:
                                 az_index = idx
                                 break
@@ -2829,7 +2829,7 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                         print(f"    ✓ Saved PNG: {png_filename}")
                         files_created.append(png_filename)
 
-                    # Active zonogram with active-zone center marked (mean pre/post membrane center)
+                    # Active zonogram with synaptic-cleft center marked (mean pre/post membrane center)
                     center_png_filename = (
                         f"{tomogram_name}_active_zonogram_{zone_name}{suffix}_center.png"
                     )
@@ -2872,27 +2872,27 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                         print(f"    ✓ Saved PNG: {center_png_filename}")
                         files_created.append(center_png_filename)
                     
-                    # Extract active zone ID from the az_mapping
-                    active_zone_id = None
-                    if 'az_mapping' in active_zones_data:
-                        # Find which active zone index maps to this zone_name
-                        for idx, mapped_zone in active_zones_data['az_mapping'].items():
+                    # Extract synaptic cleft ID from the az_mapping
+                    cleft_id = None
+                    if 'az_mapping' in clefts_data:
+                        # Find which synaptic cleft index maps to this zone_name
+                        for idx, mapped_zone in clefts_data['az_mapping'].items():
                             if mapped_zone == zone_name:
-                                active_zone_id = idx
+                                cleft_id = idx
                                 break
                     
                     # Fallback if no mapping found
-                    if active_zone_id is None:
+                    if cleft_id is None:
                         if 'pre1_post1' in zone_name:
-                            active_zone_id = 0
+                            cleft_id = 0
                         elif 'pre2_post1' in zone_name:
-                            active_zone_id = 1
+                            cleft_id = 1
                         else:
-                            active_zone_id = 0  # Default fallback
+                            cleft_id = 0  # Default fallback
                     
                     # Generate AuNP visualization
                     selected_aunps = select_aunps_findingampa_style(
-                        zonogram_findingampa, None, tomogram_path, active_zone_id, original_zone_data,
+                        zonogram_findingampa, None, tomogram_path, cleft_id, original_zone_data,
                         alignment_dir=alignment_dir,
                     )
                     if len(selected_aunps) > 0:
@@ -2920,9 +2920,9 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                             print(f"    ✓ Saved PNG: {aunp_filename}")
                             files_created.append(aunp_filename)
                     
-                    # Generate distance-colored AuNP visualization (postsynaptic active-zone center distance)
+                    # Generate distance-colored AuNP visualization (postsynaptic synaptic-cleft center distance)
                     selected_aunps_with_distances = select_aunps_with_distances_findingampa_style(
-                        zonogram_findingampa, None, tomogram_path, active_zone_id, original_zone_data,
+                        zonogram_findingampa, None, tomogram_path, cleft_id, original_zone_data,
                         alignment_dir=alignment_dir,
                     )
                     if len(selected_aunps_with_distances['positions']) > 0:
@@ -3080,7 +3080,7 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                     
                     # Generate cluster-colored AuNP visualization
                     selected_aunps, cluster_assignments = select_aunps_by_cluster_findingampa_style(
-                        zonogram_findingampa, None, tomogram_path, active_zone_id, original_zone_data,
+                        zonogram_findingampa, None, tomogram_path, cleft_id, original_zone_data,
                         alignment_dir=alignment_dir,
                     )
                     if len(selected_aunps) > 0:
@@ -3490,7 +3490,7 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                 # Get AuNPs for this cluster
                 cluster_data = cluster_df[cluster_df['aunp_cluster'] == cluster_id]
                 
-                # Create mini zonogram (use filtered active zones)
+                # Create mini zonogram (use filtered synaptic clefts)
                 # Create mini zonogram directory in organized structure
                 results_active_zonograms_dir_mini = organized_results_viz_path(
                     "results", tomogram_name, alignment_dir, "active_zonograms", "mini"
@@ -3503,7 +3503,7 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, aunp_a
                     tomogram_path,
                     tomogram_active_zonograms_dir,
                     results_active_zonograms_dir_mini,
-                    active_zones_data,
+                    clefts_data,
                     cluster_color_map,
                     tomogram_name,
                     alignment_dir=alignment_dir,
@@ -3544,7 +3544,7 @@ def create_mini_zonogram_for_cluster(
     tomogram_path,
     tomogram_azograms_dir,
     results_azograms_dir,
-    active_zones_data,
+    clefts_data,
     cluster_color_map,
     tomogram_name,
     *,
@@ -3561,8 +3561,8 @@ def create_mini_zonogram_for_cluster(
     alignment_dir = require_alignment_dir(alignment_dir)
     # Creating mini zonogram for cluster
     
-    # Debug: Check available active zones
-    # Available active zones checked
+    # Debug: Check available synaptic clefts
+    # Available synaptic clefts checked
     
     # Get cluster center
     cluster_center = cluster_data[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].mean().values
@@ -3573,11 +3573,11 @@ def create_mini_zonogram_for_cluster(
     import torch
     import einops
     
-    # Find the closest active zone to this cluster
+    # Find the closest synaptic cleft to this cluster
     closest_zone_name = None
     min_distance = float('inf')
     
-    for zone_name, zone_data in active_zones_data['active_zones'].items():
+    for zone_name, zone_data in clefts_data['clefts'].items():
         if len(zone_data['active_presynaptic_points']) > 0 and len(zone_data['active_postsynaptic_points']) > 0:
             # Calculate distance from cluster center to zone center
             center_presyn = np.mean(zone_data['active_presynaptic_points'], axis=0)
@@ -3590,14 +3590,14 @@ def create_mini_zonogram_for_cluster(
                 closest_zone_name = zone_name
     
     if closest_zone_name is None:
-        print(f"    Warning: No active zones found, using identity matrix")
+        print(f"    Warning: No synaptic clefts found, using identity matrix")
         coordinate_system = np.eye(3)
         transformation_matrix = np.eye(4)
         transformation_matrix[:3, 3] = -cluster_center
         extent = np.array([100, 100, 100])
     else:
-        # Use the membrane data from the closest active zone
-        zone_data = active_zones_data['active_zones'][closest_zone_name]
+        # Use the membrane data from the closest synaptic cleft
+        zone_data = clefts_data['clefts'][closest_zone_name]
         
         # Construct coordinate system using the same logic as regular active zonograms
         # Get 100 random points in postsynapse (or all if fewer than 100)
@@ -3651,11 +3651,11 @@ def create_mini_zonogram_for_cluster(
         # Create the expected data structure for extract_active_zonogram (matching define_active_zonogram output)
         mini_zonogram_dict = {
             'status': 'completed',
-            'active_zone_count': 1,
+            'cleft_count': 1,
             'zonogram_data': {zone_name_to_use: mini_zonogram_data}
         }
         extracted_data = extract_active_zonogram(
-            mini_zonogram_dict, active_zones_data, tomogram_path, alignment_dir=alignment_dir
+            mini_zonogram_dict, clefts_data, tomogram_path, alignment_dir=alignment_dir
         )
         
         if extracted_data is None or 'rendered_zonograms' not in extracted_data or zone_name_to_use not in extracted_data['rendered_zonograms']:
@@ -3962,13 +3962,13 @@ def generate_all_zonograms_pdf(tomo_paths, data_dir=None):
         
         # One PDF section per CSV row (same tomogram name may appear with different alignments)
         for i, tomo_info in enumerate(tomo_paths, 1):
-            tomo_path, _set_name, aunp_active_zones, alignment_dir = unpack_tomo_csv_row(tomo_info)
+            tomo_path, _set_name, cleft_ids, alignment_dir = unpack_tomo_csv_row(tomo_info)
             tomogram_name = Path(tomo_path).name
             print(f"    [{i}/{len(tomo_paths)}] Processing {tomogram_name} ({alignment_dir})...", end=" ", flush=True)
 
             selected_az_indices = None
-            if aunp_active_zones is not None:
-                az_str = str(aunp_active_zones)
+            if cleft_ids is not None:
+                az_str = str(cleft_ids)
                 if az_str.strip() != "" and az_str.lower() != "nan":
                     try:
                         selected_az_indices = []
@@ -3979,7 +3979,7 @@ def generate_all_zonograms_pdf(tomo_paths, data_dir=None):
                             elif x.replace(".", "").isdigit():
                                 selected_az_indices.append(int(float(x)))
                     except Exception as e:
-                        print(f"    Warning: Error parsing active zone indices for {tomogram_name}: {e}")
+                        print(f"    Warning: Error parsing synaptic cleft indices for {tomogram_name}: {e}")
 
             azograms_dir = organized_results_viz_path(
                 "results", tomogram_name, alignment_dir, "active_zonograms", "full"
@@ -4003,17 +4003,17 @@ def generate_all_zonograms_pdf(tomo_paths, data_dir=None):
                     # Get zone name from filename
                     zone_name = zonogram_file.stem.split('_active_zonogram_')[1].split('_selected_aunps_by_cluster')[0]
                     
-                    # Filter by active zone indices if specified in CSV
+                    # Filter by synaptic cleft indices if specified in CSV
                     if selected_az_indices is not None:
-                        # Extract active zone index from filename suffix (e.g., "_az0" -> 0)
+                        # Extract synaptic cleft index from filename suffix (e.g., "_az0" -> 0)
                         try:
                             az_suffix = zonogram_file.stem.split('_az')[-1]
                             az_index = int(az_suffix)
                             if az_index not in selected_az_indices:
-                                print(f"      Skipping active zone {zone_name} (index {az_index}) - not in CSV")
+                                print(f"      Skipping synaptic cleft {zone_name} (index {az_index}) - not in CSV")
                                 continue
                         except (ValueError, IndexError):
-                            print(f"      Warning: Could not parse active zone index from filename: {zonogram_file.name}")
+                            print(f"      Warning: Could not parse synaptic cleft index from filename: {zonogram_file.name}")
                             # Include it by default if we can't parse the index
                     
                     # Add zone name as subtitle
@@ -4024,7 +4024,7 @@ def generate_all_zonograms_pdf(tomo_paths, data_dir=None):
                         spaceAfter=10,
                         textColor=colors.darkgreen
                     )
-                    story.append(Paragraph(f"Active Zone: {zone_name}", zone_style))
+                    story.append(Paragraph(f"Cleft: {zone_name}", zone_style))
                     
                     # Add the image (preserve aspect ratio but ensure it fits on page)
                     # First, get the original image dimensions
@@ -4186,13 +4186,13 @@ def generate_mini_zonograms_pdf(tomo_paths, data_dir=None):
         )
         
         for i, tomo_info in enumerate(tomo_paths, 1):
-            tomo_path, _set_name, aunp_active_zones, alignment_dir = unpack_tomo_csv_row(tomo_info)
+            tomo_path, _set_name, cleft_ids, alignment_dir = unpack_tomo_csv_row(tomo_info)
             tomogram_path = Path(tomo_path)
             tomogram_name = tomogram_path.name
 
             selected_az_indices = None
-            if aunp_active_zones is not None:
-                az_str = str(aunp_active_zones)
+            if cleft_ids is not None:
+                az_str = str(cleft_ids)
                 if az_str.strip() != "" and az_str.lower() != "nan":
                     try:
                         selected_az_indices = []
@@ -4203,7 +4203,7 @@ def generate_mini_zonograms_pdf(tomo_paths, data_dir=None):
                             elif x.replace(".", "").isdigit():
                                 selected_az_indices.append(int(float(x)))
                     except Exception as e:
-                        print(f"    Warning: Error parsing active zone indices for {tomogram_name}: {e}")
+                        print(f"    Warning: Error parsing synaptic cleft indices for {tomogram_name}: {e}")
 
             print(f"    [{i}/{len(tomo_paths)}] Processing {tomogram_name} ({alignment_dir})...", end=" ", flush=True)
 
@@ -4221,13 +4221,13 @@ def generate_mini_zonograms_pdf(tomo_paths, data_dir=None):
                 print(f"    Warning: No mini zonogram files found for {tomogram_name}")
                 continue
             
-            # Filter mini zonogram files by active zone indices if specified in CSV
+            # Filter mini zonogram files by synaptic cleft indices if specified in CSV
             if selected_az_indices is not None and mini_zonogram_files:
                 filtered_mini_files = []
                 for mini_file in mini_zonogram_files:
-                    # Extract active zone info from filename (e.g., "tomogram_mini_zonogram_cluster_1_comparison.png")
-                    # We need to check if this mini zonogram belongs to a filtered active zone
-                    # For now, we'll include all mini zonograms since they're cluster-specific, not active zone specific
+                    # Extract synaptic cleft info from filename (e.g., "tomogram_mini_zonogram_cluster_1_comparison.png")
+                    # We need to check if this mini zonogram belongs to a filtered synaptic cleft
+                    # For now, we'll include all mini zonograms since they're cluster-specific, not synaptic cleft specific
                     # But we could add filtering logic here if needed
                     filtered_mini_files.append(mini_file)
                 mini_zonogram_files = filtered_mini_files

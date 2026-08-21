@@ -1,7 +1,7 @@
 """
-3D bivariate Ripley K₁₂ / L₁₂ of AuNP positions relative to the active zone center.
+3D bivariate Ripley K₁₂ / L₁₂ of AuNP positions relative to the synaptic cleft center.
 
-Type-1 foci: one active zone center per zone (mean of presynaptic + postsynaptic AZ points).
+Type-1 foci: one synaptic cleft center per zone (mean of presynaptic + postsynaptic AZ points).
 Type-2 partners: AuNP pick coordinates in that zone.
 
 Reports three K/L families per zone (see ``L_CURVE_FAMILIES``): the direct K₁₂/L₁₂
@@ -47,7 +47,7 @@ from .ripley_library import (
     curves_matrix_to_long_dataframe,
     curves_matrix_to_wide_dataframe,
     g_shell_reliability_mask,
-    load_synaptic_cleft_active_zone_points,
+    load_synaptic_cleft_cleft_points,
     pair_correlation_from_k_diff,
     plot_ripley_window_geometry_diagnostic,
     prism_sd_envelope_columns_from_averaged_k12,
@@ -91,7 +91,7 @@ _AZ_CENTER_MAX_ITER = 5
 _AZ_CENTER_CONVERGENCE_TOL_NM = 1e-3
 
 
-def compute_active_zone_center_nm(az_segmentation: dict) -> np.ndarray:
+def compute_cleft_center_nm(az_segmentation: dict) -> np.ndarray:
     """
     Active zone center: the midpoint between the nearest presynaptic and postsynaptic
     active-zone (outer, cleft-facing) surface points to a running centroid estimate,
@@ -126,7 +126,7 @@ def compute_active_zone_center_nm(az_segmentation: dict) -> np.ndarray:
 
     if not _angle_betweenness_mask(center.reshape(1, 3), pre, post)[0]:
         print(
-            "  Warning: active-zone center failed the in-betweenness test after "
+            "  Warning: synaptic-cleft center failed the in-betweenness test after "
             f"{_AZ_CENTER_MAX_ITER} fixed-point iterations; using nearest pre/post "
             "midpoint anyway"
         )
@@ -151,7 +151,7 @@ def _extract_zone_curves_matrix(
     r_vals = np.sort(sub["r_nm"].unique())
     n_r = len(r_vals)
     r_index = {round(float(r), 6): i for i, r in enumerate(r_vals)}
-    id_cols = ["tomogram_name", "alignment_dir", "active_zone_name"]
+    id_cols = ["tomogram_name", "alignment_dir", "cleft_name"]
     for col in id_cols:
         if col not in sub.columns:
             sub[col] = ""
@@ -198,7 +198,7 @@ def build_aunp_vs_az_center_prism_table(
     rows: list[dict] = []
     for i, r_nm in enumerate(r_vals):
         row = {
-            "active_zone_name": zone_name,
+            "cleft_name": zone_name,
             "window_mode": WINDOW_MODE,
             "r_nm": float(r_nm),
             "k12": float(k12[i]),
@@ -298,7 +298,7 @@ def build_pooled_aunp_vs_az_center_prism_table(df: pd.DataFrame) -> pd.DataFrame
 
         n_tomograms = int(sub["tomogram_name"].nunique()) if "tomogram_name" in sub.columns else 0
         n_zones = int(
-            sub[["tomogram_name", "alignment_dir", "active_zone_name"]].drop_duplicates().shape[0]
+            sub[["tomogram_name", "alignment_dir", "cleft_name"]].drop_duplicates().shape[0]
         )
 
         for i, r_nm in enumerate(anchor_r_vals):
@@ -308,7 +308,7 @@ def build_pooled_aunp_vs_az_center_prism_table(df: pd.DataFrame) -> pd.DataFrame
                 "r_nm": float(r_nm),
                 "n_zone_curves": int(anchor_n_valid[i]),
                 "n_tomograms": n_tomograms,
-                "n_active_zones": n_zones,
+                "n_clefts": n_zones,
             }
             for prefix, (from_k, from_l) in family_envelopes.items():
                 row.update(
@@ -381,7 +381,7 @@ def build_pooled_aunp_vs_az_center_g12_table(df: pd.DataFrame) -> pd.DataFrame:
         r_hi = np.nanmean(edges, axis=0) if len(edges) else np.full(len(anchor_r_vals), np.nan)
         n_tomograms = int(sub["tomogram_name"].nunique()) if "tomogram_name" in sub.columns else 0
         n_zones = int(
-            sub[["tomogram_name", "alignment_dir", "active_zone_name"]].drop_duplicates().shape[0]
+            sub[["tomogram_name", "alignment_dir", "cleft_name"]].drop_duplicates().shape[0]
         )
 
         for i, r_nm in enumerate(anchor_r_vals):
@@ -393,7 +393,7 @@ def build_pooled_aunp_vs_az_center_g12_table(df: pd.DataFrame) -> pd.DataFrame:
                 "r_hi_nm": float(r_hi[i]),
                 "n_zone_shells": int(anchor_n_valid[i]),
                 "n_tomograms": n_tomograms,
-                "n_active_zones": n_zones,
+                "n_clefts": n_zones,
             }
             for stem, env in family_envelopes.items():
                 row.update(
@@ -411,7 +411,7 @@ def build_pooled_aunp_vs_az_center_g12_table(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def plot_active_zone_center_diagnostic(
+def plot_cleft_center_diagnostic(
     tomogram_path: Path,
     alignment_dir: str,
     zone_name: str,
@@ -442,7 +442,7 @@ def plot_active_zone_center_diagnostic(
     are highlighted separately, distinct from the analyzed AuNPs.
     """
     aunp_coords = np.atleast_2d(np.asarray(aunp_coords, dtype=float))
-    center = compute_active_zone_center_nm(az_segmentation)
+    center = compute_cleft_center_nm(az_segmentation)
     if not np.all(np.isfinite(center)):
         print(f"  Skipping AZ-center diagnostic plot for {zone_name}: could not compute center")
         return None
@@ -530,7 +530,7 @@ def run_aunp_vs_az_center_ripley_for_zone(
     tomogram_path: Path,
     alignment_dir: str,
     zone_name: str,
-    active_zone_index: int,
+    cleft_index: int,
     *,
     aunp_coords: np.ndarray,
     az_segmentation: dict,
@@ -540,7 +540,7 @@ def run_aunp_vs_az_center_ripley_for_zone(
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
 ) -> dict[str, Path] | None:
-    """Compute observed 3D L₁₂(center, AuNPs) for one active zone.
+    """Compute observed 3D L₁₂(center, AuNPs) for one synaptic cleft.
 
     The Ripley window is always restricted to the region of the synaptic-cleft hull that
     also sits "between" the pre- and post-synaptic membranes (angle in-betweenness test),
@@ -559,14 +559,14 @@ def run_aunp_vs_az_center_ripley_for_zone(
         )
         return None
 
-    center = compute_active_zone_center_nm(az_segmentation)
+    center = compute_cleft_center_nm(az_segmentation)
     if not np.all(np.isfinite(center)):
         print(f"  Skipping AZ-center Ripley for {zone_name}: could not compute center")
         return None
 
     rng = np.random.default_rng(seed)
     try:
-        cleft_coords = load_synaptic_cleft_active_zone_points(
+        cleft_coords = load_synaptic_cleft_cleft_points(
             tomogram_path, alignment_dir, zone_name
         )
         window = build_ripley_window_3d(
@@ -669,7 +669,7 @@ def run_aunp_vs_az_center_ripley_for_zone(
     if write_figures:
         figures_dir.mkdir(parents=True, exist_ok=True)
         try:
-            plot_active_zone_center_diagnostic(
+            plot_cleft_center_diagnostic(
                 tomogram_path,
                 alignment_dir,
                 zone_name,
@@ -686,8 +686,8 @@ def run_aunp_vs_az_center_ripley_for_zone(
 
     curves_df = pd.DataFrame(
         {
-            "active_zone_name": zone_name,
-            "active_zone_index": int(active_zone_index),
+            "cleft_name": zone_name,
+            "cleft_index": int(cleft_index),
             "window_mode": WINDOW_MODE,
             "r_nm": r_vals,
             "k12": k12,
@@ -709,8 +709,8 @@ def run_aunp_vs_az_center_ripley_for_zone(
 
     g12_df = pd.DataFrame(
         {
-            "active_zone_name": zone_name,
-            "active_zone_index": int(active_zone_index),
+            "cleft_name": zone_name,
+            "cleft_index": int(cleft_index),
             "window_mode": WINDOW_MODE,
             "r_nm": g12_r_nm,
             "r_lo_nm": g12_result["r_lo_nm"],
@@ -730,8 +730,8 @@ def run_aunp_vs_az_center_ripley_for_zone(
         r_vals,
         curve_type="observed",
         extra_cols={
-            "active_zone_name": zone_name,
-            "active_zone_index": int(active_zone_index),
+            "cleft_name": zone_name,
+            "cleft_index": int(cleft_index),
             "window_mode": WINDOW_MODE,
             "n_aunp_partners": int(len(aunp_coords)),
             "n_aunps_dropped_outside_hull": int(len(dropped_coords)),
@@ -758,7 +758,7 @@ def run_aunp_vs_az_center_ripley_for_zone(
     )
     prism_path = out_dir / "ripley_l12_prism.csv"
     prism_df.to_csv(prism_path, index=False)
-    _prism_long_to_wide(prism_df, id_cols=["active_zone_name", "window_mode"]).to_csv(
+    _prism_long_to_wide(prism_df, id_cols=["cleft_name", "window_mode"]).to_csv(
         out_dir / "ripley_l12_prism_wide.csv", index=False
     )
 
@@ -820,8 +820,8 @@ def run_aunp_vs_az_center_ripley_for_zone(
     meta = {
         "tomogram_name": tomogram_name,
         "alignment_dir": alignment_dir,
-        "active_zone_name": zone_name,
-        "active_zone_index": int(active_zone_index),
+        "cleft_name": zone_name,
+        "cleft_index": int(cleft_index),
         "window_mode": WINDOW_MODE,
         "n_aunp_partners": int(len(aunp_coords)),
         "n_aunps_dropped_outside_hull": int(len(dropped_coords)),
@@ -855,7 +855,7 @@ def run_aunp_vs_az_center_ripley_for_tomogram(
     tomogram_path: Path,
     alignment_dir: str,
     *,
-    active_zone_indices: Sequence[int] | None,
+    cleft_indices: Sequence[int] | None,
     df_valid: pd.DataFrame,
     az_segmentations: dict,
     r_max_nm: float = AZ_CENTER_RIPLEY_R_MAX_NM,
@@ -864,18 +864,18 @@ def run_aunp_vs_az_center_ripley_for_tomogram(
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
 ) -> tuple[list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame]]:
-    """Run AZ-center Ripley for all mapped active zones in one tomogram."""
-    from .activezone import load_active_zone_mapping
+    """Run AZ-center Ripley for all mapped synaptic clefts in one tomogram."""
+    from .cleft import load_cleft_mapping
 
     tomogram_path = Path(tomogram_path)
     alignment_dir = require_alignment_dir(alignment_dir)
-    az_mapping = load_active_zone_mapping(tomogram_path, alignment_dir) or {}
+    az_mapping = load_cleft_mapping(tomogram_path, alignment_dir) or {}
     if not az_mapping:
-        print("No active zone mapping; skipping AuNP vs AZ-center Ripley analyses")
+        print("No synaptic cleft mapping; skipping AuNP vs AZ-center Ripley analyses")
         return [], [], []
 
     az_mapping = {int(k): v for k, v in az_mapping.items()}
-    indices = list(active_zone_indices) if active_zone_indices is not None else sorted(az_mapping)
+    indices = list(cleft_indices) if cleft_indices is not None else sorted(az_mapping)
     coord_cols = ["faCoordinateX", "faCoordinateY", "faCoordinateZ"]
 
     curve_frames: list[pd.DataFrame] = []
@@ -891,9 +891,9 @@ def run_aunp_vs_az_center_ripley_for_tomogram(
             print(f"  No AZ segmentation for {zone_name}, skipping AZ-center Ripley")
             continue
 
-        az_df = df_valid[df_valid["active_zone"] == az_idx]
+        az_df = df_valid[df_valid["cleft"] == az_idx]
         if az_df.empty:
-            print(f"  No AuNPs in active zone index {az_idx} ({zone_name}), skipping")
+            print(f"  No AuNPs in synaptic cleft index {az_idx} ({zone_name}), skipping")
             continue
         aunp_coords = np.asarray(az_df[coord_cols], dtype=float)
 
@@ -985,8 +985,8 @@ def _plot_pooled_l_family_figure(
     ax.set_xlabel("r (nm)")
     ax.set_ylabel(f"Ripley {label}(r)")
     ax.set_title(
-        f"Pooled AuNP vs active zone center ({label}) — set: {set_name}\n"
-        f"{int(meta['n_tomograms'])} tomogram(s), {int(meta['n_active_zones'])} zone(s), "
+        f"Pooled AuNP vs synaptic cleft center ({label}) — set: {set_name}\n"
+        f"{int(meta['n_tomograms'])} tomogram(s), {int(meta['n_clefts'])} zone(s), "
         f"{int(meta['n_zone_curves'])} curves"
     )
     ax.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else AZ_CENTER_RIPLEY_R_MAX_NM)
@@ -1032,8 +1032,8 @@ def _plot_pooled_g_family_figure(
     ax.set_xlabel("r (nm)")
     ax.set_ylabel(f"{label}(r) = observed / expected AuNP shell density")
     ax.set_title(
-        f"Pooled AuNP vs active zone center {label} — set: {set_name}\n"
-        f"{int(meta['n_tomograms'])} tomogram(s), {int(meta['n_active_zones'])} zone(s)"
+        f"Pooled AuNP vs synaptic cleft center {label} — set: {set_name}\n"
+        f"{int(meta['n_tomograms'])} tomogram(s), {int(meta['n_clefts'])} zone(s)"
     )
     ax.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else AZ_CENTER_RIPLEY_R_MAX_NM)
     ax.legend(loc="best", fontsize=8)

@@ -7,8 +7,8 @@ Output label scheme:
   1 - generic membrane (original 1, not assigned to a subclass)
   2 - presynaptic membrane (original 1, near presynaptic membrane cloud)
   3 - postsynaptic membrane (original 1, near postsynaptic membrane cloud)
-  4 - presynaptic active zone (label 2 voxels near presynaptic active-zone points)
-  5 - postsynaptic active zone (label 3 voxels near postsynaptic active-zone points)
+  4 - presynaptic synaptic cleft (label 2 voxels near presynaptic synaptic-cleft points)
+  5 - postsynaptic synaptic cleft (label 3 voxels near postsynaptic synaptic-cleft points)
   6 - vesicles (near vesicle point cloud / GLB vertices)
 
 Outputs are written under ``<alignment_dir>/STT_results/membranes_labeled/``:
@@ -21,13 +21,13 @@ By default 1 voxel = 1 nm (--voxel-size-nm 1.0), so --distance-nm 5 corresponds 
 
 Examples:
   # Single tomogram
-  PYTHONPATH=src python scripts/relabel_membrain_segmentation.py \\
+  PYTHONPATH=src python scripts/surface_morphometrics/relabel_membrain_segmentation.py \\
     --tomogram-path data/15F1/TOP_TOMOS/20231017_EGmilled24-2_68 \\
     --alignment-dir best_alignment \\
     --distance-nm 5
 
   # Batch from STT tomograms.csv
-  PYTHONPATH=src python scripts/relabel_membrain_segmentation.py \\
+  PYTHONPATH=src python scripts/surface_morphometrics/relabel_membrain_segmentation.py \\
     --csv tomogram_csv_files/tomograms_15F1-H12Cys_FINAL.csv \\
     --distance-nm 5
 """
@@ -69,8 +69,8 @@ LABEL_NAMES = {
     1: "membrane",
     2: "presynaptic_membrane",
     3: "postsynaptic_membrane",
-    4: "presynaptic_active_zone",
-    5: "postsynaptic_active_zone",
+    4: "presynaptic_cleft",
+    5: "postsynaptic_cleft",
     6: "vesicle",
 }
 
@@ -217,7 +217,7 @@ def load_vesicle_points(aunps_dir: Path) -> np.ndarray:
     return _concat_point_sets(_load_txt_points(p) for p in txt_paths)
 
 
-def load_active_zone_side_points(
+def load_cleft_side_points(
     tomogram_path: Path,
     alignment_dir: str,
     side: str,
@@ -226,24 +226,24 @@ def load_active_zone_side_points(
     Combine active-zone point clouds for one side across all zones.
 
     ``side`` is ``"presynaptic"`` or ``"postsynaptic"``.
-    Uses outer + inner txt files from STT_results/activezone/.
+    Uses outer + inner txt files from STT_results/cleft/.
     """
-    active_zone_dir = tomogram_path / alignment_dir / "STT_results" / "activezone"
-    if not active_zone_dir.is_dir():
-        print(f"Warning: active zone directory not found: {active_zone_dir}")
+    cleft_dir = tomogram_path / alignment_dir / "STT_results" / "cleft"
+    if not cleft_dir.is_dir():
+        print(f"Warning: synaptic cleft directory not found: {cleft_dir}")
         return np.zeros((0, 3), dtype=float)
 
     parts: list[np.ndarray] = []
     if side == "presynaptic":
-        for path in sorted(active_zone_dir.glob("*_pre_outer.txt")):
+        for path in sorted(cleft_dir.glob("*_pre_outer.txt")):
             zone_name = path.stem[:-10] if path.stem.endswith("_pre_outer") else path.stem
             parts.append(_load_txt_points(path))
-            parts.append(_load_txt_points(active_zone_dir / f"{zone_name}_pre_inner.txt"))
+            parts.append(_load_txt_points(cleft_dir / f"{zone_name}_pre_inner.txt"))
     else:
-        for path in sorted(active_zone_dir.glob("*_post_outer.txt")):
+        for path in sorted(cleft_dir.glob("*_post_outer.txt")):
             zone_name = path.stem[:-11] if path.stem.endswith("_post_outer") else path.stem
             parts.append(_load_txt_points(path))
-            parts.append(_load_txt_points(active_zone_dir / f"{zone_name}_post_inner.txt"))
+            parts.append(_load_txt_points(cleft_dir / f"{zone_name}_post_inner.txt"))
     return _concat_point_sets(parts)
 
 
@@ -520,7 +520,7 @@ def process_one_tomogram(
     origin_nm: np.ndarray,
     membrane_threshold: float | None = None,
     skip_vesicles: bool = False,
-    skip_active_zones: bool = False,
+    skip_clefts: bool = False,
     segmentation_mrc: Path | None = None,
     output_dir: Path | None = None,
     output_mrc: Path | None = None,
@@ -609,14 +609,14 @@ def process_one_tomogram(
     else:
         vesicle_pts = load_vesicle_points(aunps_dir)
 
-    if skip_active_zones:
+    if skip_clefts:
         presyn_az_pts = np.zeros((0, 3))
         postsyn_az_pts = np.zeros((0, 3))
     else:
-        presyn_az_pts = load_active_zone_side_points(
+        presyn_az_pts = load_cleft_side_points(
             tomogram_path, alignment_dir, "presynaptic"
         )
-        postsyn_az_pts = load_active_zone_side_points(
+        postsyn_az_pts = load_cleft_side_points(
             tomogram_path, alignment_dir, "postsynaptic"
         )
 
@@ -788,7 +788,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--skip-active-zones",
         action="store_true",
-        help="Do not assign labels 4/5 (active zones)",
+        help="Do not assign labels 4/5 (synaptic clefts)",
     )
     parser.add_argument(
         "--write-separate-masks",
@@ -835,7 +835,7 @@ def main(argv: list[str] | None = None) -> int:
         origin_nm=origin_nm,
         membrane_threshold=args.membrane_threshold,
         skip_vesicles=bool(args.skip_vesicles),
-        skip_active_zones=bool(args.skip_active_zones),
+        skip_clefts=bool(args.skip_clefts),
         write_separate_masks=bool(args.write_separate_masks),
         rerun=bool(args.rerun),
     )

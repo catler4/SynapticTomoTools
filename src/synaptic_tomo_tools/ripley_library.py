@@ -1,6 +1,6 @@
 """
 Shared 3D bivariate Ripley K₁₂/L₁₂ infrastructure used by the AuNP Ripley analyses:
-``aunp_monomer_dimer_ripley.py``, ``aunp_ripley_vs_active_zone_center.py``, and
+``aunp_monomer_dimer_ripley.py``, ``aunp_ripley_vs_cleft_center.py``, and
 ``fusion_point_aunp_position_distance_and_Ripleys_analyses.py``.
 
 Covers: the convex-hull Ripley window and its membership tests, isotropic edge
@@ -9,7 +9,7 @@ K↔L transforms, the pair-correlation function g as a finite difference of an
 already-computed K curve (``pair_correlation_from_k_diff``), the symmetrized bivariate
 K_(12,21) / L_(12,21) / g_(12,21) combinations (Lotwick & Silverman 1982),
 label-permutation null curves, MAD (maximum absolute deviation) null-hypothesis tests,
-curve-table/Prism-envelope builders, and the shared AuNP pick / active-zone surface
+curve-table/Prism-envelope builders, and the shared AuNP pick / synaptic-cleft surface
 point loaders.
 
 Analysis-specific logic (fusion-site placement, distance tables, window modes other
@@ -70,7 +70,7 @@ AUNP_SUBSETS: tuple[AunpSubset, ...] = ("monomer", "dimer", "both")
 
 @dataclass(frozen=True)
 class ZoneAunpLoadResult:
-    """Monomer and/or dimer pick coordinates loaded for one active zone."""
+    """Monomer and/or dimer pick coordinates loaded for one synaptic cleft."""
 
     coords: np.ndarray
     meta: pd.DataFrame
@@ -113,13 +113,13 @@ def _normalize_monomer_dimer_star_pattern(
     *,
     default: str,
 ) -> str:
-    """Return monomer/dimer STAR filename pattern (``*`` = active zone index)."""
+    """Return monomer/dimer STAR filename pattern (``*`` = synaptic cleft index)."""
     if pattern is None or not str(pattern).strip():
         return default
     pat = str(pattern).strip()
     if "*" not in pat or pat.count("*") != 1:
         raise ValueError(
-            "Monomer/dimer STAR pattern must contain exactly one '*' for the active zone index "
+            "Monomer/dimer STAR pattern must contain exactly one '*' for the synaptic cleft index "
             f"(e.g. {default!r})."
         )
     if not pat.endswith(".star"):
@@ -127,15 +127,15 @@ def _normalize_monomer_dimer_star_pattern(
     return pat
 
 
-def _monomer_dimer_star_filename(active_zone_index: int, pattern: str) -> str:
-    return pattern.replace("*", str(int(active_zone_index)), 1)
+def _monomer_dimer_star_filename(cleft_index: int, pattern: str) -> str:
+    return pattern.replace("*", str(int(cleft_index)), 1)
 
 
 def _resolve_monomer_dimer_star_paths(
     aunps_dir: Path,
     tomogram_name: str,
     alignment_dir: str,
-    active_zone_index: int,
+    cleft_index: int,
     *,
     kind: Literal["monomer", "dimer"],
     pattern: Optional[str] = None,
@@ -144,7 +144,7 @@ def _resolve_monomer_dimer_star_paths(
         DEFAULT_MONOMER_STAR_PATTERN if kind == "monomer" else DEFAULT_DIMER_STAR_PATTERN
     )
     pat = _normalize_monomer_dimer_star_pattern(pattern, default=default)
-    filename = _monomer_dimer_star_filename(active_zone_index, pat)
+    filename = _monomer_dimer_star_filename(cleft_index, pat)
     candidates = [
         aunps_dir / f"{tomogram_name}_{alignment_dir}_{filename}",
         aunps_dir / filename,
@@ -153,7 +153,7 @@ def _resolve_monomer_dimer_star_paths(
         if path.is_file():
             return path
     raise FileNotFoundError(
-        f"Required AuNP {kind} STAR not found for active zone {active_zone_index} "
+        f"Required AuNP {kind} STAR not found for synaptic cleft {cleft_index} "
         f"(pattern {pat!r}). Tried: {[str(p) for p in candidates]}"
     )
 
@@ -162,7 +162,7 @@ def _find_monomer_dimer_star_path(
     aunps_dir: Path,
     tomogram_name: str,
     alignment_dir: str,
-    active_zone_index: int,
+    cleft_index: int,
     *,
     kind: AunpKind,
     pattern: Optional[str] = None,
@@ -173,7 +173,7 @@ def _find_monomer_dimer_star_path(
             aunps_dir,
             tomogram_name,
             alignment_dir,
-            active_zone_index,
+            cleft_index,
             kind=kind,
             pattern=pattern,
         )
@@ -185,7 +185,7 @@ def _read_aunp_kind_star_frame(
     path: Path,
     *,
     kind: AunpKind,
-    active_zone_index: int,
+    cleft_index: int,
 ) -> pd.DataFrame:
     df = _read_aunp_pick_star_dataframe(path)
     if df is None or df.empty:
@@ -196,19 +196,19 @@ def _read_aunp_kind_star_frame(
     part = df[list(COORD_COLS)].copy()
     part["aunp_kind"] = kind
     part["source_star"] = path.name
-    part["active_zone_index"] = int(active_zone_index)
+    part["cleft_index"] = int(cleft_index)
     return part
 
 
 def load_monomer_dimer_aunps_for_zone(
     tomogram_path: Path,
     alignment_dir: str,
-    active_zone_index: int,
+    cleft_index: int,
     *,
     monomer_star_pattern: Optional[str] = None,
     dimer_star_pattern: Optional[str] = None,
 ) -> ZoneAunpLoadResult:
-    """Load monomer and/or dimer pick coordinates for one active zone index.
+    """Load monomer and/or dimer pick coordinates for one synaptic cleft index.
 
     Runs when at least one STAR file is present. Missing monomer or dimer files are
     skipped; ``kinds_loaded`` records which were found.
@@ -229,7 +229,7 @@ def load_monomer_dimer_aunps_for_zone(
             aunps_dir,
             tomogram_name,
             alignment_dir,
-            active_zone_index,
+            cleft_index,
             kind=kind,
             pattern=pattern,
         )
@@ -237,15 +237,15 @@ def load_monomer_dimer_aunps_for_zone(
             continue
         frames.append(
             _read_aunp_kind_star_frame(
-                path, kind=kind, active_zone_index=active_zone_index
+                path, kind=kind, cleft_index=cleft_index
             )
         )
         kinds_loaded.append(kind)
 
     if not frames:
         raise FileNotFoundError(
-            f"No monomer or dimer AuNP STAR files found for active zone "
-            f"{active_zone_index} in {aunps_dir} "
+            f"No monomer or dimer AuNP STAR files found for synaptic cleft "
+            f"{cleft_index} in {aunps_dir} "
             f"(monomer pattern {monomer_star_pattern or DEFAULT_MONOMER_STAR_PATTERN!r}, "
             f"dimer pattern {dimer_star_pattern or DEFAULT_DIMER_STAR_PATTERN!r})"
         )
@@ -280,12 +280,12 @@ def subset_aunps(
 # ============================================================================
 
 
-def load_postsynaptic_active_zone_surface(
+def load_postsynaptic_cleft_surface(
     tomogram_path: Path,
     alignment_dir: str,
     zone_name: str,
 ) -> np.ndarray:
-    az_dir = Path(tomogram_path) / alignment_dir / "STT_results" / "activezone"
+    az_dir = Path(tomogram_path) / alignment_dir / "STT_results" / "cleft"
     parts: list[np.ndarray] = []
     for suffix in ("post_outer", "post_inner"):
         path = az_dir / f"{zone_name}_{suffix}.txt"
@@ -298,18 +298,18 @@ def load_postsynaptic_active_zone_surface(
     return np.vstack(parts)
 
 
-def load_synaptic_cleft_active_zone_points(
+def load_synaptic_cleft_cleft_points(
     tomogram_path: Path,
     alignment_dir: str,
     zone_name: str,
 ) -> np.ndarray:
-    """Presynaptic + postsynaptic active-zone surface points for one zone."""
+    """Presynaptic + postsynaptic synaptic-cleft surface points for one zone."""
     pre = load_presynaptic_az_points_for_zone(tomogram_path, alignment_dir, zone_name)
-    post = load_postsynaptic_active_zone_surface(tomogram_path, alignment_dir, zone_name)
+    post = load_postsynaptic_cleft_surface(tomogram_path, alignment_dir, zone_name)
     parts = [arr for arr in (pre, post) if len(arr)]
     if not parts:
         raise FileNotFoundError(
-            f"No presynaptic or postsynaptic active-zone surface points for {zone_name}"
+            f"No presynaptic or postsynaptic synaptic-cleft surface points for {zone_name}"
         )
     return np.vstack(parts)
 
@@ -369,7 +369,7 @@ def _points_inside_hull(pts: np.ndarray, hull: ConvexHull, tol: float = 1e-6) ->
     offsets = hull.equations[:, -1]
     n_facets = normals.shape[0]
     # `pts @ normals.T` materializes a dense (n_points, n_facets) matrix. Rough/noisy
-    # active-zone surfaces can push n_facets into the thousands, and grid/MC point counts
+    # synaptic-cleft surfaces can push n_facets into the thousands, and grid/MC point counts
     # (build_window_grid_points, _hull_betweenness_volume_mc) into the hundreds of
     # thousands, so the unchunked matrix can reach tens of GB for a single zone. Cap each
     # chunk's matrix at ~64 MB regardless of hull complexity or point count.
@@ -844,7 +844,7 @@ def _isotropic_edge_factors_grid(
     WHERE THIS IS CALLED FROM
     ================================================================================
     Called once per zone from ``run_aunp_vs_az_center_ripley_for_zone`` in
-    aunp_ripley_vs_active_zone_center.py, immediately after ``build_window_grid_points``
+    aunp_ripley_vs_cleft_center.py, immediately after ``build_window_grid_points``
     builds the grid for that zone's window (also once per zone, independent of r). Its
     output replaces ``_isotropic_edge_factors_min_hits``'s output as the ``edge_factors``
     argument to ``cross_k12_3d_isotropic``.

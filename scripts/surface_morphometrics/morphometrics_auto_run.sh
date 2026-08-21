@@ -2,10 +2,10 @@
 # Resume-friendly morphometrics + STT comparison pipeline.
 #
 # Edit DATASETS below (directories under DATA_DIR / morphometrics layout), then:
-#   bash scripts/morphometrics_auto_run.sh
+#   bash scripts/surface_morphometrics/morphometrics_auto_run.sh
 #
 # Recompute everything:
-#   FORCE=1 bash scripts/morphometrics_auto_run.sh
+#   FORCE=1 bash scripts/surface_morphometrics/morphometrics_auto_run.sh
 #
 # Each DATASETS entry is:
 #   <set_dir>|<csv_path>|<morpho_subdir>
@@ -18,7 +18,7 @@
 set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 # ---------------------------------------------------------------------------
@@ -188,7 +188,7 @@ step_banner 1 "Relabel MemBrain segmentations"
 for i in "${!DATASETS[@]}"; do
   parse_dataset "${DATASETS[$i]}"
   dataset_progress "$((i + 1))" "${SET_DIR}" "relabel"
-  python scripts/relabel_membrain_segmentation.py \
+  python scripts/surface_morphometrics/relabel_membrain_segmentation.py \
     --csv "${CSV_PATH}" \
     --data-dir "${DATA_DIR}" \
     "${RERUN_ARGS[@]+"${RERUN_ARGS[@]}"}"
@@ -201,7 +201,7 @@ for i in "${!DATASETS[@]}"; do
   parse_dataset "${DATASETS[$i]}"
   dataset_progress "$((i + 1))" "${SET_DIR}" "symlink"
   mkdir -p "${MORPHO_DIR}"
-  python scripts/symlink_tomograms_and_segmentations.py \
+  python scripts/surface_morphometrics/symlink_tomograms_and_segmentations.py \
     --csv "${CSV_PATH}" \
     --data-dir "${DATA_DIR}" \
     --output-dir "${MORPHO_DIR}" \
@@ -225,7 +225,7 @@ cd "${REPO_ROOT}"
 for i in "${!DATASETS[@]}"; do
   parse_dataset "${DATASETS[$i]}"
   dataset_progress "$((i + 1))" "${SET_DIR}" "copy_plys"
-  python scripts/copy_surface_morphometrics_ply_to_tomograms.py \
+  python scripts/surface_morphometrics/copy_surface_morphometrics_ply_to_tomograms.py \
     --csv "${CSV_PATH}" \
     --data-dir "${DATA_DIR}" \
     --source-dir "${MORPHO_DIR}/results" \
@@ -238,7 +238,7 @@ step_banner 5 "Compare STT vs SM AuNP–membrane distances"
 for i in "${!DATASETS[@]}"; do
   parse_dataset "${DATASETS[$i]}"
   dataset_progress "$((i + 1))" "${SET_DIR}" "compare"
-  python scripts/compare_aunp_membrane_distance_stt_vs_morphometrics.py \
+  python scripts/surface_morphometrics/compare_aunp_membrane_distance_stt_vs_morphometrics.py \
     --csv "${CSV_PATH}" \
     --data-dir "${DATA_DIR}" \
     --output-dir "${COMPARE_DIR}" \

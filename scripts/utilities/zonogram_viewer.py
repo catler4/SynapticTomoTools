@@ -6,11 +6,11 @@ Quickly browse active zonogram images (position + main) across tomogram groups,
 tomograms, and alignment directories (best_alignment, liza_az0, liza_az1, etc.).
 
 Usage:
-    streamlit run scripts/zonogram_viewer.py
-    streamlit run scripts/zonogram_viewer.py --server.address 0.0.0.0 --server.port 8501
+    streamlit run scripts/utilities/zonogram_viewer.py
+    streamlit run scripts/utilities/zonogram_viewer.py --server.address 0.0.0.0 --server.port 8501
 
 Or with custom data path:
-    streamlit run scripts/zonogram_viewer.py -- --data-dir /path/to/data
+    streamlit run scripts/utilities/zonogram_viewer.py -- --data-dir /path/to/data
 
 In the sidebar, optional **Tomogram CSV** (columns ``tomoname``, ``set``, ``alignment_dir``) limits Prev/Next
 and the tomogram list to those rows only; each row’s ``alignment_dir`` is the only alignment scanned
@@ -36,8 +36,8 @@ AUNP_PICK_QUALITY_OPTIONS = ["", "good", "a few missing", "many missing/wrong"]
 MEMBRANE_SEG_QUALITY_OPTIONS = ["", "complete", "small issues", "significant issues"]
 REDEPOSITION_ISSUES_OPTIONS = ["", "yes", "no"]
 
-# Add project root to path
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Add project root to path (scripts/utilities/ -> repo root)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # Possible locations for active_zonograms under an alignment dir

@@ -234,11 +234,11 @@ def remove_overlapping_vesicles(vesicles: List[Dict[str, Any]]) -> List[Dict[str
     return non_overlapping
 
 
-def import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir: str) -> Dict[str, Dict[str, np.ndarray]]:
+def import_presynaptic_membranes_and_clefts(tomogram_path, alignment_dir: str) -> Dict[str, Dict[str, np.ndarray]]:
     """
-    Import presynaptic membranes and their associated active zones.
+    Import presynaptic membranes and their associated synaptic clefts.
 
-    ``active_zone_points`` combines each zone's presynaptic outer and inner surfaces
+    ``cleft_points`` combines each zone's presynaptic outer and inner surfaces
     (full active presynaptic membrane patch). Used for vesicle distance classification
     (fusing / close), fusion-point geometry, and related AZ proximity metrics.
     
@@ -246,18 +246,18 @@ def import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir: 
         tomogram_path: Path to the tomogram directory (str or Path)
         
     Returns:
-        Dictionary mapping presynaptic membrane names to their active zone points
+        Dictionary mapping presynaptic membrane names to their synaptic cleft points
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_path = Path(tomogram_path)
     aunps_dir = tomogram_path / alignment_dir / "aunps"
-    stt_results_dir = tomogram_path / alignment_dir / "STT_results" / "activezone"
+    stt_results_dir = tomogram_path / alignment_dir / "STT_results" / "cleft"
     
     if not aunps_dir.exists():
         raise FileNotFoundError(f"AuNPs directory not found: {aunps_dir}")
     
     if not stt_results_dir.exists():
-        raise FileNotFoundError(f"Active zones directory not found: {stt_results_dir}")
+        raise FileNotFoundError(f"Cleft directory not found: {stt_results_dir}")
     
     # Find all presynaptic membrane files in aunps directory
     pre_membrane_files = list(aunps_dir.glob("presynapticmembranes_*.txt"))
@@ -266,26 +266,26 @@ def import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir: 
         print("No presynaptic membrane files found")
         return {}
     
-    membrane_active_zone_pairs = {}
+    membrane_cleft_pairs = {}
     
     for membrane_file in pre_membrane_files:
         try:
             # Load presynaptic membrane points
             membrane_points = np.loadtxt(membrane_file, delimiter=None)
             
-            # Find corresponding active zone files
+            # Find corresponding synaptic cleft files
             membrane_name = membrane_file.stem  # e.g., "presynapticmembranes_1"
             membrane_number = membrane_name.split('_')[-1]  # e.g., "1"
             
             # Whole active presynaptic membrane per zone (outer + inner), not inner alone.
             zone_names: set[str] = set()
-            for path in stt_results_dir.glob(f"active_zone_pre{membrane_number}_post*_pre_outer.txt"):
+            for path in stt_results_dir.glob(f"cleft_pre{membrane_number}_post*_pre_outer.txt"):
                 zone_names.add(path.name.replace("_pre_outer.txt", ""))
-            for path in stt_results_dir.glob(f"active_zone_pre{membrane_number}_post*_pre_inner.txt"):
+            for path in stt_results_dir.glob(f"cleft_pre{membrane_number}_post*_pre_inner.txt"):
                 zone_names.add(path.name.replace("_pre_inner.txt", ""))
 
             if zone_names:
-                all_active_zone_points = []
+                all_cleft_points = []
                 for zone_name in sorted(zone_names):
                     zone_parts: list[np.ndarray] = []
                     pre_outer_file = stt_results_dir / f"{zone_name}_pre_outer.txt"
@@ -296,139 +296,139 @@ def import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir: 
                         zone_parts.append(np.atleast_2d(np.loadtxt(pre_inner_file, delimiter=None)))
                     if zone_parts:
                         combined_zone_points = np.vstack(zone_parts)
-                        all_active_zone_points.append(combined_zone_points)
+                        all_cleft_points.append(combined_zone_points)
 
-                if all_active_zone_points:
-                    combined_active_zone_points = np.vstack(all_active_zone_points)
+                if all_cleft_points:
+                    combined_cleft_points = np.vstack(all_cleft_points)
                 else:
-                    combined_active_zone_points = np.array([])
+                    combined_cleft_points = np.array([])
 
-                membrane_active_zone_pairs[membrane_name] = {
+                membrane_cleft_pairs[membrane_name] = {
                     'membrane_points': membrane_points,
-                    'active_zone_points': combined_active_zone_points,
-                    'individual_active_zones': all_active_zone_points,
+                    'cleft_points': combined_cleft_points,
+                    'individual_clefts': all_cleft_points,
                 }
-                # Loaded membrane with active zone points
+                # Loaded membrane with synaptic cleft points
             else:
-                # Warning: No active zone files found
-                # Use empty active zone if none found
-                membrane_active_zone_pairs[membrane_name] = {
+                # Warning: No synaptic cleft files found
+                # Use empty synaptic cleft if none found
+                membrane_cleft_pairs[membrane_name] = {
                     'membrane_points': membrane_points,
-                    'active_zone_points': np.array([]),
-                    'individual_active_zones': []
+                    'cleft_points': np.array([]),
+                    'individual_clefts': []
                 }
                 
         except Exception as e:
             print(f"Error loading {membrane_file}: {e}")
     
-    return membrane_active_zone_pairs
+    return membrane_cleft_pairs
 
 
-def find_closest_active_zone(vesicle_center: np.ndarray, 
-                            membrane_active_zone_pairs: Dict[str, Dict[str, np.ndarray]]) -> Tuple[str, np.ndarray]:
+def find_closest_cleft(vesicle_center: np.ndarray, 
+                            membrane_cleft_pairs: Dict[str, Dict[str, np.ndarray]]) -> Tuple[str, np.ndarray]:
     """
-    Find the active zone closest to a vesicle across all filtered active zones.
-    Only considers active zones that passed the filtering step (those with AuNPs).
+    Find the synaptic cleft closest to a vesicle across all filtered synaptic clefts.
+    Only considers synaptic clefts that passed the filtering step (those with AuNPs).
     
     Args:
         vesicle_center: (x, y, z) coordinates of vesicle center
-        membrane_active_zone_pairs: Dictionary mapping membrane names to their data
+        membrane_cleft_pairs: Dictionary mapping membrane names to their data
         
     Returns:
-        Tuple of (membrane_name, active_zone_points) for the closest active zone
+        Tuple of (membrane_name, cleft_points) for the closest synaptic cleft
     """
-    if not membrane_active_zone_pairs:
+    if not membrane_cleft_pairs:
         return "unknown", np.array([])
     
     closest_membrane = None
-    closest_active_zone_points = np.array([])
+    closest_cleft_points = np.array([])
     min_distance = float('inf')
     
-    # Check all membranes and their active zones
-    for membrane_name, data in membrane_active_zone_pairs.items():
-        active_zone_points = data['active_zone_points']
+    # Check all membranes and their synaptic clefts
+    for membrane_name, data in membrane_cleft_pairs.items():
+        cleft_points = data['cleft_points']
         
-        # Only consider membranes that have active zones (filtered zones with AuNPs)
-        if len(active_zone_points) == 0:
+        # Only consider membranes that have synaptic clefts (filtered zones with AuNPs)
+        if len(cleft_points) == 0:
             continue
         
-        # Calculate distance from vesicle center to active zone points
-        distances = np.linalg.norm(active_zone_points - vesicle_center, axis=1)
-        min_active_zone_distance = np.min(distances)
+        # Calculate distance from vesicle center to synaptic cleft points
+        distances = np.linalg.norm(cleft_points - vesicle_center, axis=1)
+        min_cleft_distance = np.min(distances)
         
-        # Find the closest active zone across all membranes
-        if min_active_zone_distance < min_distance:
-            min_distance = min_active_zone_distance
+        # Find the closest synaptic cleft across all membranes
+        if min_cleft_distance < min_distance:
+            min_distance = min_cleft_distance
             closest_membrane = membrane_name
-            closest_active_zone_points = active_zone_points
+            closest_cleft_points = cleft_points
     
     if closest_membrane is None:
         return "unknown", np.array([])
     
-    return closest_membrane, closest_active_zone_points
+    return closest_membrane, closest_cleft_points
 
 
-def calculate_vesicle_distance_to_closest_active_zone(vesicle_data: Tuple[int, Dict[str, Any]], 
-                                                    membrane_active_zone_pairs: Dict[str, Dict[str, np.ndarray]]) -> Tuple[int, float, str]:
+def calculate_vesicle_distance_to_closest_cleft(vesicle_data: Tuple[int, Dict[str, Any]], 
+                                                    membrane_cleft_pairs: Dict[str, Dict[str, np.ndarray]]) -> Tuple[int, float, str]:
     """
-    Calculate distance for a single vesicle to its closest active zone (for parallel processing).
+    Calculate distance for a single vesicle to its closest synaptic cleft (for parallel processing).
     
     Args:
         vesicle_data: Tuple of (index, vesicle_dict)
-        membrane_active_zone_pairs: Dictionary mapping membrane names to their data
+        membrane_cleft_pairs: Dictionary mapping membrane names to their data
         
     Returns:
         Tuple of (index, distance, membrane_name)
     """
     index, vesicle = vesicle_data
     
-    if not membrane_active_zone_pairs:
+    if not membrane_cleft_pairs:
         return index, float('nan'), "unknown"
     
     vesicle_center = np.array(vesicle['center'])
     
-    # Find closest active zone across all filtered active zones (only those with AuNPs)
-    membrane_name, active_zone_points = find_closest_active_zone(vesicle_center, membrane_active_zone_pairs)
+    # Find closest synaptic cleft across all filtered synaptic clefts (only those with AuNPs)
+    membrane_name, cleft_points = find_closest_cleft(vesicle_center, membrane_cleft_pairs)
     
-    if len(active_zone_points) == 0:
+    if len(cleft_points) == 0:
         return index, float('nan'), membrane_name
     
     # Get all vesicle segmentation points
     vesicle_points = np.array(vesicle['coordinates'])
     
     # Build KDTree for efficient nearest neighbor search
-    tree = KDTree(active_zone_points)
+    tree = KDTree(cleft_points)
     
-    # Calculate distances from all vesicle points to active zone
+    # Calculate distances from all vesicle points to synaptic cleft
     distances, _ = tree.query(vesicle_points)
     
-    # Return the minimum distance (closest point on vesicle to active zone)
+    # Return the minimum distance (closest point on vesicle to synaptic cleft)
     return index, float(np.min(distances)), membrane_name
 
 
-def calculate_vesicle_distances_to_closest_active_zones(vesicles: List[Dict[str, Any]], 
-                                                       membrane_active_zone_pairs: Dict[str, Dict[str, np.ndarray]],
+def calculate_vesicle_distances_to_closest_clefts(vesicles: List[Dict[str, Any]], 
+                                                       membrane_cleft_pairs: Dict[str, Dict[str, np.ndarray]],
                                                        n_processes: Optional[int] = None) -> Tuple[List[float], List[str]]:
     """
-    Calculate distances for all vesicles to their closest active zones using parallel processing.
+    Calculate distances for all vesicles to their closest synaptic clefts using parallel processing.
     
     Args:
         vesicles: List of vesicle dictionaries
-        membrane_active_zone_pairs: Dictionary mapping membrane names to their data
+        membrane_cleft_pairs: Dictionary mapping membrane names to their data
         n_processes: Number of processes to use (default: CPU count)
         
     Returns:
         Tuple of (distances, membrane_names) corresponding to each vesicle
     """
-    if not membrane_active_zone_pairs:
+    if not membrane_cleft_pairs:
         return [float('nan')] * len(vesicles), ["unknown"] * len(vesicles)
     
     if n_processes is None:
         n_processes = mp.cpu_count()
     
     # Create partial function with membrane data
-    calc_func = partial(calculate_vesicle_distance_to_closest_active_zone, 
-                       membrane_active_zone_pairs=membrane_active_zone_pairs)
+    calc_func = partial(calculate_vesicle_distance_to_closest_cleft, 
+                       membrane_cleft_pairs=membrane_cleft_pairs)
     
     # Prepare data for parallel processing
     vesicle_data = [(i, vesicle) for i, vesicle in enumerate(vesicles)]
@@ -438,7 +438,7 @@ def calculate_vesicle_distances_to_closest_active_zones(vesicles: List[Dict[str,
         results = list(tqdm(
             pool.imap(calc_func, vesicle_data),
             total=len(vesicle_data),
-            desc=f"Calculating vesicle distances to closest active zones (using {n_processes} processes)"
+            desc=f"Calculating vesicle distances to closest synaptic clefts (using {n_processes} processes)"
         ))
     
     # Sort results by index and extract distances and membrane names
@@ -546,15 +546,15 @@ def detect_vesicles(
         # Remove overlapping vesicles
         vesicles = remove_overlapping_vesicles(vesicles)
         
-        # Import presynaptic membranes and their associated active zones
-        # Note: Active zones are already filtered by the active zone analysis step
+        # Import presynaptic membranes and their associated synaptic clefts
+        # Note: Synaptic clefts are already filtered by the synaptic cleft analysis step
         # to only include zones with AuNPs, so only relevant zones will be loaded
-        membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir=alignment_dir)
+        membrane_cleft_pairs = import_presynaptic_membranes_and_clefts(tomogram_path, alignment_dir=alignment_dir)
         
-        # Calculate distances from vesicle segmentation points to closest active zones using parallel processing
-        if membrane_active_zone_pairs:
-            # Use parallel processing for distance calculations to closest active zones
-            distances_to_az, membrane_names = calculate_vesicle_distances_to_closest_active_zones(vesicles, membrane_active_zone_pairs)
+        # Calculate distances from vesicle segmentation points to closest synaptic clefts using parallel processing
+        if membrane_cleft_pairs:
+            # Use parallel processing for distance calculations to closest synaptic clefts
+            distances_to_az, membrane_names = calculate_vesicle_distances_to_closest_clefts(vesicles, membrane_cleft_pairs)
             
             # Assign distances and membrane names to vesicles
             for i, vesicle in enumerate(vesicles):
@@ -603,7 +603,7 @@ def detect_vesicles(
             # Extract sphericity values (volume-based only)
             sphericity_volume = [s['sphericity_volume'] for s in sphericities]
             
-            # Count vesicles within threshold of active zone using the same logic as save_nearby_vesicles
+            # Count vesicles within threshold of synaptic cleft using the same logic as save_nearby_vesicles
             nearby_vesicles = [v for v in vesicles if v.get('vesicle_distance_class') in ('fusing', 'close')]
             nearby_vesicle_count = len(nearby_vesicles)
             
@@ -730,7 +730,7 @@ def detect_vesicles(
 
 def measure_distances_to_az(tomogram_path, alignment_dir: str) -> Dict[str, Any]:
     """
-    Measure distances from vesicles to active zone.
+    Measure distances from vesicles to synaptic cleft.
     This function now uses pre-calculated distances from detect_vesicles.
     
     Args:

@@ -6,6 +6,7 @@ import threading
 import os
 import sys
 import socket
+import shlex
 import webbrowser
 import pandas as pd
 from pathlib import Path
@@ -13,7 +14,7 @@ import shutil
 from datetime import datetime
 
 # Get the repository root directory (parent of scripts/)
-REPO_ROOT = Path(__file__).parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
 FIG_HOME = REPO_ROOT / "figures" / "synaptictomotools_fig_gui_home-01.png"
 FIG_AZ = REPO_ROOT / "figures" / "synaptictomotools_fig_gui_AZ-01.png"
 FIG_VESICLES = REPO_ROOT / "figures" / "synaptictomotools_fig_gui_vesicles-01.png"
@@ -30,7 +31,12 @@ class ToolTip:
     def show_tip(self, event=None):
         if self.tipwindow or not self.text:
             return
-        x, y, cx, cy = self.widget.bbox("insert") if hasattr(self.widget, 'bbox') else (0,0,0,0)
+        try:
+            x, y, cx, cy = self.widget.bbox("insert")
+        except Exception:
+            x, y, cx, cy = (0, 0, 0, 0)
+        if x is None:
+            x, y, cx, cy = (0, 0, 0, 0)
         x = x + self.widget.winfo_rootx() + 25
         y = y + self.widget.winfo_rooty() + 20
         self.tipwindow = tw = tk.Toplevel(self.widget)
@@ -62,7 +68,7 @@ class AnalysisPipelineGUI(tk.Tk):
         
         # Initialize parameter variables with defaults
         self.use_custom_params = tk.BooleanVar(value=False)
-        # Active zone parameters
+        # Cleft parameters
         self.az_distance_min = tk.StringVar(value="10.0")
         self.az_distance_max = tk.StringVar(value="40.0")
         # Vesicle analysis parameters
@@ -246,8 +252,8 @@ class AnalysisPipelineGUI(tk.Tk):
         self.custom_params_frame = ttk.LabelFrame(frame, text="Custom Parameters", padding=10)
         self.custom_params_frame.grid(row=8, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5, padx=0)
         
-        # Active zone parameters
-        az_frame = ttk.LabelFrame(self.custom_params_frame, text="Active Zone Parameters", padding=5)
+        # Cleft parameters
+        az_frame = ttk.LabelFrame(self.custom_params_frame, text="Cleft Parameters", padding=5)
         az_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         ttk.Label(az_frame, text="Distance range (nm):").grid(row=0, column=0, sticky=tk.W, padx=5)
         az_min_entry = ttk.Entry(az_frame, textvariable=self.az_distance_min, width=8)
@@ -303,7 +309,7 @@ class AnalysisPipelineGUI(tk.Tk):
         ).grid(row=6, column=0, columnspan=3, padx=5, sticky=tk.W)
         fusion_aunp_cb = ttk.Checkbutton(
             aunp_frame,
-            text="Run fusion-point vs monomer/dimer AuNP analyses (Ripley L₁₂ + distances)",
+            text="Run fusion-point vs monomer/dimer AuNP analyses (biv Ripley K + distances)",
             variable=self.run_fusion_point_aunp_analyses,
             command=self._toggle_monomer_dimer_star_entries,
         )
@@ -331,13 +337,13 @@ class AnalysisPipelineGUI(tk.Tk):
         ).grid(row=10, column=0, columnspan=3, padx=5, sticky=tk.W)
         aunp_az_center_cb = ttk.Checkbutton(
             aunp_frame,
-            text="Run AuNP vs active zone center Ripley L₁₂",
+            text="Run AuNP vs synaptic cleft center biv Ripley K",
             variable=self.run_aunp_vs_az_center_ripley,
         )
         aunp_az_center_cb.grid(row=11, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(4, 0))
         monomer_dimer_cb = ttk.Checkbutton(
             aunp_frame,
-            text="Run monomer vs dimer AuNP Ripley L₁₂ (label-perm + segregation)",
+            text="Run monomer vs dimer AuNP biv Ripley K (label-perm + greedy segregation)",
             variable=self.run_aunp_monomer_dimer_ripley,
             command=self._toggle_monomer_dimer_star_entries,
         )
@@ -424,39 +430,39 @@ class AnalysisPipelineGUI(tk.Tk):
         ToolTip(dbscan_min_samples_entry, "DBSCAN min_samples core-point threshold (default 1).")
         ToolTip(synaptic_cutoff_entry, "AuNP is labeled synaptic if distance to postsynaptic active outer membrane is <= this cutoff in nm (default 30.0).")
         ToolTip(min_cluster_size_entry, "Post-DBSCAN minimum retained cluster size; smaller clusters are reassigned to noise (default 4).")
-        ToolTip(fusion_point_threshold_entry, "Radius in nm for active-zone points contributing to per-vesicle fusion point estimation (default 20.0).")
-        ToolTip(fusing_perimeter_threshold_entry, "Vesicle is fusing if minimum distance from original vesicle segmentation points to presynaptic active-zone points is <= this threshold (default 1.0 nm).")
+        ToolTip(fusion_point_threshold_entry, "Radius in nm for synaptic-cleft points contributing to per-vesicle fusion point estimation (default 20.0).")
+        ToolTip(fusing_perimeter_threshold_entry, "Vesicle is fusing if minimum distance from original vesicle segmentation points to presynaptic synaptic-cleft points is <= this threshold (default 1.0 nm).")
         ToolTip(
             aunp_pick_star_pattern_entry,
-            "Filename pattern for per-active-zone AuNP pick STAR files under {alignment}/aunps/. "
-            "Use exactly one * for the active zone number (e.g. aunps_other_name_*_etc.star). "
+            "Filename pattern for per-synaptic-cleft AuNP pick STAR files under {alignment}/aunps/. "
+            "Use exactly one * for the synaptic cleft number (e.g. aunps_other_name_*_etc.star). "
             "Leave empty for the default aunp_tm_BP_active_zone_*_manual_refined.star.",
         )
         ToolTip(
             fusion_aunp_cb,
-            "3D fusion-site vs monomer/dimer AuNP distance tables and bivariate Ripley L₁₂. "
+            "3D fusion-site vs monomer/dimer AuNP distance tables and bivariate Ripley K. "
             "Disable for datasets without separate monomer/dimer STAR picks.",
         )
         ToolTip(
             self._monomer_star_entry,
-            "Filename pattern for per-active-zone monomer AuNP STAR files under {alignment}/aunps/. "
-            "Use one * for the active zone index. "
+            "Filename pattern for per-synaptic-cleft monomer AuNP STAR files under {alignment}/aunps/. "
+            "Use one * for the synaptic cleft index. "
             "Leave empty for aunp_tm_BP_active_zone_*_manual_refined_monomer.star.",
         )
         ToolTip(
             self._dimer_star_entry,
-            "Filename pattern for per-active-zone dimer AuNP STAR files under {alignment}/aunps/. "
-            "Use one * for the active zone index. "
+            "Filename pattern for per-synaptic-cleft dimer AuNP STAR files under {alignment}/aunps/. "
+            "Use one * for the synaptic cleft index. "
             "Leave empty for aunp_tm_BP_active_zone_*_manual_refined_dimer.star.",
         )
         ToolTip(
             aunp_az_center_cb,
-            "3D bivariate Ripley L₁₂ of AuNP positions relative to each active zone center "
+            "3D bivariate Ripley K of AuNP positions relative to each synaptic cleft center "
             "(uses existing pick STAR files; no null model).",
         )
         ToolTip(
             monomer_dimer_cb,
-            "3D bivariate Ripley L₁₂ of monomer vs dimer AuNP positions with label-permutation "
+            "3D bivariate Ripley K of monomer vs dimer AuNP positions with label-permutation "
             "and greedy-segregation controls (same replicate count). Uses the monomer/dimer "
             "STAR patterns above. MAD summaries are pooled into results/aunps/.",
         )
@@ -536,9 +542,9 @@ class AnalysisPipelineGUI(tk.Tk):
         self.tabs = {"Home": home_tab}
         self._build_home_tab_content(home_tab)
         
-        # FindingAMPA Processing tab as the second tab
+        # Pre-Processing tab (FindingAMPA) as the second tab
         findingampa_tab = ttk.Frame(notebook)
-        notebook.add(findingampa_tab, text="FindingAMPA Processing")
+        notebook.add(findingampa_tab, text="Pre-Processing")
         self.tabs["FindingAMPA Processing"] = findingampa_tab
         # Initialize DDW flag variables before use
         self.ddw_flag_var = tk.StringVar(value='k3')
@@ -579,8 +585,8 @@ class AnalysisPipelineGUI(tk.Tk):
             "annotate-membranes": "Segment presynaptic and postsynaptic membranes using MemBrain-seg. This runs on both weighted backprojection and DDW denoised tomograms.",
             "match-aunps": "Run template-matching to identify AuNPs within tomogram.",
             "new-annotate-aunps": "Annotate membranes using the Blender plug-in. This step allows manual cleaning of membrane segmentations and assignment of pre/postsynaptic membranes and presynaptic vesicles.",
-            "render-active-zonograms": "Generate active zonogram visualizations. This creates 2D projections showing active zone regions with AuNP distributions.",
-            "select-aunp-picks": "Select and refine AuNP picks for analysis. This step runs an automated selection of AuNPs confined to each active zone for further processing."
+            "render-active-zonograms": "Generate active zonogram visualizations. This creates 2D projections showing synaptic cleft regions with AuNP distributions.",
+            "select-aunp-picks": "Select and refine AuNP picks for analysis. This step runs an automated selection of AuNPs confined to each synaptic cleft for further processing."
         }
         
         self.findingampa_check_vars = []
@@ -618,24 +624,29 @@ class AnalysisPipelineGUI(tk.Tk):
         run_checked_btn.pack(anchor=tk.W, pady=8, padx=20)
         # Add tooltip for Run Checked button
         ToolTip(run_checked_btn, "Run all checked FindingAmPA processing steps in order from top to bottom. This executes the selected workflow steps sequentially, waiting for each command to complete before starting the next one.")
-        # Analysis tabs
-        for step in ["Active Zone", "Vesicles", "AuNPs", "Visualization", "Full Pipeline"]:
+        self._add_tab_action_buttons(
+            findingampa_tab,
+            lambda: self._print_tab_command("findingampa"),
+        )
+        # Analysis tabs (order matches Auto-Pipeline: AZ → Vesicles → AuNPs → Pose → Visualization)
+        for step in ["Cleft", "Vesicles", "AuNPs"]:
             tab = ttk.Frame(notebook)
             notebook.add(tab, text=step)
             self.tabs[step] = tab
             self._build_tab_content(tab, step)
-        
-        # Pose Prediction tab (dedicated tab)
+
+        # Pose Prediction tab (dedicated tab; also available as Auto-Pipeline checkbox)
         ampa_poses_tab = ttk.Frame(notebook)
         notebook.add(ampa_poses_tab, text="Pose Prediction")
         self.tabs["Pose Prediction"] = ampa_poses_tab
         self._build_ampa_poses_tab_content(ampa_poses_tab)
-        
-        # Post-Analysis Tools tab (moved to the far right)
-        post_analysis_tab = ttk.Frame(notebook)
-        notebook.add(post_analysis_tab, text="Post-Analysis Tools")
-        self.tabs["Post-Analysis Tools"] = post_analysis_tab
-        self._build_post_analysis_tab_content(post_analysis_tab)
+
+        for step in ["Visualization", "Full Pipeline"]:
+            tab = ttk.Frame(notebook)
+            display_name = "Auto-Pipeline" if step == "Full Pipeline" else step
+            notebook.add(tab, text=display_name)
+            self.tabs[step] = tab
+            self._build_tab_content(tab, step)
         
         # Log output area with resizable splitter
         self.log_frame = ttk.Frame(self.paned_window)
@@ -846,35 +857,54 @@ Do you want to continue?"""
         img_frame = ttk.Frame(content_frame)
         img_frame.pack(side=tk.RIGHT, anchor=tk.N, padx=10, pady=10)
         # Add figure to the right, larger size
-        if step == "Active Zone":
+        if step == "Cleft":
             img = self._load_and_display_image(FIG_AZ, img_frame, max_width=525, max_height=240)
         elif step == "Vesicles":
             img = self._load_and_display_image(FIG_VESICLES, img_frame, max_width=525, max_height=240)
-        else:
+        elif step == "AuNPs":
             img = self._load_and_display_image(FIG_AUNPS, img_frame, max_width=525, max_height=240)
+        else:
+            # Visualization and Auto-Pipeline use the same figure as Pose Prediction
+            img = self._load_and_display_image(FIG_POSES, img_frame, max_width=525, max_height=240)
         if img:
             img_label = ttk.Label(img_frame, image=img)
             img_label.pack()
             self._img_refs.append(img)
         if step == "Full Pipeline":
-            ttk.Label(controls_frame, text="Active Zone -> Vesicles -> AuNPs -> Visualization").pack(anchor=tk.W, pady=(0, 10))
+            ttk.Label(
+                controls_frame,
+                text="Cleft -> Vesicles -> AuNPs -> Pose Prediction -> Visualization",
+            ).pack(anchor=tk.W, pady=(0, 10))
             ttk.Label(controls_frame, text="Steps to run:").pack(anchor=tk.W, pady=(0, 2))
-            # (cli_step_name, display_label)
+            # (cli_step_name, display_label); Pose Prediction is GUI-only (not a CLI --steps value)
             pipeline_step_defs = [
-                ("activezone", "Active Zone"),
+                ("cleft", "Cleft"),
                 ("vesicles", "Vesicles"),
                 ("aunps", "AuNPs"),
+                ("pose_prediction", "Pose Prediction"),
                 ("visualizations", "Visualization"),
             ]
             tab._pipeline_step_vars = {}
             for cli_name, label in pipeline_step_defs:
-                var = tk.BooleanVar(value=True)
+                var = tk.BooleanVar(value=False)
                 cb = ttk.Checkbutton(controls_frame, text=label, variable=var)
                 cb.pack(anchor=tk.W)
-                ToolTip(cb, f"Include the {label} step when running the full pipeline. Uncheck to skip it (e.g. run all except Visualization).")
+                if cli_name == "pose_prediction":
+                    ToolTip(
+                        cb,
+                        "Run Pose Prediction after AuNPs (and before Visualization) using the "
+                        "current settings on the Pose Prediction tab.",
+                    )
+                else:
+                    ToolTip(
+                        cb,
+                        f"Include the {label} step when running Auto-Pipeline. "
+                        "Unchecked steps are skipped.",
+                    )
                 tab._pipeline_step_vars[cli_name] = var
             ttk.Label(controls_frame, text="").pack(anchor=tk.W, pady=(0, 4))
-        run_btn = ttk.Button(controls_frame, text=f"Run {step}", command=lambda s=step: self._run_analysis(s, tab))
+        run_label = "Auto-Pipeline" if step == "Full Pipeline" else step
+        run_btn = ttk.Button(controls_frame, text=f"Run {run_label}", command=lambda s=step: self._run_analysis(s, tab))
         run_btn.pack(anchor=tk.W, pady=5)
         # Add checkboxes for rerun, check-files
         rerun_var = tk.BooleanVar()
@@ -897,10 +927,211 @@ Do you want to continue?"""
             view_btn.pack(anchor=tk.W)
         if step == "Full Pipeline":
             run_btn.config(command=lambda: self._run_analysis(step, tab))
-        # Add Stop button in bottom right of tab (not Home)
+        # Print command + Stop in bottom right of tab (not Home)
         if step != "Home":
-            stop_btn = ttk.Button(tab, text="Stop", command=self._stop_current_process)
-            stop_btn.place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-10)
+            self._add_tab_action_buttons(
+                tab,
+                lambda s=step, t=tab: self._print_tab_command("stt", step=s, tab=t),
+            )
+
+    def _add_tab_action_buttons(self, tab, print_callback):
+        """Place Print command (left of Stop) and Stop in the bottom-right of a tab."""
+        btn_frame = ttk.Frame(tab)
+        btn_frame.place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-10)
+        print_btn = ttk.Button(btn_frame, text="Print command", command=print_callback)
+        print_btn.pack(side=tk.LEFT, padx=(0, 6))
+        ToolTip(
+            print_btn,
+            "Print the terminal command(s) that Run would execute, without running them. "
+            "Copy from the log to run on a cluster or outside the GUI.",
+        )
+        stop_btn = ttk.Button(btn_frame, text="Stop", command=self._stop_current_process)
+        stop_btn.pack(side=tk.LEFT)
+
+    def _shell_join(self, cli):
+        """Return a shell-safe command string for copy/paste."""
+        return " ".join(shlex.quote(str(x)) for x in cli)
+
+    def _print_command_lines(self, title, lines):
+        """Write printable command block(s) to the log."""
+        self._log(f"\n{'=' * 60}\n")
+        self._log(f"{title}\n")
+        self._log(f"{'=' * 60}\n")
+        if not lines:
+            self._log("(no commands to print)\n")
+        else:
+            for line in lines:
+                self._log(f"{line}\n")
+        self._log(f"{'=' * 60}\n\n")
+
+    def _print_tab_command(self, kind, step=None, tab=None):
+        """Print the command(s) the tab's Run button would execute."""
+        if kind == "findingampa":
+            self._print_findingampa_commands()
+        elif kind == "poses":
+            self._print_ampa_poses_commands()
+        elif kind == "stt":
+            if step == "Full Pipeline":
+                self._print_auto_pipeline_commands(tab)
+            else:
+                self._print_stt_step_command(step, tab)
+        else:
+            self._log(f"Unknown print-command kind: {kind}\n")
+
+    def _processing_mode_print_notes(self):
+        """Notes for printed commands when GUI would filter tomograms via a temp CSV."""
+        notes = []
+        processing_mode = self.processing_mode.get()
+        selected_tomogram = self.start_tomogram.get()
+        if processing_mode == "Single tomogram" and selected_tomogram:
+            notes.append(
+                f"# Note: GUI processing mode is Single tomogram ({selected_tomogram}). "
+                "Printed command uses the full Home CSV; for an exact match, subset the CSV yourself."
+            )
+        elif processing_mode == "Start from" and selected_tomogram:
+            notes.append(
+                f"# Note: GUI processing mode is Start from ({selected_tomogram}). "
+                "Printed command uses the full Home CSV; for an exact match, subset the CSV yourself."
+            )
+        if self.root_dir.get():
+            notes.append(f"# Suggested env: TOMO_ROOT_BASE={shlex.quote(self.root_dir.get())}")
+        notes.append(f"# Suggested cwd: {shlex.quote(str(REPO_ROOT))}")
+        return notes
+
+    def _print_stt_step_command(self, step, tab):
+        step_map = {
+            "Cleft": ["cleft"],
+            "Vesicles": ["vesicles"],
+            "AuNPs": ["aunps"],
+            "Visualization": ["visualizations"],
+        }
+        steps = step_map.get(step)
+        if not steps:
+            self._log(f"Cannot print command for step: {step}\n")
+            return
+        cli = self._compose_stt_pipeline_cli(tab, steps, for_print=True)
+        lines = self._processing_mode_print_notes()
+        lines.append(self._shell_join(cli))
+        self._print_command_lines(f"Print command — {step}", lines)
+
+    def _print_auto_pipeline_commands(self, tab):
+        step_vars = getattr(tab, "_pipeline_step_vars", None) or {}
+        stt_order = ["cleft", "vesicles", "aunps", "visualizations"]
+        selected_stt = [name for name in stt_order if step_vars.get(name) and step_vars[name].get()]
+        run_pose = bool(step_vars.get("pose_prediction") and step_vars["pose_prediction"].get())
+
+        if not selected_stt and not run_pose:
+            messagebox.showwarning(
+                "No steps selected",
+                "Please select at least one pipeline step to print.",
+            )
+            return
+
+        lines = self._processing_mode_print_notes()
+        lines.append("# Auto-Pipeline order: Cleft -> Vesicles -> AuNPs -> Pose Prediction -> Visualization")
+
+        if selected_stt and not run_pose:
+            cli = self._compose_stt_pipeline_cli(tab, selected_stt, for_print=True)
+            lines.append(self._shell_join(cli))
+            self._print_command_lines("Print command — Auto-Pipeline", lines)
+            return
+
+        if run_pose and not selected_stt:
+            self._print_ampa_poses_commands(extra_header_lines=lines)
+            return
+
+        pre_steps = [s for s in selected_stt if s != "visualizations"]
+        want_viz = "visualizations" in selected_stt
+        if pre_steps:
+            cli = self._compose_stt_pipeline_cli(tab, pre_steps, for_print=True)
+            lines.append("# --- STT steps before Pose Prediction ---")
+            lines.append(self._shell_join(cli))
+        lines.append("# --- Pose Prediction (see commands below; uses Pose Prediction tab settings) ---")
+        self._print_command_lines("Print command — Auto-Pipeline (STT portion)", lines)
+        self._print_ampa_poses_commands()
+        if want_viz:
+            viz_lines = ["# --- Visualization (after Pose Prediction) ---"]
+            viz_lines.extend(self._processing_mode_print_notes())
+            cli = self._compose_stt_pipeline_cli(tab, ["visualizations"], for_print=True)
+            viz_lines.append(self._shell_join(cli))
+            self._print_command_lines("Print command — Auto-Pipeline (Visualization)", viz_lines)
+
+    def _print_findingampa_commands(self):
+        checked = [
+            (label, command)
+            for (label, command), var in zip(self.findingampa_commands, self.findingampa_check_vars)
+            if var.get()
+        ]
+        if not checked:
+            messagebox.showwarning(
+                "No steps selected",
+                "Check one or more Pre-Processing steps (same as Run Checked), then Print command.",
+            )
+            return
+
+        lines = []
+        if self.findingampa_single_mode.get() and self.findingampa_single_dir.get():
+            cwd = self.findingampa_single_dir.get()
+            lines.append("# Mode: single tomogram directory")
+            lines.append(f"# cwd: {shlex.quote(cwd)}")
+            for label, command in checked:
+                command_parts = command.split()
+                base_command = command_parts[0]
+                command_args = command_parts[1:] if len(command_parts) > 1 else []
+                extra_args = []
+                if base_command == "ddw":
+                    extra_args.append(self.ddw_flag_var.get())
+                cli = ["finding_ampa", base_command] + command_args + extra_args
+                lines.append(f"# {label}")
+                lines.append(f"(cd {shlex.quote(cwd)} && {self._shell_join(cli)})")
+        else:
+            csv_path = self.csv_path.get()
+            root_dir = self.root_dir.get()
+            if not csv_path or not root_dir:
+                messagebox.showerror(
+                    "Error",
+                    "CSV and root directory must be set to print FindingAMPA commands for all tomograms.",
+                )
+                return
+            lines.append("# Mode: all tomograms from CSV (one command per alignment directory)")
+            import csv as _csv
+            for label, command in checked:
+                command_parts = command.split()
+                base_command = command_parts[0]
+                command_args = command_parts[1:] if len(command_parts) > 1 else []
+                extra_args = []
+                if base_command == "ddw":
+                    extra_args.append(self.ddw_flag_var.get())
+                cli = ["finding_ampa", base_command] + command_args + extra_args
+                lines.append(f"# --- {label} ---")
+                with open(csv_path, newline='') as f:
+                    reader = _csv.DictReader(f)
+                    for row in reader:
+                        set_name = row.get('set')
+                        tomo_name = row.get('tomogram') or row.get('tomoname')
+                        row_align = (row.get('alignment_dir') or '').strip()
+                        if not set_name or not tomo_name:
+                            continue
+                        if not row_align or row_align.lower() == 'nan':
+                            continue
+                        align_work_dir = os.path.join(root_dir, set_name, "TOP_TOMOS", tomo_name, row_align)
+                        lines.append(
+                            f"(cd {shlex.quote(align_work_dir)} && {self._shell_join(cli)})"
+                        )
+        self._print_command_lines("Print command — Pre-Processing (Run Checked)", lines)
+
+    def _print_ampa_poses_commands(self, extra_header_lines=None):
+        """Print Pose Prediction CLI command(s) using current Pose Prediction tab settings."""
+        methods = self._get_selected_pose_methods()
+        if not methods:
+            messagebox.showerror("Error", "Select at least one Analysis Method (All poses, Greedy, and/or ILP).")
+            return
+        if extra_header_lines:
+            self._print_command_lines(
+                "Print command — Auto-Pipeline (Pose Prediction notes)",
+                extra_header_lines,
+            )
+        self._run_ampa_poses_analysis_with_method(methods, print_only=True)
 
     def _browse_csv(self):
         path = filedialog.askopenfilename(title="Select tomogram CSV", filetypes=[("CSV files", "*.csv")])
@@ -911,11 +1142,6 @@ Do you want to continue?"""
         path = filedialog.askdirectory(title="Select root directory for tomogram sets", initialdir=".")
         if path:
             self.root_dir.set(path)
-    
-    def _browse_cluster_csv(self):
-        path = filedialog.askopenfilename(title="Select cluster selection CSV", filetypes=[("CSV files", "*.csv")])
-        if path:
-            self.cluster_csv_path.set(path)
     
     def _browse_ampa_pdb_file(self):
         """Browse for AMPA PDB file."""
@@ -995,7 +1221,7 @@ Do you want to continue?"""
         return args
 
     def _cli_aunp_vs_az_center_ripley_args(self):
-        """CLI flag for optional AuNP vs active zone center Ripley L₁₂."""
+        """CLI flag for optional AuNP vs synaptic cleft center biv Ripley K."""
         if not self.use_custom_params.get():
             return []
         if self.run_aunp_vs_az_center_ripley.get():
@@ -1003,7 +1229,7 @@ Do you want to continue?"""
         return []
 
     def _cli_aunp_monomer_dimer_ripley_args(self):
-        """CLI flags for optional monomer vs dimer AuNP Ripley L₁₂."""
+        """CLI flags for optional monomer vs dimer AuNP biv Ripley K."""
         if not self.use_custom_params.get():
             return []
         if not self.run_aunp_monomer_dimer_ripley.get():
@@ -1181,6 +1407,10 @@ Do you want to continue?"""
             self._log(f"Error deleting previous results: {e}\n")
 
     def _run_analysis(self, step, tab, generate_pdf=False):
+        if step == "Full Pipeline":
+            self._run_auto_pipeline(tab, generate_pdf=generate_pdf)
+            return
+
         # Build CLI command
         cli = ["python", "-u", "-m", "src.synaptic_tomo_tools.cli"]
         # CSV
@@ -1247,33 +1477,17 @@ Do you want to continue?"""
                 self._log(f"Error creating temporary CSV for starting from {selected_tomogram}: {e}\n")
         
         # Analysis step
-        if step == "Active Zone":
-            cli += ["--analysis", "activezone"]
+        if step == "Cleft":
+            cli += ["--analysis", "cleft"]
         elif step == "Vesicles":
             cli += ["--analysis", "vesicles"]
         elif step == "AuNPs":
             cli += ["--analysis", "aunps"]
         elif step == "Visualization":
             cli += ["--analysis", "visualizations"]
-        elif step == "Full Pipeline":
-            cli += ["--analysis", "all"]
-            step_vars = getattr(tab, "_pipeline_step_vars", None)
-            if step_vars:
-                selected_steps = [name for name, var in step_vars.items() if var.get()]
-                if not selected_steps:
-                    messagebox.showwarning(
-                        "No steps selected",
-                        "Please select at least one pipeline step to run.",
-                    )
-                    return
-                # Only pass --steps when running a subset; omit to keep default (all).
-                if len(selected_steps) < len(step_vars):
-                    cli += ["--steps", ",".join(selected_steps)]
-            if generate_pdf:
-                cli += ["--generate-pdf-summary"]
         # Add custom parameters if custom mode is selected
         if self.use_custom_params.get():
-            # Active zone parameters
+            # Cleft parameters
             if self.az_distance_min.get():
                 try:
                     cli += ["--az-distance-min", str(float(self.az_distance_min.get()))]
@@ -1391,6 +1605,245 @@ Do you want to continue?"""
             env["TOMO_ROOT_BASE"] = self.root_dir.get()
         threading.Thread(target=self._run_subprocess, args=(cli, env, str(REPO_ROOT))).start()
 
+    def _compose_stt_pipeline_cli(self, tab, steps, generate_pdf=False, for_print=False):
+        """Build an STT CLI command for one or more pipeline steps (CLI step names only).
+
+        When for_print=True, keep the Home CSV path (no temp subset CSV) so the printed
+        command is usable outside the GUI.
+        """
+        cli = ["python", "-u", "-m", "src.synaptic_tomo_tools.cli"]
+        if self.csv_path.get():
+            cli += ["--csv", self.csv_path.get()]
+
+        processing_mode = self.processing_mode.get()
+        selected_tomogram = self.start_tomogram.get()
+
+        if not for_print and processing_mode == "Single tomogram" and selected_tomogram:
+            try:
+                df = pd.read_csv(self.csv_path.get())
+                tomogram_row = df[df['tomoname'] == selected_tomogram]
+                if not tomogram_row.empty:
+                    import tempfile
+                    temp_csv = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+                    tomogram_row.to_csv(temp_csv.name, index=False)
+                    temp_csv.close()
+                    cli += ["--csv", temp_csv.name]
+                    self._log(f"Processing single tomogram: {selected_tomogram}\n")
+                    if not hasattr(self, '_temp_csv_files'):
+                        self._temp_csv_files = []
+                    self._temp_csv_files.append(temp_csv.name)
+                else:
+                    self._log(f"Warning: Tomogram {selected_tomogram} not found in CSV\n")
+            except Exception as e:
+                self._log(f"Error creating temporary CSV for tomogram {selected_tomogram}: {e}\n")
+        elif not for_print and processing_mode == "Start from" and selected_tomogram:
+            try:
+                df = pd.read_csv(self.csv_path.get())
+                tomogram_indices = df[df['tomoname'] == selected_tomogram].index
+                if len(tomogram_indices) > 0:
+                    start_index = tomogram_indices[0]
+                    subset_df = df.iloc[start_index:]
+                    import tempfile
+                    temp_csv = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+                    subset_df.to_csv(temp_csv.name, index=False)
+                    temp_csv.close()
+                    cli += ["--csv", temp_csv.name]
+                    self._log(f"Processing from tomogram {selected_tomogram} onwards ({len(subset_df)} tomograms)\n")
+                    if not hasattr(self, '_temp_csv_files'):
+                        self._temp_csv_files = []
+                    self._temp_csv_files.append(temp_csv.name)
+                else:
+                    self._log(f"Warning: Tomogram {selected_tomogram} not found in CSV\n")
+            except Exception as e:
+                self._log(f"Error creating temporary CSV for starting from {selected_tomogram}: {e}\n")
+
+        stt_all = ["cleft", "vesicles", "aunps", "visualizations"]
+        if len(steps) == 1:
+            cli += ["--analysis", steps[0]]
+        else:
+            cli += ["--analysis", "all"]
+            if set(steps) != set(stt_all):
+                cli += ["--steps", ",".join(steps)]
+        if generate_pdf:
+            cli += ["--generate-pdf-summary"]
+
+        if self.use_custom_params.get():
+            if self.az_distance_min.get():
+                try:
+                    cli += ["--az-distance-min", str(float(self.az_distance_min.get()))]
+                except ValueError:
+                    pass
+            if self.az_distance_max.get():
+                try:
+                    cli += ["--az-distance-max", str(float(self.az_distance_max.get()))]
+                except ValueError:
+                    pass
+            if self.vesicle_distance_threshold.get():
+                try:
+                    cli += ["--vesicle-distance-threshold", str(float(self.vesicle_distance_threshold.get()))]
+                except ValueError:
+                    pass
+            if self.dbscan_eps.get():
+                try:
+                    cli += ["--dbscan-eps", str(float(self.dbscan_eps.get()))]
+                except ValueError:
+                    pass
+            if self.dbscan_min_samples.get():
+                try:
+                    cli += ["--dbscan-min-samples", str(int(self.dbscan_min_samples.get()))]
+                except ValueError:
+                    pass
+            if self.synaptic_designation_cutoff.get():
+                try:
+                    cli += ["--synaptic-designation-cutoff", str(float(self.synaptic_designation_cutoff.get()))]
+                except ValueError:
+                    pass
+            if self.min_cluster_size.get():
+                try:
+                    cli += ["--min-cluster-size", str(int(self.min_cluster_size.get()))]
+                except ValueError:
+                    pass
+            if self.fusion_point_threshold.get():
+                try:
+                    cli += ["--fusion-point-threshold", str(float(self.fusion_point_threshold.get()))]
+                except ValueError:
+                    pass
+            if self.fusing_perimeter_threshold.get():
+                try:
+                    cli += ["--fusing-perimeter-threshold", str(float(self.fusing_perimeter_threshold.get()))]
+                except ValueError:
+                    pass
+            cli += self._cli_aunp_pick_star_pattern_args()
+            cli += self._cli_fusion_point_aunp_analyses_args()
+            cli += self._cli_aunp_vs_az_center_ripley_args()
+            cli += self._cli_aunp_monomer_dimer_ripley_args()
+            if self.sphere_size.get():
+                try:
+                    cli += ["--sphere-size", str(int(self.sphere_size.get()))]
+                except ValueError:
+                    pass
+            if self.sphere_color.get():
+                cli += ["--sphere-color", str(self.sphere_color.get())]
+            if self.aunp_distance_min.get():
+                try:
+                    cli += ["--aunp-distance-min", str(float(self.aunp_distance_min.get()))]
+                except ValueError:
+                    pass
+            if self.aunp_distance_max.get():
+                try:
+                    cli += ["--aunp-distance-max", str(float(self.aunp_distance_max.get()))]
+                except ValueError:
+                    pass
+            if self.aunp_distance_cutoff_direction.get():
+                cli += ["--aunp-distance-cutoff-direction", str(self.aunp_distance_cutoff_direction.get())]
+            if self.aunp_distance_cutoff_value.get():
+                try:
+                    cli += ["--aunp-distance-cutoff-value", str(float(self.aunp_distance_cutoff_value.get()))]
+                except ValueError:
+                    pass
+            if self.cylinder_radius.get():
+                try:
+                    cli += ["--cylinder-radius", str(float(self.cylinder_radius.get()))]
+                except ValueError:
+                    pass
+            if self.receptor_crosssection.get():
+                try:
+                    cli += ["--receptor-crosssection", str(float(self.receptor_crosssection.get()))]
+                except ValueError:
+                    pass
+            if self.aunps_per_receptor.get():
+                try:
+                    cli += ["--aunps-per-receptor", str(float(self.aunps_per_receptor.get()))]
+                except ValueError:
+                    pass
+            if self.vertex_sampling_step.get():
+                try:
+                    cli += ["--vertex-sampling-step", str(int(self.vertex_sampling_step.get()))]
+                except ValueError:
+                    pass
+            if self.generate_combined_pdf.get():
+                cli += ["--generate-combined-pdf"]
+
+        rerun_var, checkfiles_var = getattr(tab, '_flag_vars', (None, None))
+        if rerun_var and rerun_var.get():
+            cli += ["--rerun"]
+        if checkfiles_var and checkfiles_var.get():
+            cli += ["--check-files"]
+        return cli
+
+    def _run_auto_pipeline(self, tab, generate_pdf=False):
+        """Run selected Auto-Pipeline steps in order, inserting Pose Prediction before Visualization."""
+        step_vars = getattr(tab, "_pipeline_step_vars", None) or {}
+        stt_order = ["cleft", "vesicles", "aunps", "visualizations"]
+        selected_stt = [name for name in stt_order if step_vars.get(name) and step_vars[name].get()]
+        run_pose = bool(step_vars.get("pose_prediction") and step_vars["pose_prediction"].get())
+
+        if not selected_stt and not run_pose:
+            messagebox.showwarning(
+                "No steps selected",
+                "Please select at least one pipeline step to run.",
+            )
+            return
+
+        # Pose-only: reuse the dedicated Pose Prediction runner (own background thread).
+        if run_pose and not selected_stt:
+            self._run_ampa_poses_analysis_with_selected_method()
+            return
+
+        # STT-only (no pose): single CLI invocation, same as before.
+        if selected_stt and not run_pose:
+            cli = self._compose_stt_pipeline_cli(tab, selected_stt, generate_pdf=generate_pdf)
+            self._log(f"Running: {' '.join(cli)}\n")
+            env = os.environ.copy()
+            if self.root_dir.get():
+                env["TOMO_ROOT_BASE"] = self.root_dir.get()
+            threading.Thread(target=self._run_subprocess, args=(cli, env, str(REPO_ROOT))).start()
+            return
+
+        # Mixed STT + pose: split around Visualization so pose runs after AuNPs and before viz.
+        pose_methods = self._get_selected_pose_methods()
+        if not pose_methods:
+            messagebox.showerror(
+                "Error",
+                "Pose Prediction is selected, but no Analysis Method is checked on the Pose Prediction tab "
+                "(All poses, Greedy, and/or ILP).",
+            )
+            return
+
+        pre_steps = [s for s in selected_stt if s != "visualizations"]
+        want_viz = "visualizations" in selected_stt
+
+        # Validate pose inputs on the main thread before background orchestration.
+        if not self.csv_path.get():
+            messagebox.showerror("Error", "Please select a CSV file first.")
+            return
+        if not self.root_dir.get():
+            messagebox.showerror("Error", "Please specify the root directory for tomogram sets.")
+            return
+
+        def orchestrate():
+            env = os.environ.copy()
+            if self.root_dir.get():
+                env["TOMO_ROOT_BASE"] = self.root_dir.get()
+            if pre_steps:
+                cli = self._compose_stt_pipeline_cli(tab, pre_steps, generate_pdf=False)
+                self._log(f"Running: {' '.join(cli)}\n")
+                self._run_subprocess(cli, env, str(REPO_ROOT))
+            self._log("\nStarting Pose Prediction (Auto-Pipeline)...\n")
+            ok = self._run_ampa_poses_analysis_with_method(pose_methods, blocking=True)
+            if not ok:
+                self._log("Pose Prediction did not start; skipping remaining Auto-Pipeline steps.\n")
+                return
+            if want_viz:
+                cli = self._compose_stt_pipeline_cli(
+                    tab, ["visualizations"], generate_pdf=generate_pdf
+                )
+                self._log(f"Running: {' '.join(cli)}\n")
+                self._run_subprocess(cli, env, str(REPO_ROOT))
+            self._log("\nAuto-Pipeline completed.\n")
+
+        threading.Thread(target=orchestrate).start()
+
     def _run_subprocess(self, cli, env, cwd=None):
         self._current_process = subprocess.Popen(cli, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, cwd=cwd, bufsize=1, universal_newlines=True)
         try:
@@ -1488,69 +1941,6 @@ Do you want to continue?"""
             return
         webbrowser.open(f"file://{pdf_path}")
     
-    def _build_post_analysis_tab_content(self, tab):
-        """Build the content for the post-analysis tools tab."""
-        frame = ttk.Frame(tab)
-        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-        
-        # Title
-        title_label = ttk.Label(frame, text="Post-Analysis Tools", font=("Helvetica", 16, "bold"))
-        title_label.pack(pady=(0, 20))
-        
-        # Create notebook for sub-tabs
-        notebook = ttk.Notebook(frame)
-        notebook.pack(fill=tk.BOTH, expand=True)
-        
-        # Cluster Analysis tab
-        cluster_tab = ttk.Frame(notebook)
-        notebook.add(cluster_tab, text="Cluster Analysis")
-        self._build_cluster_tab_content(cluster_tab)
-        
-        # Vesicle Analysis tab
-        vesicle_tab = ttk.Frame(notebook)
-        notebook.add(vesicle_tab, text="Vesicle Analysis")
-        self._build_vesicle_tab_content(vesicle_tab)
-    
-    def _build_vesicle_tab_content(self, tab):
-        """Build the content for the vesicle analysis tab."""
-        frame = ttk.Frame(tab)
-        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-        
-        # Vesicle Slice Extraction section
-        vesicle_frame = ttk.LabelFrame(frame, text="Vesicle Slice Extraction", padding=10)
-        vesicle_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # Description
-        desc_label = ttk.Label(vesicle_frame, text="Extract 120x120 pixel slices from vesicles within 20nm of active zone membrane.\nGenerates three slice types: regular slice, thick slice (20nm), and MinIP (20nm).\nSlices are oriented with the closest active zone point pointing down.\nCreates both individual PNG files and a comprehensive PDF summary.")
-        desc_label.pack(pady=(0, 10))
-        
-        # Output directory
-        self.vesicle_output_dir = tk.StringVar(value="results/vesicle_slices")
-        ttk.Label(vesicle_frame, text="Output directory:").pack(anchor=tk.W)
-        output_entry = ttk.Entry(vesicle_frame, textvariable=self.vesicle_output_dir, width=50)
-        output_entry.pack(fill=tk.X, pady=(0, 10))
-        
-        # Run button
-        vesicle_btn = ttk.Button(vesicle_frame, text="Extract Vesicle Slices", command=self._run_vesicle_extraction)
-        vesicle_btn.pack(pady=(0, 10))
-        
-        # Add tooltip
-        ToolTip(vesicle_btn, "Extract vesicle slices from tomograms with MinIP projection for dark signal visualization. Requires vesicle analysis to be completed first. Creates PNG files and PDF summary.")
-        
-        # View PDF button
-        view_pdf_btn = ttk.Button(vesicle_frame, text="View Vesicle Slices PDF", command=self._view_vesicle_pdf)
-        view_pdf_btn.pack(pady=(0, 10))
-        
-        # Add tooltip for PDF button
-        ToolTip(view_pdf_btn, "Open the vesicle slices summary PDF in your default PDF viewer.")
-        
-        # View Close Vesicles PDF button
-        view_close_pdf_btn = ttk.Button(vesicle_frame, text="View Close Vesicles PDF", command=self._view_close_vesicle_pdf)
-        view_close_pdf_btn.pack(pady=(0, 10))
-        
-        # Add tooltip for close vesicles PDF button
-        ToolTip(view_close_pdf_btn, "Open the close vesicles summary PDF (≤4nm from active zone) in your default PDF viewer.")
-    
     def _build_ampa_poses_tab_content(self, tab):
         """Build the content for the dedicated AMPA poses analysis tab."""
         # Use the same horizontal layout as other tabs
@@ -1571,7 +1961,11 @@ Do you want to continue?"""
         # Run Analysis button at the top
         ampa_run_btn = ttk.Button(controls_frame, text="Run Pose Prediction", command=self._run_ampa_poses_analysis_with_selected_method)
         ampa_run_btn.pack(anchor=tk.W, pady=5)
-        ToolTip(ampa_run_btn, "Run AMPA poses analysis using the selected method: All poses (no optimization), Greedy (fast heuristic), or ILP (exact optimal).")
+        ToolTip(
+            ampa_run_btn,
+            "Run pose prediction for every checked method (All poses, Greedy, and/or ILP).\n"
+            "Multiple methods can be selected and will run sequentially.",
+        )
         
         # AMPA Poses Analysis section
         ampa_frame = ttk.LabelFrame(controls_frame, text="Analysis Parameters", padding=15)
@@ -1611,15 +2005,40 @@ Do you want to continue?"""
         ttk.Entry(params_frame, textvariable=self.ampa_steric_radius, width=10).grid(row=2, column=1, padx=(0, 5), pady=(10, 0))
         ttk.Label(params_frame, text="(minimum distance between particle positions)").grid(row=2, column=2, columnspan=3, sticky=tk.W, padx=(5, 0), pady=(10, 0))
         
-        # Analysis method selection
-        ttk.Label(params_frame, text="Analysis Method:").grid(row=3, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
-        self.ampa_optimization_method = tk.StringVar(value="original")
+        # Analysis method selection (multi-select; each checked method is run)
+        ttk.Label(params_frame, text="Analysis Method(s):").grid(row=3, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
+        self.ampa_method_all_poses = tk.BooleanVar(value=True)
+        self.ampa_method_greedy = tk.BooleanVar(value=False)
+        self.ampa_method_ilp = tk.BooleanVar(value=False)
         method_frame = ttk.Frame(params_frame)
         method_frame.grid(row=3, column=1, columnspan=4, sticky=tk.W, pady=(10, 0))
-        
-        ttk.Radiobutton(method_frame, text="All poses", variable=self.ampa_optimization_method, value="original").pack(side=tk.LEFT, padx=(0, 15))
-        ttk.Radiobutton(method_frame, text="Greedy (fast, heuristic)", variable=self.ampa_optimization_method, value="greedy").pack(side=tk.LEFT, padx=(0, 15))
-        ttk.Radiobutton(method_frame, text="ILP (exact, linear)", variable=self.ampa_optimization_method, value="ilp").pack(side=tk.LEFT)
+
+        all_poses_cb = ttk.Checkbutton(method_frame, text="All poses", variable=self.ampa_method_all_poses)
+        all_poses_cb.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(
+            all_poses_cb,
+            "Enumerates all valid AuNP-pair poses within the distance cutoffs,\n"
+            "without resolving steric clashes between predicted receptors.\n"
+            "Useful for seeing the full candidate set (may overpick overlapping poses).",
+        )
+
+        greedy_cb = ttk.Checkbutton(method_frame, text="Greedy", variable=self.ampa_method_greedy)
+        greedy_cb.pack(side=tk.LEFT, padx=(0, 15))
+        ToolTip(
+            greedy_cb,
+            "Fast heuristic that selects a clash-free subset of poses under the\n"
+            "steric radius constraint, greedily maximizing the number of AuNP pairs.\n"
+            "Good default for large datasets when you need non-overlapping poses.",
+        )
+
+        ilp_cb = ttk.Checkbutton(method_frame, text="ILP", variable=self.ampa_method_ilp)
+        ilp_cb.pack(side=tk.LEFT)
+        ToolTip(
+            ilp_cb,
+            "Exact integer linear programming (ILP) optimization that finds a\n"
+            "clash-free pose set maximizing paired AuNPs. Slower than Greedy but\n"
+            "optimal; prefer for smaller problems or when an exact solution matters.",
+        )
         
         # PDB file parameter
         ttk.Label(params_frame, text="PDB File:").grid(row=4, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
@@ -1631,133 +2050,12 @@ Do you want to continue?"""
         ttk.Label(params_frame, text="(leave empty to skip PDB generation)").grid(row=4, column=3, columnspan=2, sticky=tk.W, padx=(5, 0), pady=(10, 0))
         ToolTip(pdb_entry, "Select a PDB file to generate PDB files with AMPA structures at calculated poses. Leave empty to skip PDB generation.")
         
-        
-        # Add Stop button in bottom right of tab
-        stop_btn = ttk.Button(tab, text="Stop", command=self._stop_current_process)
-        stop_btn.place(relx=1.0, rely=1.0, anchor="se", x=-10, y=-10)
+        self._add_tab_action_buttons(
+            tab,
+            lambda: self._print_tab_command("poses"),
+        )
     
     
-    def _build_cluster_tab_content(self, tab):
-        """Build the content for the cluster analysis tab."""
-        frame = ttk.Frame(tab)
-        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-        
-        # Cluster Coordinate Extraction section
-        cluster_frame = ttk.LabelFrame(frame, text="Cluster Coordinate Extraction", padding=10)
-        cluster_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # Description
-        cluster_desc_label = ttk.Label(cluster_frame, text="Extract XYZ coordinates for specific AuNP clusters.\nInput a CSV file with tomogram names, cluster numbers, and set names to extract coordinates.\nOutputs a text file with XYZ coordinates for each specified cluster.\nAlso generates a PDF summary showing mini zonogram images for the selected clusters.")
-        cluster_desc_label.pack(pady=(0, 10))
-        
-        # Cluster selection CSV file
-        ttk.Label(cluster_frame, text="Cluster selection CSV file:").pack(anchor=tk.W)
-        self.cluster_csv_path = tk.StringVar()
-        cluster_csv_frame = ttk.Frame(cluster_frame)
-        cluster_csv_frame.pack(fill=tk.X, pady=(0, 10))
-        cluster_csv_entry = ttk.Entry(cluster_csv_frame, textvariable=self.cluster_csv_path, width=40)
-        cluster_csv_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(cluster_csv_frame, text="Browse...", command=self._browse_cluster_csv).pack(side=tk.RIGHT, padx=(5, 0))
-        
-        # Output directory
-        self.cluster_output_dir = tk.StringVar(value="results/cluster_coordinates")
-        ttk.Label(cluster_frame, text="Output directory:").pack(anchor=tk.W)
-        cluster_output_entry = ttk.Entry(cluster_frame, textvariable=self.cluster_output_dir, width=50)
-        cluster_output_entry.pack(fill=tk.X, pady=(0, 10))
-        
-        # Run button
-        cluster_btn = ttk.Button(cluster_frame, text="Extract Cluster Coordinates", command=self._run_cluster_coordinate_extraction)
-        cluster_btn.pack(pady=(0, 10))
-        
-        # Add tooltip
-        ToolTip(cluster_btn, "Extract XYZ coordinates for specific AuNP clusters based on the input CSV file. Requires AuNP analysis to be completed first.")
-    
-    def _run_vesicle_extraction(self):
-        """Run the vesicle slice extraction script."""
-        if not self.csv_path.get():
-            messagebox.showerror("Error", "Please select a CSV file first.")
-            return
-        
-        # Build command
-        cli = ["python", "-u", "scripts/extract_vesicle_slices.py"]
-        cli += ["--csv", self.csv_path.get()]
-        cli += ["--output-dir", self.vesicle_output_dir.get()]
-        
-        if self.root_dir.get():
-            cli += ["--data-dir", self.root_dir.get()]
-        
-        # Add processing mode and starting tomogram if specified
-        processing_mode = self.processing_mode.get()
-        selected_tomogram = self.start_tomogram.get()
-        
-        if processing_mode in ["Single tomogram", "Start from"] and selected_tomogram:
-            cli += ["--start-from", selected_tomogram]
-            self._log(f"Vesicle extraction will start from tomogram: {selected_tomogram}\n")
-        
-        self._log(f"Running vesicle slice extraction: {' '.join(cli)}\n")
-        self._log("Note: This will generate individual PNG files and create a comprehensive PDF summary.\n")
-        threading.Thread(target=self._run_subprocess, args=(cli, os.environ.copy())).start()
-
-    def _view_vesicle_pdf(self):
-        """Open the vesicle slices summary PDF."""
-        # Check if vesicle output directory exists
-        vesicle_output_dir = self.vesicle_output_dir.get() if hasattr(self, 'vesicle_output_dir') else "results/vesicle_slices"
-        pdf_path = os.path.abspath(f"{vesicle_output_dir}/vesicle_slices_summary.pdf")
-        
-        if not os.path.exists(pdf_path):
-            messagebox.showerror("PDF Not Found", 
-                               f"Vesicle slices summary PDF not found at:\n{pdf_path}\n\n"
-                               "Please run the vesicle slice extraction first.")
-            return
-        
-        try:
-            webbrowser.open(f"file://{pdf_path}")
-            self._log(f"Opening vesicle slices PDF: {pdf_path}\n")
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not open PDF: {e}")
-
-    def _view_close_vesicle_pdf(self):
-        """Open the close vesicles summary PDF."""
-        # Check if vesicle output directory exists
-        vesicle_output_dir = self.vesicle_output_dir.get() if hasattr(self, 'vesicle_output_dir') else "results/vesicle_slices"
-        pdf_path = os.path.abspath(f"{vesicle_output_dir}/close_vesicles_summary.pdf")
-        
-        if not os.path.exists(pdf_path):
-            messagebox.showerror("PDF Not Found", 
-                               f"Close vesicles summary PDF not found at:\n{pdf_path}\n\n"
-                               "Please run the vesicle slice extraction first.")
-            return
-        
-        try:
-            webbrowser.open(f"file://{pdf_path}")
-            self._log(f"Opening close vesicles PDF: {pdf_path}\n")
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not open PDF: {e}")
-
-    def _run_cluster_coordinate_extraction(self):
-        """Run the cluster coordinate extraction script."""
-        if not self.cluster_csv_path.get():
-            messagebox.showerror("Error", "Please select a cluster selection CSV file first.")
-            return
-        
-        if not self.root_dir.get():
-            messagebox.showerror("Error", "Please specify the root directory for tomogram sets.")
-            return
-        
-        # Create output directory
-        output_dir = self.cluster_output_dir.get()
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Build command
-        cli = ["python", "-u", "scripts/extract_cluster_coordinates.py"]
-        cli += ["--cluster-csv", self.cluster_csv_path.get()]
-        cli += ["--data-dir", self.root_dir.get()]
-        cli += ["--output-dir", output_dir]
-        
-        self._log(f"Running cluster coordinate extraction: {' '.join(cli)}\n")
-        self._log("Note: This will extract XYZ coordinates for specified clusters and save them as text files.\n")
-        threading.Thread(target=self._run_subprocess, args=(cli, os.environ.copy())).start()
-
     def _run_ampa_poses_analysis(self):
         """Run the AMPA poses analysis on all tomograms."""
         if not self.csv_path.get():
@@ -1793,7 +2091,7 @@ Do you want to continue?"""
             return
         
         # Get output directory (will be constructed per tomogram)
-        output_dir_relative = "STT_results/ampa_poses"
+        output_dir_relative = "STT_results/poses"
         
         # Read CSV to get tomogram names and sets
         try:
@@ -1896,47 +2194,47 @@ Do you want to continue?"""
                 self._log(f"Warning: Tomogram directory not found: {tomogram_path}\n")
                 continue
             
-            # Get active zones for this tomogram from CSV
+            # Get synaptic clefts for this tomogram from CSV
             tomogram_row = df[df['tomoname'] == tomogram_name] if 'tomoname' in df.columns else df[df.iloc[:, 0] == tomogram_name]
-            aunp_active_zones = None
+            cleft_ids = None
             
-            if not tomogram_row.empty and 'aunp_active_zones' in df.columns:
-                aunp_active_zones_str = tomogram_row['aunp_active_zones'].iloc[0]
-                if pd.notna(aunp_active_zones_str) and str(aunp_active_zones_str).strip():
+            if not tomogram_row.empty and 'cleft_IDs' in df.columns:
+                cleft_ids_str = tomogram_row['cleft_IDs'].iloc[0]
+                if pd.notna(cleft_ids_str) and str(cleft_ids_str).strip():
                     try:
-                        # Parse active zones (can be comma-separated or space-separated)
-                        aunp_active_zones_str = str(aunp_active_zones_str).strip()
-                        if ',' in aunp_active_zones_str:
-                            aunp_active_zones = []
-                            for x in aunp_active_zones_str.split(','):
+                        # Parse synaptic clefts (can be comma-separated or space-separated)
+                        cleft_ids_str = str(cleft_ids_str).strip()
+                        if ',' in cleft_ids_str:
+                            cleft_ids = []
+                            for x in cleft_ids_str.split(','):
                                 x = x.strip()
                                 if x.isdigit():
-                                    aunp_active_zones.append(int(x))
+                                    cleft_ids.append(int(x))
                                 elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
-                                    aunp_active_zones.append(int(float(x)))
+                                    cleft_ids.append(int(float(x)))
                         else:
-                            aunp_active_zones = []
-                            for x in aunp_active_zones_str.split():
+                            cleft_ids = []
+                            for x in cleft_ids_str.split():
                                 x = x.strip()
                                 if x.isdigit():
-                                    aunp_active_zones.append(int(x))
+                                    cleft_ids.append(int(x))
                                 elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
-                                    aunp_active_zones.append(int(float(x)))
-                        self._log(f"Using active zones for {tomogram_name}: {aunp_active_zones}\n")
+                                    cleft_ids.append(int(float(x)))
+                        self._log(f"Using synaptic clefts for {tomogram_name}: {cleft_ids}\n")
                     except (ValueError, AttributeError):
-                        self._log(f"Warning: Could not parse active zones for {tomogram_name}: {aunp_active_zones_str}\n")
-                        aunp_active_zones = None
+                        self._log(f"Warning: Could not parse synaptic clefts for {tomogram_name}: {cleft_ids_str}\n")
+                        cleft_ids = None
                 else:
-                    self._log(f"No active zones specified for {tomogram_name}, using all active zones\n")
+                    self._log(f"No synaptic clefts specified for {tomogram_name}, using all synaptic clefts\n")
             else:
-                self._log(f"No active zones specified for {tomogram_name}, using all active zones\n")
+                self._log(f"No synaptic clefts specified for {tomogram_name}, using all synaptic clefts\n")
             
             # Build command for this tomogram
             # Construct full output directory path relative to tomogram
             full_output_dir = os.path.join(tomogram_path, align_sub, output_dir_relative)
             os.makedirs(full_output_dir, exist_ok=True)
             
-            cli = ["python", "-u", "scripts/run_ampa_poses_analysis.py"]
+            cli = ["python", "-u", "-m", "src.synaptic_tomo_tools.poses"]
             cli += ["--tomogram-path", tomogram_path]
             cli += ["--alignment-dir", align_sub]
             cli += ["--output-dir", full_output_dir]
@@ -1954,9 +2252,9 @@ Do you want to continue?"""
             else:
                 cli += ["--no-membrane-distance-cutoff"]
             
-            # Add active zones if specified
-            if aunp_active_zones is not None:
-                cli += ["--aunp-active-zones"] + [str(az) for az in aunp_active_zones]
+            # Add synaptic clefts if specified
+            if cleft_ids is not None:
+                cli += ["--cleft-ids"] + [str(az) for az in cleft_ids]
             
             cli += self._cli_aunp_pick_star_pattern_args()
             
@@ -1983,7 +2281,7 @@ Do you want to continue?"""
                 self._log(f"{'='*60}\n")
                 
                 # Run the subprocess and wait for completion
-                self._run_subprocess(cli, os.environ.copy())
+                self._run_subprocess(cli, os.environ.copy(), str(REPO_ROOT))
             
                 # Try to load the results for combining
                 try:
@@ -2031,8 +2329,8 @@ Do you want to continue?"""
             # Save combined star files
             if all_particles_data:
                 try:
-                    # Create results/ampa_poses directory
-                    combined_output_dir = "results/ampa_poses"
+                    # Create results/poses directory
+                    combined_output_dir = "results/poses"
                     os.makedirs(combined_output_dir, exist_ok=True)
                     
                     # Combine all particles data
@@ -2074,43 +2372,77 @@ Do you want to continue?"""
             self._log(f"\nAMPA poses analysis completed for {len(all_commands)} tomograms.\n")
             self._log(f"Results saved to: {output_dir_relative} within each tomogram's STT_results directory\n")
             if all_particles_data:
-                self._log(f"Combined results saved to: results/ampa_poses/\n")
+                self._log(f"Combined results saved to: results/poses/\n")
         
         # Start the sequential analysis in a background thread
         threading.Thread(target=run_sequential_analysis).start()
 
+    def _get_selected_pose_methods(self):
+        """Return checked pose methods as a list of 'all_poses', 'greedy', and/or 'ilp'."""
+        methods = []
+        if getattr(self, "ampa_method_all_poses", None) and self.ampa_method_all_poses.get():
+            methods.append("all_poses")
+        if getattr(self, "ampa_method_greedy", None) and self.ampa_method_greedy.get():
+            methods.append("greedy")
+        if getattr(self, "ampa_method_ilp", None) and self.ampa_method_ilp.get():
+            methods.append("ilp")
+        return methods
+
     def _run_ampa_poses_analysis_with_selected_method(self):
-        """Run AMPA poses analysis using the selected method from radio buttons."""
-        selected_method = self.ampa_optimization_method.get()
-        if selected_method == "original":
-            self._run_ampa_poses_analysis_with_method("original")
-        elif selected_method in ["greedy", "ilp"]:
-            self._run_ampa_poses_analysis_with_method("optimized")
-        else:
-            messagebox.showerror("Error", f"Unknown method selected: {selected_method}")
+        """Run AMPA poses analysis for every checked method on the Pose Prediction tab."""
+        methods = self._get_selected_pose_methods()
+        if not methods:
+            messagebox.showerror(
+                "Error",
+                "Select at least one Analysis Method (All poses, Greedy, and/or ILP).",
+            )
+            return
+        self._run_ampa_poses_analysis_with_method(methods)
 
     def _run_ampa_poses_analysis_original(self):
         """Run the original AMPA poses analysis method."""
-        self._run_ampa_poses_analysis_with_method("original")
+        self._run_ampa_poses_analysis_with_method(["all_poses"])
 
     def _run_ampa_poses_analysis_optimized(self):
-        """Run the optimized AMPA poses analysis method."""
-        self._run_ampa_poses_analysis_with_method("optimized")
+        """Run greedy optimized AMPA poses analysis."""
+        self._run_ampa_poses_analysis_with_method(["greedy"])
 
     def _run_ampa_poses_analysis_both(self):
-        """Run both original and optimized AMPA poses analysis methods."""
-        self._run_ampa_poses_analysis_with_method("both")
+        """Run all poses plus greedy optimized analysis."""
+        self._run_ampa_poses_analysis_with_method(["all_poses", "greedy"])
 
-    def _run_ampa_poses_analysis_with_method(self, method):
-        """Run AMPA poses analysis with specified method (original, optimized, or both)."""
+    def _run_ampa_poses_analysis_with_method(self, methods, blocking=False, print_only=False):
+        """Run AMPA poses analysis for one or more methods.
+
+        ``methods`` is a list of ``"all_poses"``, ``"greedy"``, and/or ``"ilp"``.
+        Legacy string values ``"original"``, ``"optimized"``, and ``"both"`` are still accepted.
+        If blocking=True, run in the current thread (for Auto-Pipeline orchestration).
+        If print_only=True, build and print commands without creating dirs or running.
+        """
+        # Normalize legacy single-string API
+        if isinstance(methods, str):
+            legacy = {
+                "original": ["all_poses"],
+                "optimized": ["greedy"],
+                "both": ["all_poses", "greedy"],
+            }
+            methods = legacy.get(methods, [methods])
+        methods = [m for m in methods if m in ("all_poses", "greedy", "ilp")]
+        if not methods:
+            messagebox.showerror(
+                "Error",
+                "Select at least one Analysis Method (All poses, Greedy, and/or ILP).",
+            )
+            return False
+
         if not self.csv_path.get():
             messagebox.showerror("Error", "Please select a CSV file first.")
-            return
+            return False
         
         # Check if root directory is specified
         if not self.root_dir.get():
             messagebox.showerror("Error", "Please specify the root directory for tomogram sets.")
-            return
+            return False
         
         # Get parameters from GUI
         try:
@@ -2121,7 +2453,7 @@ Do you want to continue?"""
             steric_radius = float(self.ampa_steric_radius.get())
         except ValueError:
             messagebox.showerror("Error", "Please enter valid numeric values for distance parameters.")
-            return
+            return False
         
         # Check if cutoffs are disabled
         aunp_no_cutoff = self.ampa_aunp_no_cutoff.get()
@@ -2130,18 +2462,18 @@ Do you want to continue?"""
         # Validate distance ranges only if cutoffs are enabled
         if not aunp_no_cutoff and aunp_min_dist >= aunp_max_dist:
             messagebox.showerror("Error", "AuNP minimum distance must be less than maximum distance.")
-            return
+            return False
         
         if not membrane_no_cutoff and membrane_min_dist >= membrane_max_dist:
             messagebox.showerror("Error", "Membrane minimum distance must be less than maximum distance.")
-            return
+            return False
         
         if steric_radius <= 0:
             messagebox.showerror("Error", "Steric radius must be positive.")
-            return
+            return False
         
         # Get output directory (will be constructed per tomogram)
-        output_dir_relative = "STT_results/ampa_poses"
+        output_dir_relative = "STT_results/poses"
         
         # Read CSV to get tomogram names and sets
         try:
@@ -2185,7 +2517,7 @@ Do you want to continue?"""
                     self._log(f"Using column '{possible_columns[0]}' for tomogram names\n")
                 else:
                     messagebox.showerror("Error", "Could not find tomogram name column in CSV. Expected 'tomogram_name', 'tomoname', or 'tomogram'")
-                    return
+                    return False
             
             # Get the set column for path construction
             if 'set' in df.columns:
@@ -2200,7 +2532,7 @@ Do you want to continue?"""
                     "Error",
                     "CSV must include 'alignment_dir' for each tomogram row.",
                 )
-                return
+                return False
             tomogram_alignments = []
             for x in df['alignment_dir'].tolist():
                 s = str(x).strip()
@@ -2209,34 +2541,36 @@ Do you want to continue?"""
                         "Error",
                         "alignment_dir must be non-empty for every CSV row.",
                     )
-                    return
+                    return False
                 tomogram_alignments.append(s)
                     
         except Exception as e:
             messagebox.showerror("Error", f"Could not read CSV file: {e}")
-            return
+            return False
         
-        method_names = {
-            "original": "All Poses",
-            "optimized": "Optimized", 
-            "both": "Both All Poses and Optimized"
+        method_display = {
+            "all_poses": "All Poses",
+            "greedy": "Greedy",
+            "ilp": "ILP",
         }
+        methods_label = " + ".join(method_display[m] for m in methods)
         
-        self._log(f"Starting {method_names[method]} AMPA poses analysis for {len(tomogram_names)} tomograms...\n")
-        self._log(f"Output directory (relative to each tomogram): {output_dir_relative}\n")
-        
-        if aunp_no_cutoff:
-            self._log(f"AuNP distance range: No cutoff (using all AuNP pairs)\n")
-        else:
-            self._log(f"AuNP distance range: {aunp_min_dist}-{aunp_max_dist} nm\n")
+        if not print_only:
+            self._log(f"Starting AMPA poses analysis ({methods_label}) for {len(tomogram_names)} tomograms...\n")
+            self._log(f"Output directory (relative to each tomogram): {output_dir_relative}\n")
             
-        if membrane_no_cutoff:
-            self._log(f"Membrane distance range: No cutoff (using all pairs regardless of membrane distance)\n")
-        else:
-            self._log(f"Membrane distance range: {membrane_min_dist}-{membrane_max_dist} nm\n")
-        
-        if method in ["optimized", "both"]:
-            self._log(f"Steric radius: {steric_radius} nm\n")
+            if aunp_no_cutoff:
+                self._log(f"AuNP distance range: No cutoff (using all AuNP pairs)\n")
+            else:
+                self._log(f"AuNP distance range: {aunp_min_dist}-{aunp_max_dist} nm\n")
+                
+            if membrane_no_cutoff:
+                self._log(f"Membrane distance range: No cutoff (using all pairs regardless of membrane distance)\n")
+            else:
+                self._log(f"Membrane distance range: {membrane_min_dist}-{membrane_max_dist} nm\n")
+            
+            if any(m in ("greedy", "ilp") for m in methods):
+                self._log(f"Steric radius: {steric_radius} nm\n")
         
         # Process all tomograms
         all_commands = []
@@ -2244,62 +2578,70 @@ Do you want to continue?"""
         for i, (tomogram_name, tomogram_set, align_sub) in enumerate(
             zip(tomogram_names, tomogram_sets, tomogram_alignments), 1
         ):
-            self._log(
-                f"\nPreparing tomogram {i}/{len(tomogram_names)}: {tomogram_name} "
-                f"(set: {tomogram_set}, alignment: {align_sub})\n"
-            )
+            if not print_only:
+                self._log(
+                    f"\nPreparing tomogram {i}/{len(tomogram_names)}: {tomogram_name} "
+                    f"(set: {tomogram_set}, alignment: {align_sub})\n"
+                )
             
             # Build tomogram path using the correct structure
             tomogram_path = os.path.join(self.root_dir.get(), tomogram_set, 'TOP_TOMOS', tomogram_name)
             
             if not os.path.exists(tomogram_path):
-                self._log(f"Warning: Tomogram directory not found: {tomogram_path}\n")
-                continue
-            
-            # Get active zones for this tomogram from CSV
-            tomogram_row = df[df['tomoname'] == tomogram_name] if 'tomoname' in df.columns else df[df.iloc[:, 0] == tomogram_name]
-            aunp_active_zones = None
-            
-            if not tomogram_row.empty and 'aunp_active_zones' in df.columns:
-                aunp_active_zones_str = tomogram_row['aunp_active_zones'].iloc[0]
-                if pd.notna(aunp_active_zones_str) and str(aunp_active_zones_str).strip():
-                    try:
-                        # Parse active zones (can be comma-separated or space-separated)
-                        aunp_active_zones_str = str(aunp_active_zones_str).strip()
-                        if ',' in aunp_active_zones_str:
-                            aunp_active_zones = []
-                            for x in aunp_active_zones_str.split(','):
-                                x = x.strip()
-                                if x.isdigit():
-                                    aunp_active_zones.append(int(x))
-                                elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
-                                    aunp_active_zones.append(int(float(x)))
-                        else:
-                            aunp_active_zones = []
-                            for x in aunp_active_zones_str.split():
-                                x = x.strip()
-                                if x.isdigit():
-                                    aunp_active_zones.append(int(x))
-                                elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
-                                    aunp_active_zones.append(int(float(x)))
-                        self._log(f"Using active zones for {tomogram_name}: {aunp_active_zones}\n")
-                    except (ValueError, AttributeError):
-                        self._log(f"Warning: Could not parse active zones for {tomogram_name}: {aunp_active_zones_str}\n")
-                        aunp_active_zones = None
+                if print_only:
+                    # Still print the would-be command for cluster/offline use.
+                    pass
                 else:
-                    self._log(f"No active zones specified for {tomogram_name}, using all active zones\n")
-            else:
-                self._log(f"No active zones specified for {tomogram_name}, using all active zones\n")
+                    self._log(f"Warning: Tomogram directory not found: {tomogram_path}\n")
+                    continue
             
-            # Build commands for this tomogram
+            # Get synaptic clefts for this tomogram from CSV
+            tomogram_row = df[df['tomoname'] == tomogram_name] if 'tomoname' in df.columns else df[df.iloc[:, 0] == tomogram_name]
+            cleft_ids = None
+            
+            if not tomogram_row.empty and 'cleft_IDs' in df.columns:
+                cleft_ids_str = tomogram_row['cleft_IDs'].iloc[0]
+                if pd.notna(cleft_ids_str) and str(cleft_ids_str).strip():
+                    try:
+                        # Parse synaptic clefts (can be comma-separated or space-separated)
+                        cleft_ids_str = str(cleft_ids_str).strip()
+                        if ',' in cleft_ids_str:
+                            cleft_ids = []
+                            for x in cleft_ids_str.split(','):
+                                x = x.strip()
+                                if x.isdigit():
+                                    cleft_ids.append(int(x))
+                                elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
+                                    cleft_ids.append(int(float(x)))
+                        else:
+                            cleft_ids = []
+                            for x in cleft_ids_str.split():
+                                x = x.strip()
+                                if x.isdigit():
+                                    cleft_ids.append(int(x))
+                                elif x.replace(".", "").isdigit():  # Handle floats like "0.0"
+                                    cleft_ids.append(int(float(x)))
+                        if not print_only:
+                            self._log(f"Using synaptic clefts for {tomogram_name}: {cleft_ids}\n")
+                    except (ValueError, AttributeError):
+                        if not print_only:
+                            self._log(f"Warning: Could not parse synaptic clefts for {tomogram_name}: {cleft_ids_str}\n")
+                        cleft_ids = None
+                elif not print_only:
+                    self._log(f"No synaptic clefts specified for {tomogram_name}, using all synaptic clefts\n")
+            elif not print_only:
+                self._log(f"No synaptic clefts specified for {tomogram_name}, using all synaptic clefts\n")
+            
+            # Build commands for this tomogram for every selected method
             tomogram_commands = []
             
-            if method in ["original", "both"]:
+            if "all_poses" in methods:
                 # Original method - save to all_poses directory
                 original_output_dir = os.path.join(tomogram_path, align_sub, output_dir_relative, "all_poses")
-                os.makedirs(original_output_dir, exist_ok=True)
+                if not print_only:
+                    os.makedirs(original_output_dir, exist_ok=True)
                 
-                cli_original = ["python", "-u", "scripts/run_ampa_poses_analysis.py"]
+                cli_original = ["python", "-u", "-m", "src.synaptic_tomo_tools.poses"]
                 cli_original += ["--tomogram-path", tomogram_path]
                 cli_original += ["--alignment-dir", align_sub]
                 cli_original += ["--output-dir", original_output_dir]
@@ -2318,9 +2660,9 @@ Do you want to continue?"""
                 else:
                     cli_original += ["--no-membrane-distance-cutoff"]
                 
-                # Add active zones if specified
-                if aunp_active_zones is not None:
-                    cli_original += ["--aunp-active-zones"] + [str(az) for az in aunp_active_zones]
+                # Add synaptic clefts if specified
+                if cleft_ids is not None:
+                    cli_original += ["--cleft-ids"] + [str(az) for az in cleft_ids]
                 
                 cli_original += self._cli_aunp_pick_star_pattern_args()
                 
@@ -2331,18 +2673,16 @@ Do you want to continue?"""
                 
                 tomogram_commands.append(("all_poses", cli_original))
             
-            if method in ["optimized", "both"]:
-                # Optimized method - determine output directory based on method
-                optimization_method = self.ampa_optimization_method.get()
-                if optimization_method == "ilp":
-                    method_output_dir_name = "ilp"
-                else:
-                    method_output_dir_name = "greedy"
+            for optimization_method in ("greedy", "ilp"):
+                if optimization_method not in methods:
+                    continue
+                optimized_output_dir = os.path.join(
+                    tomogram_path, align_sub, output_dir_relative, optimization_method
+                )
+                if not print_only:
+                    os.makedirs(optimized_output_dir, exist_ok=True)
                 
-                optimized_output_dir = os.path.join(tomogram_path, align_sub, output_dir_relative, method_output_dir_name)
-                os.makedirs(optimized_output_dir, exist_ok=True)
-                
-                cli_optimized = ["python", "-u", "scripts/run_ampa_poses_analysis.py"]
+                cli_optimized = ["python", "-u", "-m", "src.synaptic_tomo_tools.poses"]
                 cli_optimized += ["--tomogram-path", tomogram_path]
                 cli_optimized += ["--alignment-dir", align_sub]
                 cli_optimized += ["--output-dir", optimized_output_dir]
@@ -2361,14 +2701,11 @@ Do you want to continue?"""
                 else:
                     cli_optimized += ["--no-membrane-distance-cutoff"]
                 
-                # Add active zones if specified
-                if aunp_active_zones is not None:
-                    cli_optimized += ["--aunp-active-zones"] + [str(az) for az in aunp_active_zones]
+                # Add synaptic clefts if specified
+                if cleft_ids is not None:
+                    cli_optimized += ["--cleft-ids"] + [str(az) for az in cleft_ids]
                 
                 cli_optimized += self._cli_aunp_pick_star_pattern_args()
-                
-                # Add optimization method
-                optimization_method = self.ampa_optimization_method.get()
                 cli_optimized += ["--method", optimization_method]
                 
                 # Add PDB file if specified
@@ -2376,25 +2713,32 @@ Do you want to continue?"""
                 if pdb_file:
                     cli_optimized += ["--pdb-file", pdb_file]
                 
-                tomogram_commands.append((method_output_dir_name, cli_optimized))
+                tomogram_commands.append((optimization_method, cli_optimized))
             
             all_commands.append((tomogram_name, tomogram_set, align_sub, tomogram_commands))
         
         if not all_commands:
             self._log("No valid tomograms found to process.\n")
-            return
+            return False
+
+        if print_only:
+            lines = self._processing_mode_print_notes()
+            lines.append(f"# Methods: {methods_label}")
+            for tomogram_name, _tomogram_set, _align_sub, tomogram_commands in all_commands:
+                lines.append(f"# --- {tomogram_name} ---")
+                for method_type, cli in tomogram_commands:
+                    lines.append(f"# {method_type}")
+                    lines.append(self._shell_join(cli))
+            self._print_command_lines("Print command — Pose Prediction", lines)
+            return True
         
         # Run all commands sequentially with real-time output
-        self._log(f"\nStarting {method_names[method]} AMPA poses analysis for {len(all_commands)} tomograms...\n")
+        self._log(f"\nStarting AMPA poses analysis ({methods_label}) for {len(all_commands)} tomograms...\n")
         
         # Use threading to run the entire sequence in background while maintaining real-time output
         def run_sequential_analysis():
-            all_particles_data_original = []
-            all_particles_data_optimized = []
-            all_aunps_data_original = []
-            all_aunps_data_optimized = []
-            all_unpaired_data_original = []
-            all_unpaired_data_optimized = []
+            from collections import defaultdict
+            results_by_method = defaultdict(lambda: {"particles": [], "aunps": [], "unpaired": []})
             successful_tomograms = []
             
             for i, (tomogram_name, tomogram_set, align_sub, tomogram_commands) in enumerate(all_commands, 1):
@@ -2417,30 +2761,24 @@ Do you want to continue?"""
                         self._log(f"WARNING: --method flag not found in command!\n")
                     
                     # Run the subprocess and wait for completion
-                    self._run_subprocess(cli, os.environ.copy())
+                    self._run_subprocess(cli, os.environ.copy(), str(REPO_ROOT))
                     
                     # Try to load the results for combining
                     try:
                         import starfile
                         import pandas as pd
                         
-                        # Determine output directory based on method
-                        if method_type == "all_poses":
-                            # Try the direct all_poses directory first
-                            individual_output_dir = os.path.join(tomogram_path, align_sub, output_dir_relative, "all_poses")
-                            # If that doesn't exist, check for greedy subdirectory (legacy/fallback)
-                            if not os.path.exists(individual_output_dir):
-                                greedy_fallback = os.path.join(tomogram_path, align_sub, output_dir_relative, "all_poses", "greedy")
-                                if os.path.exists(greedy_fallback):
-                                    individual_output_dir = greedy_fallback
-                                    self._log(f"Using fallback directory: {greedy_fallback}\n")
-                        else:  # optimized method - use the actual method directory
-                            optimization_method = self.ampa_optimization_method.get()
-                            if optimization_method == "ilp":
-                                method_dir = "ilp"
-                            else:
-                                method_dir = "greedy"
-                            individual_output_dir = os.path.join(tomogram_path, align_sub, output_dir_relative, method_dir)
+                        individual_output_dir = os.path.join(
+                            tomogram_path, align_sub, output_dir_relative, method_type
+                        )
+                        # Legacy fallback for all_poses nested under greedy
+                        if method_type == "all_poses" and not os.path.exists(individual_output_dir):
+                            greedy_fallback = os.path.join(
+                                tomogram_path, align_sub, output_dir_relative, "all_poses", "greedy"
+                            )
+                            if os.path.exists(greedy_fallback):
+                                individual_output_dir = greedy_fallback
+                                self._log(f"Using fallback directory: {greedy_fallback}\n")
                         
                         # Load the particles file
                         if not os.path.exists(individual_output_dir):
@@ -2454,12 +2792,11 @@ Do you want to continue?"""
                                 if 'particles' in particles_data:
                                     particles_df = particles_data['particles'].copy()
                                     particles_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
-                                    if method_type == "all_poses":
-                                        all_particles_data_original.append(particles_df)
-                                        self._log(f"Added {len(particles_df)} particles to all_poses collection (total: {len(all_particles_data_original)} tomograms)\n")
-                                    else:
-                                        all_particles_data_optimized.append(particles_df)
-                                        self._log(f"Added {len(particles_df)} particles to optimized collection (total: {len(all_particles_data_optimized)} tomograms)\n")
+                                    results_by_method[method_type]["particles"].append(particles_df)
+                                    self._log(
+                                        f"Added {len(particles_df)} particles to {method_type} collection "
+                                        f"(total: {len(results_by_method[method_type]['particles'])} tomograms)\n"
+                                    )
                             else:
                                 self._log(f"Warning: No particles files found in {individual_output_dir}\n")
                             
@@ -2471,10 +2808,7 @@ Do you want to continue?"""
                                 if 'particles' in aunps_data:
                                     aunps_df = aunps_data['particles'].copy()
                                     aunps_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
-                                    if method_type == "all_poses":
-                                        all_aunps_data_original.append(aunps_df)
-                                    else:
-                                        all_aunps_data_optimized.append(aunps_df)
+                                    results_by_method[method_type]["aunps"].append(aunps_df)
                             
                             # Load unpaired AuNPs file (both methods now have this)
                             unpaired_files = [f for f in os.listdir(individual_output_dir) if f.endswith('.star') and '_unpaired_aunps' in f]
@@ -2484,10 +2818,7 @@ Do you want to continue?"""
                                 if 'particles' in unpaired_data:
                                     unpaired_df = unpaired_data['particles'].copy()
                                     unpaired_df['rlnTomoName'] = tomogram_name  # Ensure tomogram name is set
-                                    if method_type == "all_poses":
-                                        all_unpaired_data_original.append(unpaired_df)
-                                    else:
-                                        all_unpaired_data_optimized.append(unpaired_df)
+                                    results_by_method[method_type]["unpaired"].append(unpaired_df)
                     
                     except Exception as e:
                         self._log(f"Warning: Could not load results for {tomogram_name} ({method_type}): {e}\n")
@@ -2497,13 +2828,14 @@ Do you want to continue?"""
             # Save combined star files
             self._log(f"\n{'='*60}\n")
             self._log(f"Preparing to save combined results...\n")
-            self._log(f"all_poses data: {len(all_particles_data_original)} tomograms\n")
-            self._log(f"optimized data: {len(all_particles_data_optimized)} tomograms\n")
+            for method_type in methods:
+                n = len(results_by_method[method_type]["particles"])
+                self._log(f"{method_type} data: {n} tomograms\n")
             self._log(f"{'='*60}\n")
             
             try:
-                # Create results/ampa_poses directory
-                combined_output_dir = "results/ampa_poses"
+                # Create results/poses directory
+                combined_output_dir = "results/poses"
                 os.makedirs(combined_output_dir, exist_ok=True)
                 self._log(f"Created/verified directory: {combined_output_dir}\n")
                 
@@ -2517,98 +2849,101 @@ Do you want to continue?"""
                     membrane_str = "memNONE"
                 else:
                     membrane_str = f"mem{membrane_min_dist}-{membrane_max_dist}nm"
+
+                combined_frames = {}
                 
-                # Save original method results (all poses)
-                if all_particles_data_original:
-                    self._log(f"Combining {len(all_particles_data_original)} all_poses datasets...\n")
-                    combined_particles_original = pd.concat(all_particles_data_original, ignore_index=True)
-                    original_filename = f"all_ampa_poses_all_poses_{aunp_str}_{membrane_str}.star"
-                    starfile.write({
-                        'particles': combined_particles_original,
-                        'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
-                    }, os.path.join(combined_output_dir, original_filename))
-                    self._log(f"Saved combined all poses AMPA poses to {combined_output_dir}/{original_filename}\n")
-                    
-                    if all_aunps_data_original:
-                        combined_aunps_original = pd.concat(all_aunps_data_original, ignore_index=True)
-                        original_aunps_filename = f"all_ampa_poses_all_poses_{aunp_str}_{membrane_str}_paired_aunps.star"
-                        starfile.write({
-                            'particles': combined_aunps_original,
-                            'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
-                        }, os.path.join(combined_output_dir, original_aunps_filename))
-                        self._log(f"Saved combined all poses paired AuNPs to {combined_output_dir}/{original_aunps_filename}\n")
-                
-                # Save optimized method results
-                if all_particles_data_optimized:
-                    combined_particles_optimized = pd.concat(all_particles_data_optimized, ignore_index=True)
-                    # Determine the method name for file naming
-                    optimization_method = self.ampa_optimization_method.get()
-                    method_suffix = optimization_method if optimization_method in ["greedy", "ilp"] else "optimized"
-                    
-                    optimized_filename = f"all_ampa_poses_{method_suffix}_{aunp_str}_{membrane_str}_steric{steric_radius}nm.star"
-                    starfile.write({
-                        'particles': combined_particles_optimized,
-                        'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
-                    }, os.path.join(combined_output_dir, optimized_filename))
-                    self._log(f"Saved combined {method_suffix} AMPA poses to {combined_output_dir}/{optimized_filename}\n")
-                    
-                    if all_aunps_data_optimized:
-                        combined_aunps_optimized = pd.concat(all_aunps_data_optimized, ignore_index=True)
-                        optimized_aunps_filename = f"all_ampa_poses_{method_suffix}_{aunp_str}_{membrane_str}_steric{steric_radius}nm_paired_aunps.star"
-                        starfile.write({
-                            'particles': combined_aunps_optimized,
-                            'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
-                        }, os.path.join(combined_output_dir, optimized_aunps_filename))
-                        self._log(f"Saved combined {method_suffix} paired AuNPs to {combined_output_dir}/{optimized_aunps_filename}\n")
-                    
-                    # Save unpaired AuNPs for all poses method
-                    if all_unpaired_data_original:
-                        combined_unpaired_original = pd.concat(all_unpaired_data_original, ignore_index=True)
-                        unpaired_original_filename = f"all_ampa_poses_all_poses_{aunp_str}_{membrane_str}_unpaired_aunps.star"
-                        starfile.write({
-                            'particles': combined_unpaired_original,
-                            'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
-                        }, os.path.join(combined_output_dir, unpaired_original_filename))
-                        self._log(f"Saved combined all poses unpaired AuNPs to {combined_output_dir}/{unpaired_original_filename}\n")
-                    
-                    # Save unpaired AuNPs for optimized method
-                    if all_unpaired_data_optimized:
-                        combined_unpaired_optimized = pd.concat(all_unpaired_data_optimized, ignore_index=True)
-                        unpaired_optimized_filename = f"all_ampa_poses_{method_suffix}_{aunp_str}_{membrane_str}_steric{steric_radius}nm_unpaired_aunps.star"
-                        starfile.write({
-                            'particles': combined_unpaired_optimized,
-                            'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
-                        }, os.path.join(combined_output_dir, unpaired_optimized_filename))
-                        self._log(f"Saved combined {method_suffix} unpaired AuNPs to {combined_output_dir}/{unpaired_optimized_filename}\n")
-                
-                # Generate comparison report if both methods were run
-                if method == "both" and all_particles_data_original and all_particles_data_optimized:
-                    self._generate_ampa_comparison_report(
-                        combined_output_dir, 
-                        combined_particles_original, 
-                        combined_particles_optimized,
-                        combined_aunps_original if all_aunps_data_original else None,
-                        combined_aunps_optimized if all_aunps_data_optimized else None,
-                        combined_unpaired_original if all_unpaired_data_original else None,
-                        combined_unpaired_optimized if all_unpaired_data_optimized else None
+                for method_type in methods:
+                    bucket = results_by_method[method_type]
+                    if not bucket["particles"]:
+                        continue
+                    self._log(f"Combining {len(bucket['particles'])} {method_type} datasets...\n")
+                    combined_particles = pd.concat(bucket["particles"], ignore_index=True)
+                    combined_aunps = (
+                        pd.concat(bucket["aunps"], ignore_index=True) if bucket["aunps"] else None
                     )
+                    combined_unpaired = (
+                        pd.concat(bucket["unpaired"], ignore_index=True) if bucket["unpaired"] else None
+                    )
+                    combined_frames[method_type] = {
+                        "particles": combined_particles,
+                        "aunps": combined_aunps,
+                        "unpaired": combined_unpaired,
+                    }
+
+                    if method_type == "all_poses":
+                        particles_filename = f"all_ampa_poses_all_poses_{aunp_str}_{membrane_str}.star"
+                        paired_filename = f"all_ampa_poses_all_poses_{aunp_str}_{membrane_str}_paired_aunps.star"
+                        unpaired_filename = f"all_ampa_poses_all_poses_{aunp_str}_{membrane_str}_unpaired_aunps.star"
+                    else:
+                        particles_filename = (
+                            f"all_ampa_poses_{method_type}_{aunp_str}_{membrane_str}_steric{steric_radius}nm.star"
+                        )
+                        paired_filename = (
+                            f"all_ampa_poses_{method_type}_{aunp_str}_{membrane_str}_steric{steric_radius}nm_paired_aunps.star"
+                        )
+                        unpaired_filename = (
+                            f"all_ampa_poses_{method_type}_{aunp_str}_{membrane_str}_steric{steric_radius}nm_unpaired_aunps.star"
+                        )
+
+                    starfile.write({
+                        'particles': combined_particles,
+                        'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
+                    }, os.path.join(combined_output_dir, particles_filename))
+                    self._log(f"Saved combined {method_type} AMPA poses to {combined_output_dir}/{particles_filename}\n")
+
+                    if combined_aunps is not None:
+                        starfile.write({
+                            'particles': combined_aunps,
+                            'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
+                        }, os.path.join(combined_output_dir, paired_filename))
+                        self._log(f"Saved combined {method_type} paired AuNPs to {combined_output_dir}/{paired_filename}\n")
+
+                    if combined_unpaired is not None:
+                        starfile.write({
+                            'particles': combined_unpaired,
+                            'optics': pd.DataFrame([{'rlnOpticsGroup': 1}])
+                        }, os.path.join(combined_output_dir, unpaired_filename))
+                        self._log(f"Saved combined {method_type} unpaired AuNPs to {combined_output_dir}/{unpaired_filename}\n")
+                
+                # Generate comparison report(s) when all poses and at least one optimized method ran
+                if "all_poses" in combined_frames:
+                    for opt_method in ("greedy", "ilp"):
+                        if opt_method not in combined_frames:
+                            continue
+                        orig = combined_frames["all_poses"]
+                        opt = combined_frames[opt_method]
+                        self._generate_ampa_comparison_report(
+                            combined_output_dir,
+                            orig["particles"],
+                            opt["particles"],
+                            orig["aunps"],
+                            opt["aunps"],
+                            orig["unpaired"],
+                            opt["unpaired"],
+                            optimized_method_name=opt_method,
+                        )
                     
             except Exception as e:
                 import traceback
                 self._log(f"Error saving combined results: {e}\n")
                 self._log(f"Traceback: {traceback.format_exc()}\n")
             
-            self._log(f"\n{method_names[method]} AMPA poses analysis completed for {len(all_commands)} tomograms.\n")
+            self._log(f"\nAMPA poses analysis ({methods_label}) completed for {len(all_commands)} tomograms.\n")
             self._log(f"Results saved to: {output_dir_relative} within each tomogram's STT_results directory\n")
-            if all_particles_data_original or all_particles_data_optimized:
-                self._log(f"Combined results saved to: results/ampa_poses/\n")
+            if any(results_by_method[m]["particles"] for m in methods):
+                self._log(f"Combined results saved to: results/poses/\n")
         
-        # Start the sequential analysis in a background thread
-        threading.Thread(target=run_sequential_analysis).start()
+        if blocking:
+            run_sequential_analysis()
+        else:
+            # Start the sequential analysis in a background thread
+            threading.Thread(target=run_sequential_analysis).start()
+        return True
 
     def _generate_ampa_comparison_report(self, output_dir, original_particles, optimized_particles, 
                                        original_aunps=None, optimized_aunps=None, 
-                                       original_unpaired_aunps=None, optimized_unpaired_aunps=None):
+                                       original_unpaired_aunps=None, optimized_unpaired_aunps=None,
+                                       optimized_method_name=None):
         """Generate a comparison report between original and optimized AMPA analysis methods."""
         try:
             import pandas as pd
@@ -2636,8 +2971,10 @@ Do you want to continue?"""
                     all_poses_steric_clashes = len(clashes)
             
             # Create comparison summary
-            optimization_method = self.ampa_optimization_method.get()
-            method_display_name = optimization_method.upper() if optimization_method in ["greedy", "ilp"] else "Optimized"
+            if optimized_method_name in ("greedy", "ilp"):
+                method_display_name = optimized_method_name.upper()
+            else:
+                method_display_name = "Optimized"
             comparison_data = {
                 'Method': ['All Poses', method_display_name],
                 'Total_AMPA_Poses': [
@@ -2667,7 +3004,8 @@ Do you want to continue?"""
             }
             
             comparison_df = pd.DataFrame(comparison_data)
-            comparison_file = os.path.join(output_dir, "ampa_poses_comparison.csv")
+            suffix = f"_{optimized_method_name}" if optimized_method_name else ""
+            comparison_file = os.path.join(output_dir, f"ampa_poses_comparison{suffix}.csv")
             comparison_df.to_csv(comparison_file, index=False)
             
             self._log(f"Generated comparison report: {comparison_file}\n")
@@ -2677,9 +3015,6 @@ Do you want to continue?"""
                 poses_reduction = (len(original_particles) - len(optimized_particles)) / len(original_particles) * 100
                 self._log(f"AMPA poses reduction (overpicking eliminated): {poses_reduction:.1f}%\n")
                 self._log(f"All poses method: {len(original_particles)} poses with {all_poses_steric_clashes} steric clashes\n")
-                # Get the actual method name for display
-                optimization_method = self.ampa_optimization_method.get()
-                method_display_name = optimization_method.upper() if optimization_method in ["greedy", "ilp"] else "Optimized"
                 self._log(f"{method_display_name} method: {len(optimized_particles)} high-quality poses with 0 steric clashes\n")
                 if all_poses_steric_clashes > 0:
                     self._log(f"Steric clashes eliminated: {all_poses_steric_clashes} (biologically impossible poses removed)\n")
@@ -2693,6 +3028,7 @@ Do you want to continue?"""
         except Exception as e:
             self._log(f"Error generating comparison report: {e}\n")
 
+    def _generate_zonogram_pdf(self):
         """Generate a comprehensive PDF showing all zonogram images from all tomograms."""
         if not self.csv_path.get():
             messagebox.showerror("Error", "Please select a CSV file first.")
@@ -2831,7 +3167,7 @@ Do you want to continue?"""
                                 spaceAfter=10,
                                 textColor=colors.darkgreen
                             )
-                            story.append(Paragraph(f"Active Zone: {zone_name}", zone_style))
+                            story.append(Paragraph(f"Cleft: {zone_name}", zone_style))
                             
                             # Add the image (preserve aspect ratio but ensure it fits on page)
                             # First, get the original image dimensions

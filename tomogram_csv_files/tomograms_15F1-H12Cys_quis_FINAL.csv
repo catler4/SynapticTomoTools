@@ -1,8 +1,8 @@
-tomoname,set,alignment_dir,activezone,vesicles,aunps,aunp_active_zones
-20251027_CZII_AMmilled41-1_H1-2Cys_quis_Position_14_3,15F1-H12Cys_quis,liza_az0,True,True,True,0
-20251027_CZII_AMmilled41-1_H1-2Cys_quis_Position_17,15F1-H12Cys_quis,liza_az0,True,True,True,0
-20251027_CZII_AMmilled41-1_H1-2Cys_quis_Position_5_2,15F1-H12Cys_quis,best_alignment,True,True,True,0
-20251027_CZII_AMmilled41-3_H1-2Cys_quis_Position_1,15F1-H12Cys_quis,best_alignment,True,True,True,0
-20251027_CZII_AMmilled41-3_H1-2Cys_quis_Position_1_2,15F1-H12Cys_quis,liza_az0,True,True,True,0
-20251027_CZII_AMmilled41-3_H1-2Cys_quis_Position_32,15F1-H12Cys_quis,liza_az0,True,True,True,0
-20251027_CZII_AMmilled41-3_H1-2Cys_quis_Position_32_2,15F1-H12Cys_quis,liza_az0,True,True,True,0
+tomoname,set,alignment_dir,cleft_IDs
+20251027_CZII_AMmilled41-1_H1-2Cys_quis_Position_14_3,15F1-H12Cys_quis,liza_az0,0
+20251027_CZII_AMmilled41-1_H1-2Cys_quis_Position_17,15F1-H12Cys_quis,liza_az0,0
+20251027_CZII_AMmilled41-1_H1-2Cys_quis_Position_5_2,15F1-H12Cys_quis,best_alignment,0
+20251027_CZII_AMmilled41-3_H1-2Cys_quis_Position_1,15F1-H12Cys_quis,best_alignment,0
+20251027_CZII_AMmilled41-3_H1-2Cys_quis_Position_1_2,15F1-H12Cys_quis,liza_az0,0
+20251027_CZII_AMmilled41-3_H1-2Cys_quis_Position_32,15F1-H12Cys_quis,liza_az0,0
+20251027_CZII_AMmilled41-3_H1-2Cys_quis_Position_32_2,15F1-H12Cys_quis,liza_az0,0

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Generate summary PDF for each tomogram after analysis.
-Includes: combined visualization, aunp cluster overlay, aunp clusters visualization, total aunp #, aunp cluster #, total vesicle #, and active zone-adjacent (<20 nm) vesicle #.
+Includes: combined visualization, aunp cluster overlay, aunp clusters visualization, total aunp #, aunp cluster #, total vesicle #, and synaptic cleft-adjacent (<20 nm) vesicle #.
 """
 import os
 import glob
@@ -106,9 +106,9 @@ def get_stats(tomo_name, base_data_dir, selected_az_indices=None, *, alignment_d
             import starfile
             df = starfile.read(aunp_star[0])
             
-            # Filter by selected active zones if specified
+            # Filter by selected synaptic clefts if specified
             if selected_az_indices is not None:
-                df = df[df['active_zone'].isin(selected_az_indices)]
+                df = df[df['cleft'].isin(selected_az_indices)]
             
             # Total AuNPs: count all AuNPs (including noise cluster -1)
             stats['total_aunps'] = len(df)
@@ -137,7 +137,7 @@ def get_active_zonogram_images(tomo_name, base_data_dir, selected_az_indices=Non
     position_imgs = sorted(az_dir.glob('active_zonogram_*_position.png'))
     selected_imgs = sorted(az_dir.glob('active_zonogram_*_selected_aunps_manual.png'))
     
-    # Filter by selected active zone indices if provided
+    # Filter by selected synaptic cleft indices if provided
     if selected_az_indices is not None:
         # Convert to set for faster lookup
         selected_indices = set(selected_az_indices)
@@ -184,7 +184,7 @@ def load_tomo_set_map(tomocsv_path):
             alignment_dir = require_alignment_dir(
                 row.get("alignment_dir"), context=f"tomogram {tomo}"
             )
-            az = (row.get("aunp_active_zones") or "").strip()
+            az = (row.get("cleft_IDs") or "").strip()
             az_indices = None
             az_display = "All"
             if az:
@@ -198,14 +198,14 @@ def load_tomo_set_map(tomocsv_path):
                         elif x.replace(".", "").isdigit():
                             az_indices.append(int(float(x)))
                 except ValueError:
-                    print(f"Warning: Could not parse active zone indices for {tomo}: {az}")
+                    print(f"Warning: Could not parse synaptic cleft indices for {tomo}: {az}")
                     az_indices = None
             rows_out.append(
                 {
                     "tomoname": tomo,
                     "set": set_name,
                     "alignment_dir": alignment_dir,
-                    "aunp_active_zones_str": az_display,
+                    "cleft_IDs_str": az_display,
                     "az_indices": az_indices,
                 }
             )
@@ -278,7 +278,7 @@ def generate_pdf_for_tomogram(
         info_y -= 18
     if az_info:
         c.setFont("Helvetica", 12)
-        c.drawString(margin, info_y, f"Active zones included: {az_info}")
+        c.drawString(margin, info_y, f"Synaptic clefts included: {az_info}")
         info_y -= 16
     stats = get_stats(tomo_name, base_data_dir, selected_az_indices, alignment_dir=alignment_dir)
     c.setFont("Helvetica", 12)
@@ -293,18 +293,18 @@ def generate_pdf_for_tomogram(
     y -= info_box_height
     # Add a consistent gap before the first figure
     y -= 16
-    # Add images - create one set of all visualizations per active zone
+    # Add images - create one set of all visualizations per synaptic cleft
     img_types = []
     if selected_az_indices is not None and len(selected_az_indices) > 0:
-        # Add all visualizations for each active zone
+        # Add all visualizations for each synaptic cleft
         for az_idx in selected_az_indices:
-            # Add active zonogram images for this active zone
+            # Add active zonogram images for this synaptic cleft
             img_types.append((f"Active Zonogram Position (AZ {az_idx})", f"active_zonogram_{az_idx}_position.png"))
             img_types.append((f"Active Zonogram Selected AuNPs manual (AZ {az_idx})", f"active_zonogram_{az_idx}_selected_aunps_manual.png"))
-            # Add main visualizations for this active zone
+            # Add main visualizations for this synaptic cleft
             img_types.append((f"Analysis Summary (AZ {az_idx})", f"{tomo_name}_combined_az{az_idx}.png"))
             img_types.append((f"AuNP Clusters Overlay (AZ {az_idx})", f"{tomo_name}_combined_aunpclusters_az{az_idx}.png"))
-            # Add cluster image for this active zone - need to find the actual zone name
+            # Add cluster image for this synaptic cleft - need to find the actual zone name
             # Look for the actual active zonogram cluster file
             # Look in the new organized structure for cluster files
             az_dir_organized = viz_root / "active_zonograms" / "full"
@@ -316,26 +316,26 @@ def generate_pdf_for_tomogram(
             if cluster_files:
                 actual_filename = cluster_files[0].name
                 print(f"Adding cluster image: {actual_filename}")
-                img_types.append((f"Active Zone AuNP Clusters (AZ {az_idx})", actual_filename))
+                img_types.append((f"Cleft AuNP Clusters (AZ {az_idx})", actual_filename))
             else:
                 # Fallback to default pattern
-                fallback_filename = f"{tomo_name}_active_zonogram_active_zone_pre1_post1_selected_aunps_by_cluster_az{az_idx}.png"
+                fallback_filename = f"{tomo_name}_active_zonogram_cleft_pre1_post1_selected_aunps_by_cluster_az{az_idx}.png"
                 print(f"No cluster files found, using fallback: {fallback_filename}")
-                img_types.append((f"Active Zone AuNP Clusters (AZ {az_idx})", fallback_filename))
+                img_types.append((f"Cleft AuNP Clusters (AZ {az_idx})", fallback_filename))
     else:
-        # No active zones specified - use az0 as default
+        # No synaptic clefts specified - use az0 as default
         img_types = [
             ("Active Zonogram Position (AZ 0)", f"active_zonogram_0_position.png"),
             ("Active Zonogram Selected AuNPs manual (AZ 0)", f"active_zonogram_0_selected_aunps_manual.png"),
             ("Analysis Summary (AZ 0)", f"{tomo_name}_combined_az0.png"),
             ("AuNP Clusters Overlay (AZ 0)", f"{tomo_name}_combined_aunpclusters_az0.png"),
-            ("Active Zone AuNP Clusters (AZ 0)", f"{tomo_name}_active_zonogram_active_zone_pre1_post1_selected_aunps_by_cluster_az0.png"),
+            ("Cleft AuNP Clusters (AZ 0)", f"{tomo_name}_active_zonogram_cleft_pre1_post1_selected_aunps_by_cluster_az0.png"),
         ]
-    # Group images by active zone and render each group
+    # Group images by synaptic cleft and render each group
     img_paths = []
     for _, fname in img_types:
         print(f"Processing image: {fname}")
-        if "active_zonogram" in fname and "active_zone_pre1_post1" not in fname and "selected_aunps_by_cluster" not in fname:
+        if "active_zonogram" in fname and "cleft_pre1_post1" not in fname and "selected_aunps_by_cluster" not in fname:
             # position.png and selected_aunps_manual.png under tomogram .../active_zonograms/
             tomo_dirs = list(base_data_dir.glob(f"**/{tomo_name}"))
             if tomo_dirs:
@@ -377,17 +377,17 @@ def generate_pdf_for_tomogram(
             img_paths.append(img_path)
     img_labels = [label for label, _ in img_types]
     
-    # Group images by active zone
+    # Group images by synaptic cleft
     az_groups = {}
     for i, (label, path) in enumerate(zip(img_labels, img_paths)):
-        # Extract active zone number from label
+        # Extract synaptic cleft number from label
         if "(AZ " in label:
             az_num = label.split("(AZ ")[1].split(")")[0]
             if az_num not in az_groups:
                 az_groups[az_num] = []
             az_groups[az_num].append((label, path))
     
-    # Render each active zone group across 2 pages
+    # Render each synaptic cleft group across 2 pages
     for i, az_num in enumerate(sorted(az_groups.keys())):
         az_images = az_groups[az_num]
         
@@ -398,7 +398,7 @@ def generate_pdf_for_tomogram(
         for label, path in az_images:
             if "Active Zonogram Position" in label or "Active Zonogram Selected AuNPs" in label:
                 zonogram_imgs.append((label, path))
-            elif "Active Zone AuNP Clusters" in label:
+            elif "Cleft AuNP Clusters" in label:
                 cluster_img = (label, path)
             else:
                 main_vis.append((label, path))
@@ -411,10 +411,10 @@ def generate_pdf_for_tomogram(
             max_height = 320
             
             # PAGE 1: Active zonogram images (stacked vertically)
-            # For the first active zone, put zonogram images on the same page as header
-            # For subsequent active zones, start a new page
+            # For the first synaptic cleft, put zonogram images on the same page as header
+            # For subsequent synaptic clefts, start a new page
             if zonogram_imgs:
-                if i > 0:  # Not the first active zone
+                if i > 0:  # Not the first synaptic cleft
                     # Check if we need a new page
                     needed_height = (max_height + 22) * len(zonogram_imgs)
                     if y < needed_height:
@@ -457,17 +457,17 @@ def generate_pdf_for_tomogram(
                 y -= nh
                 y -= 12
         else:
-            # Required images not found for this active zone - fail with error
+            # Required images not found for this synaptic cleft - fail with error
             missing_files = []
             for label, path in az_images:
                 if not path.exists():
                     missing_files.append(str(path))
             
             if missing_files:
-                error_msg = f"Error: Required image files not found for {tomo_name} Active Zone {az_num}:\n" + "\n".join(missing_files)
+                error_msg = f"Error: Required image files not found for {tomo_name} Cleft {az_num}:\n" + "\n".join(missing_files)
                 print(error_msg)
                 c.setFont("Helvetica-Bold", 16)
-                c.drawString(margin, y, f"ERROR: Missing required images for {tomo_name} Active Zone {az_num}")
+                c.drawString(margin, y, f"ERROR: Missing required images for {tomo_name} Cleft {az_num}")
                 y -= 30
                 c.setFont("Helvetica", 12)
                 for missing_file in missing_files:
@@ -541,7 +541,7 @@ def main():
             tomogram_pdf_dir,
             alignment_dir=row["alignment_dir"],
             set_name=row["set"],
-            az_info=row["aunp_active_zones_str"],
+            az_info=row["cleft_IDs_str"],
             selected_az_indices=row["az_indices"],
         )
         pdf_path = tomogram_pdf_dir / f"{row['tomoname']}_summary.pdf"

@@ -47,7 +47,7 @@ class ResultsManager:
         
         Args:
             tomogram_name: Name of the tomogram
-            analysis_type: Type of analysis (e.g., 'activezone', 'vesicles', 'aunps')
+            analysis_type: Type of analysis (e.g., 'cleft', 'vesicles', 'aunps')
             results: Dictionary of results to store
             overwrite: Whether to overwrite existing results
             set_name: Name of the experimental set (optional)
@@ -175,8 +175,8 @@ class ResultsManager:
                     continue
                 
                 # Handle other nested structures with shorter names
-                if key == 'active_zone' and isinstance(value, dict):
-                    # Flatten active zone data with shorter prefixes
+                if key == 'cleft' and isinstance(value, dict):
+                    # Flatten synaptic cleft data with shorter prefixes
                     nested = self._flatten_results(value, "")
                     flattened.update(nested)
                     continue
@@ -218,13 +218,13 @@ class ResultsManager:
         
         return flattened
     
-    def export_activezone_per_zone_csv(self) -> Optional[Path]:
-        """Export active zone results as one row per tomogram + active zone."""
+    def export_cleft_per_zone_csv(self) -> Optional[Path]:
+        """Export synaptic cleft results as one row per tomogram + synaptic cleft."""
         rows: List[Dict[str, Any]] = []
         for results_key, analyses in self.results.items():
-            if "activezone" not in analyses or "results" not in analyses["activezone"]:
+            if "cleft" not in analyses or "results" not in analyses["cleft"]:
                 continue
-            data = analyses["activezone"]
+            data = analyses["cleft"]
             results = data["results"]
             set_name = data.get("set_name", "") or ""
             alignment_dir = data.get("alignment_dir", "") or ""
@@ -235,14 +235,14 @@ class ResultsManager:
             else:
                 tomogram_name = results_key
 
-            from .activezone import build_activezone_per_zone_rows
+            from .cleft import build_cleft_per_zone_rows
 
             rows.extend(
-                build_activezone_per_zone_rows(
+                build_cleft_per_zone_rows(
                     tomogram_name=tomogram_name,
                     set_name=set_name,
                     alignment_dir=alignment_dir,
-                    az_results=results.get("active_zone", {}),
+                    az_results=results.get("cleft", {}),
                     cleft_results=results.get("cleft_width", {}),
                 )
             )
@@ -250,14 +250,14 @@ class ResultsManager:
         if not rows:
             return None
 
-        csv_path = self.results_dir / "activezone" / "activezone_results.csv"
+        csv_path = self.results_dir / "cleft" / "cleft_results.csv"
         csv_path.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(rows).to_csv(csv_path, index=False)
-        print(f"Exported activezone results to {csv_path} ({len(rows)} zone rows)")
+        print(f"Exported cleft results to {csv_path} ({len(rows)} zone rows)")
         return csv_path
 
     def export_aunps_per_zone_csv(self) -> Optional[Path]:
-        """Export AuNP results as one row per tomogram + active zone."""
+        """Export AuNP results as one row per tomogram + synaptic cleft."""
         rows: List[Dict[str, Any]] = []
         skipped = 0
         for results_key, analyses in self.results.items():
@@ -309,7 +309,7 @@ class ResultsManager:
         
         for tomogram_name, analyses in self.results.items():
             for analysis_type, data in analyses.items():
-                if analysis_type in ("activezone", "aunps"):
+                if analysis_type in ("cleft", "aunps"):
                     continue
                 if 'results' in data:
                     if analysis_type not in analysis_groups:
@@ -334,9 +334,9 @@ class ResultsManager:
         
         # Export each analysis type to its own CSV file in step-specific subdirectories
         exported_files = []
-        activezone_csv = self.export_activezone_per_zone_csv()
-        if activezone_csv is not None:
-            exported_files.append(activezone_csv)
+        cleft_csv = self.export_cleft_per_zone_csv()
+        if cleft_csv is not None:
+            exported_files.append(cleft_csv)
         aunps_csv = self.export_aunps_per_zone_csv()
         if aunps_csv is not None:
             exported_files.append(aunps_csv)

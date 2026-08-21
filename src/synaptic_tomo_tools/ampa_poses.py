@@ -1607,7 +1607,7 @@ def load_postsynaptic_coordinates(tomo_path, alignment_dir: str):
 def run_ampa_poses_analysis_original(
     tomo_path,
     output_dir,
-    aunp_active_zones=None,
+    cleft_ids=None,
     inter_aunp_distance=(6, 12),
     aunp_membrane_distance=(17, 23),
     pdb_file=None,
@@ -1623,11 +1623,11 @@ def run_ampa_poses_analysis_original(
     Args:
         tomo_path: Path to tomogram directory
         output_dir: Output directory for results
-        aunp_active_zones: List of active zone indices to analyze (None for all)
+        cleft_ids: List of synaptic cleft indices to analyze (None for all)
         inter_aunp_distance: Tuple of (min, max) distance between AuNPs in nm
         aunp_membrane_distance: Tuple of (min, max) distance from AuNP to membrane in nm
         pdb_file: Path to PDB file for structure template
-        aunp_pick_star_pattern: Per-AZ pick STAR filename pattern with ``*`` for the active zone index
+        aunp_pick_star_pattern: Per-AZ pick STAR filename pattern with ``*`` for the synaptic cleft index
             (default: ``aunp_tm_BP_active_zone_*_manual_refined.star``).
         
     Returns:
@@ -1655,21 +1655,21 @@ def run_ampa_poses_analysis_original(
     from .aunps import discover_aunp_pick_star_files, normalize_aunp_pick_star_pattern
 
     pick_pattern = normalize_aunp_pick_star_pattern(aunp_pick_star_pattern)
-    if aunp_active_zones is not None:
-        print(f"  Loading active zones: {aunp_active_zones}")
+    if cleft_ids is not None:
+        print(f"  Loading synaptic clefts: {cleft_ids}")
     else:
         print(f"  Loading pick STAR files matching pattern: {pick_pattern}")
     discovered = discover_aunp_pick_star_files(
-        aunps_dir, aunp_active_zones, pattern=pick_pattern
+        aunps_dir, cleft_ids, pattern=pick_pattern
     )
     aunp_files = [path for _, path in discovered]
     for az_id, az_file in discovered:
         print(f"    Found AZ {az_id}: {az_file.name}")
-    if aunp_active_zones is not None:
+    if cleft_ids is not None:
         found_ids = {az_id for az_id, _ in discovered}
-        for az_id in aunp_active_zones:
+        for az_id in cleft_ids:
             if az_id not in found_ids:
-                print(f"    ⚠️  Missing pick STAR for active zone {az_id}")
+                print(f"    ⚠️  Missing pick STAR for synaptic cleft {az_id}")
     
     if not aunp_files:
         print(f"❌ No AuNP pick STAR files found matching {pick_pattern!r} in {aunps_dir}")
@@ -1965,7 +1965,7 @@ def run_ampa_poses_analysis_original(
 def run_ampa_poses_analysis_optimized(
     tomo_path,
     output_dir,
-    aunp_active_zones=None,
+    cleft_ids=None,
     inter_aunp_distance=(6, 12),
     aunp_membrane_distance=(17, 23),
     ampa_steric_radius=5.0,
@@ -1980,13 +1980,13 @@ def run_ampa_poses_analysis_optimized(
     Args:
         tomo_path: Path to tomogram directory
         output_dir: Directory to save results
-        aunp_active_zones: List of active zone indices to analyze (None for all)
+        cleft_ids: List of synaptic cleft indices to analyze (None for all)
         inter_aunp_distance: Tuple of (min, max) distance between AuNPs in nm
         aunp_membrane_distance: Tuple of (min, max) distance from AuNP to membrane in nm
         ampa_steric_radius: Minimum distance between particle positions in nm
         method: Optimization method ("greedy" or "ilp")
         pdb_file: Path to PDB file for structure template (None to skip PDB generation)
-        aunp_pick_star_pattern: Per-AZ pick STAR filename pattern with ``*`` for the active zone index
+        aunp_pick_star_pattern: Per-AZ pick STAR filename pattern with ``*`` for the synaptic cleft index
             (default: ``aunp_tm_BP_active_zone_*_manual_refined.star``).
         
     Returns:
@@ -2010,25 +2010,25 @@ def run_ampa_poses_analysis_optimized(
     from .aunps import discover_aunp_pick_star_files, normalize_aunp_pick_star_pattern
 
     pick_pattern = normalize_aunp_pick_star_pattern(aunp_pick_star_pattern)
-    if aunp_active_zones is not None:
-        print(f"  Loading active zones: {aunp_active_zones}")
+    if cleft_ids is not None:
+        print(f"  Loading synaptic clefts: {cleft_ids}")
     else:
         print(f"  Loading pick STAR files matching pattern: {pick_pattern}")
     discovered = discover_aunp_pick_star_files(
-        aunps_dir, aunp_active_zones, pattern=pick_pattern
+        aunps_dir, cleft_ids, pattern=pick_pattern
     )
     aunp_files = [path for _, path in discovered]
     for az_id, az_file in discovered:
         print(f"    Found AZ {az_id}: {az_file.name}")
     missing = []
-    if aunp_active_zones is not None:
+    if cleft_ids is not None:
         found_ids = {az_id for az_id, _ in discovered}
-        for az_id in aunp_active_zones:
+        for az_id in cleft_ids:
             if az_id not in found_ids:
                 missing.append(az_id)
         for az_id in missing:
-            print(f"    ⚠️  Missing pick STAR for active zone {az_id}")
-    if not discovered and aunp_active_zones is None:
+            print(f"    ⚠️  Missing pick STAR for synaptic cleft {az_id}")
+    if not discovered and cleft_ids is None:
         print(f"    ⚠️  No pick STAR files found matching {pick_pattern!r}")
     
     if not aunp_files:

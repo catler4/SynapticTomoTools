@@ -4,7 +4,7 @@ Compare AuNP→membrane distances: STT outer/inner mean vs Surface Morphometrics
 
 For each tomogram in an STT tomograms.csv, loads:
   - AuNP picks: aunp_tm_BP_active_zone_*_manual_refined.star (override with --aunp-pick-star-pattern)
-  - STT AZ inner/outer point clouds from STT_results/activezone/
+  - STT AZ inner/outer point clouds from STT_results/cleft/
   - SM midplane meshes:
       <alignment_dir>/surface_morphometrics/<tomoname>_cleft_pre.ply
       <alignment_dir>/surface_morphometrics/<tomoname>_cleft_post.ply
@@ -20,7 +20,7 @@ Only **synaptic** AuNPs are analyzed by default (same STT rule):
 
 How to run
 ----------
-  PYTHONPATH=src python scripts/compare_aunp_membrane_distance_stt_vs_morphometrics.py \\
+  PYTHONPATH=src python scripts/surface_morphometrics/compare_aunp_membrane_distance_stt_vs_morphometrics.py \\
     --csv tomogram_csv_files/tomograms_15F1-H12Cys_FINAL.csv \\
     --data-dir data \\
     --output-dir results/aunp_membrane_distance_stt_vs_morphometrics
@@ -50,10 +50,10 @@ import trimesh
 from scipy import stats
 from scipy.spatial import KDTree
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from synaptic_tomo_tools.activezone import import_active_zone_segmentations
+from synaptic_tomo_tools.cleft import import_cleft_segmentations
 from synaptic_tomo_tools.alignment_utils import require_alignment_dir
 from synaptic_tomo_tools.aunps import (
     DEFAULT_AUNP_PICK_STAR_PATTERN,
@@ -71,7 +71,7 @@ def default_data_root() -> Path:
 
 
 def parse_az_indices(value) -> list[int] | None:
-    """Parse CSV aunp_active_zones; None means discover all matching STAR files."""
+    """Parse CSV cleft_IDs; None means discover all matching STAR files."""
     if value is None:
         return None
     s = str(value).strip()
@@ -112,8 +112,8 @@ def load_csv_jobs(
             print(f"Skipping row with missing tomoname/set: {row.to_dict()}")
             continue
         az_indices = None
-        if "aunp_active_zones" in df.columns:
-            az_indices = parse_az_indices(row.get("aunp_active_zones"))
+        if "cleft_IDs" in df.columns:
+            az_indices = parse_az_indices(row.get("cleft_IDs"))
         tomo_path = Path(data_dir) / row_set / "TOP_TOMOS" / tomoname
         jobs.append((tomo_path, alignment_dir, row_set, az_indices))
     return jobs
@@ -177,7 +177,7 @@ def stt_outer_inner_mean_distances(
     tomogram_path: Path,
     alignment_dir: str,
 ) -> dict[str, np.ndarray]:
-    az_segmentations = import_active_zone_segmentations(
+    az_segmentations = import_cleft_segmentations(
         tomogram_path, alignment_dir=alignment_dir
     )
     pre_outer = stack_clouds(
@@ -732,13 +732,13 @@ def analyze_one(
         return None
 
     coords = df[list(COORD_COLS)].to_numpy(dtype=float)
-    print(f"  AuNPs loaded: {len(coords):,} (zones={sorted(df['active_zone'].unique().tolist())})")
+    print(f"  AuNPs loaded: {len(coords):,} (zones={sorted(df['cleft'].unique().tolist())})")
 
     # STT outer/inner mean
     try:
         stt = stt_outer_inner_mean_distances(coords, tomogram_path, alignment_dir)
     except Exception as exc:
-        print(f"  SKIP: could not load STT active-zone segmentations: {exc}")
+        print(f"  SKIP: could not load STT synaptic-cleft segmentations: {exc}")
         return None
     print(
         f"  STT AZ points: pre outer/inner={stt['n_pre_outer_points']:,}/"
@@ -858,7 +858,7 @@ def main(argv: list[str] | None = None) -> int:
         "--aunp-pick-star-pattern",
         type=str,
         default=DEFAULT_AUNP_PICK_STAR_PATTERN,
-        help="AuNP STAR pattern (* = active-zone index)",
+        help="AuNP STAR pattern (* = synaptic-cleft index)",
     )
     parser.add_argument(
         "--mesh-scale",

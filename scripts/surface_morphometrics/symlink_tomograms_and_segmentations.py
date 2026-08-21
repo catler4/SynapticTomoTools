@@ -7,7 +7,7 @@ How to run
 ----------
 From the SynapticTomoTools repo (or anywhere), with the CSV and data root set:
 
-  python scripts/symlink_tomograms_and_segmentations.py \\
+  python scripts/surface_morphometrics/symlink_tomograms_and_segmentations.py \\
     --csv tomogram_csv_files/tomograms_15F1-H12Cys_quis_FINAL.csv \\
     --data-dir data \\
     --output-dir /path/to/project

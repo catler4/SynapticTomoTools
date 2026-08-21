@@ -86,7 +86,7 @@ from .ripley_library import (
     g_shell_reliability_mask,
     label_permutation_k_bidirectional_curves,
     load_monomer_dimer_aunps_for_zone,
-    load_synaptic_cleft_active_zone_points,
+    load_synaptic_cleft_cleft_points,
     mad_result_to_curves_dataframe,
     mad_result_to_summary_row,
     plot_ripley_window_geometry_diagnostic,
@@ -108,7 +108,7 @@ SIMULATED_STAR_COLS = (
     "faCoordinateX",
     "faCoordinateY",
     "faCoordinateZ",
-    "active_zone",
+    "cleft",
     "postsynapse",
 )
 
@@ -144,7 +144,7 @@ def _extract_curves_matrix(df: pd.DataFrame, value_col: str) -> tuple[np.ndarray
     sub = df.copy()
     r_vals = np.sort(sub["r_nm"].unique())
     n_r = len(r_vals)
-    id_cols = ["tomogram_name", "alignment_dir", "active_zone_name"]
+    id_cols = ["tomogram_name", "alignment_dir", "cleft_name"]
     for col in id_cols:
         if col not in sub.columns:
             sub[col] = ""
@@ -294,7 +294,7 @@ def _greedy_seg_k_bidir_one_replicate(
 def _load_pool_star_dataframe_for_export(
     tomogram_path: Path,
     alignment_dir: str,
-    active_zone_index: int,
+    cleft_index: int,
     *,
     monomer_star_pattern: Optional[str] = None,
     dimer_star_pattern: Optional[str] = None,
@@ -310,12 +310,12 @@ def _load_pool_star_dataframe_for_export(
             aunps_dir,
             tomogram_name,
             alignment_dir,
-            int(active_zone_index),
+            int(cleft_index),
             kind=kind,  # type: ignore[arg-type]
             pattern=monomer_star_pattern if kind == "monomer" else dimer_star_pattern,
         )
         if path is None:
-            raise FileNotFoundError(f"Missing {kind} STAR for zone {active_zone_index}")
+            raise FileNotFoundError(f"Missing {kind} STAR for zone {cleft_index}")
         df = _read_aunp_pick_star_dataframe(path)
         if df is None or df.empty:
             raise ValueError(f"Empty or unreadable {kind} STAR: {path}")
@@ -323,8 +323,8 @@ def _load_pool_star_dataframe_for_export(
         if missing:
             raise ValueError(f"{path} missing columns: {missing}")
         part = df.copy()
-        if "active_zone" not in part.columns:
-            part["active_zone"] = int(active_zone_index)
+        if "cleft" not in part.columns:
+            part["cleft"] = int(cleft_index)
         if "postsynapse" not in part.columns:
             part["postsynapse"] = False
         frames.append(part)
@@ -620,12 +620,12 @@ def _write_mad_outputs(
                 summary_rows.append(
                     mad_result_to_summary_row(
                         mad,
-                        extra_cols={"active_zone_name": zone_name, "curve_family": fam},
+                        extra_cols={"cleft_name": zone_name, "curve_family": fam},
                     )
                 )
                 curves_df = mad_result_to_curves_dataframe(mad, r_vals, observed=observed)
                 curves_df.insert(0, "curve_family", fam)
-                curves_df.insert(0, "active_zone_name", zone_name)
+                curves_df.insert(0, "cleft_name", zone_name)
                 curve_frames.append(curves_df)
 
         if write_figures and figures_dir is not None:
@@ -687,7 +687,7 @@ def build_monomer_dimer_individual_curves_table(
     """Long table of every individual curve (observed + all control replicates), for every
     family in ``ALL_FAMILIES`` (distinguished by a ``curve_family`` column)."""
     extras = {
-        "active_zone_name": zone_name,
+        "cleft_name": zone_name,
         "window_mode": WINDOW_MODE,
         "n_monomer": int(n_monomer),
         "n_dimer": int(n_dimer),
@@ -763,7 +763,7 @@ def build_monomer_dimer_prism_table(
     rows: list[dict] = []
     for i, r_nm in enumerate(r_vals):
         row: dict = {
-            "active_zone_name": zone_name,
+            "cleft_name": zone_name,
             "window_mode": WINDOW_MODE,
             "r_nm": float(r_nm),
         }
@@ -890,7 +890,7 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
 
         n_tomograms = int(sub["tomogram_name"].nunique()) if "tomogram_name" in sub.columns else 0
         n_zones = int(
-            sub[["tomogram_name", "alignment_dir", "active_zone_name"]].drop_duplicates().shape[0]
+            sub[["tomogram_name", "alignment_dir", "cleft_name"]].drop_duplicates().shape[0]
         )
 
         for i, r_nm in enumerate(anchor_r_vals):
@@ -899,7 +899,7 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                 "window_mode": WINDOW_MODE,
                 "r_nm": float(r_nm),
                 "n_tomograms": n_tomograms,
-                "n_active_zones": n_zones,
+                "n_clefts": n_zones,
             }
             for fam, data in family_data.items():
                 tag = data["tag"]
@@ -1075,7 +1075,7 @@ def run_monomer_dimer_ripley_for_zone(
     tomogram_path: Path,
     alignment_dir: str,
     zone_name: str,
-    active_zone_index: int,
+    cleft_index: int,
     *,
     monomer_star_pattern: Optional[str] = None,
     dimer_star_pattern: Optional[str] = None,
@@ -1103,7 +1103,7 @@ def run_monomer_dimer_ripley_for_zone(
         loaded = load_monomer_dimer_aunps_for_zone(
             tomogram_path,
             alignment_dir,
-            int(active_zone_index),
+            int(cleft_index),
             monomer_star_pattern=monomer_star_pattern,
             dimer_star_pattern=dimer_star_pattern,
         )
@@ -1121,15 +1121,15 @@ def run_monomer_dimer_ripley_for_zone(
     monomer_coords, _ = subset_aunps(loaded.meta, subset="monomer")
     dimer_coords, _ = subset_aunps(loaded.meta, subset="dimer")
 
-    from .activezone import import_active_zone_segmentations
+    from .cleft import import_cleft_segmentations
 
-    az_segmentation = import_active_zone_segmentations(
+    az_segmentation = import_cleft_segmentations(
         tomogram_path, alignment_dir=alignment_dir
     ).get(zone_name)
 
     rng = np.random.default_rng(seed)
     try:
-        cleft_coords = load_synaptic_cleft_active_zone_points(
+        cleft_coords = load_synaptic_cleft_cleft_points(
             tomogram_path, alignment_dir, zone_name
         )
         window = build_ripley_window_3d(
@@ -1322,7 +1322,7 @@ def run_monomer_dimer_ripley_for_zone(
         pool_df = _load_pool_star_dataframe_for_export(
             tomogram_path,
             alignment_dir,
-            int(active_zone_index),
+            int(cleft_index),
             monomer_star_pattern=monomer_star_pattern,
             dimer_star_pattern=dimer_star_pattern,
         )
@@ -1348,8 +1348,8 @@ def run_monomer_dimer_ripley_for_zone(
         print(f"  Warning: could not write simulated null STAR examples for {zone_name}: {exc}")
 
     curves_data: dict = {
-        "active_zone_name": zone_name,
-        "active_zone_index": int(active_zone_index),
+        "cleft_name": zone_name,
+        "cleft_index": int(cleft_index),
         "window_mode": WINDOW_MODE,
         "r_nm": r_vals,
     }
@@ -1408,7 +1408,7 @@ def run_monomer_dimer_ripley_for_zone(
     )
     prism_path = out_dir / "ripley_l12_prism.csv"
     prism_df.to_csv(prism_path, index=False)
-    _prism_long_to_wide(prism_df, id_cols=["active_zone_name", "window_mode"]).to_csv(
+    _prism_long_to_wide(prism_df, id_cols=["cleft_name", "window_mode"]).to_csv(
         out_dir / "ripley_l12_prism_wide.csv", index=False
     )
 
@@ -1453,8 +1453,8 @@ def run_monomer_dimer_ripley_for_zone(
     meta = {
         "tomogram_name": tomogram_name,
         "alignment_dir": alignment_dir,
-        "active_zone_name": zone_name,
-        "active_zone_index": int(active_zone_index),
+        "cleft_name": zone_name,
+        "cleft_index": int(cleft_index),
         "window_mode": WINDOW_MODE,
         "curve_families": list(ALL_FAMILIES),
         "n_monomer": int(n_monomer),
@@ -1512,7 +1512,7 @@ def run_monomer_dimer_ripley_for_tomogram(
     tomogram_path: Path,
     alignment_dir: str,
     *,
-    active_zone_indices: Sequence[int] | None,
+    cleft_indices: Sequence[int] | None,
     monomer_star_pattern: Optional[str] = None,
     dimer_star_pattern: Optional[str] = None,
     n_perm: int = MONOMER_DIMER_N_PERM,
@@ -1521,24 +1521,24 @@ def run_monomer_dimer_ripley_for_tomogram(
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
 ) -> tuple[list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame]]:
-    """Run monomer vs dimer Ripley for all mapped active zones in one tomogram.
+    """Run monomer vs dimer Ripley for all mapped synaptic clefts in one tomogram.
 
     Returns ``(curve_frames, prism_frames, individual_frames, mad_summary_frames)``.
     Segregation replicate count always matches ``n_perm``.
     """
-    from .activezone import load_active_zone_mapping
+    from .cleft import load_cleft_mapping
 
     if n_perm is None:
         n_perm = MONOMER_DIMER_N_PERM
     tomogram_path = Path(tomogram_path)
     alignment_dir = require_alignment_dir(alignment_dir)
-    az_mapping = load_active_zone_mapping(tomogram_path, alignment_dir) or {}
+    az_mapping = load_cleft_mapping(tomogram_path, alignment_dir) or {}
     if not az_mapping:
-        print("No active zone mapping; skipping monomer/dimer Ripley analyses")
+        print("No synaptic cleft mapping; skipping monomer/dimer Ripley analyses")
         return [], [], [], []
 
     az_mapping = {int(k): v for k, v in az_mapping.items()}
-    indices = list(active_zone_indices) if active_zone_indices is not None else sorted(az_mapping)
+    indices = list(cleft_indices) if cleft_indices is not None else sorted(az_mapping)
 
     curve_frames: list[pd.DataFrame] = []
     individual_frames: list[pd.DataFrame] = []
@@ -1590,7 +1590,7 @@ def run_monomer_dimer_ripley_for_tomogram(
             mad_df = pd.read_csv(mad_summary_path)
             mad_df.insert(0, "tomogram_name", tomogram_path.name)
             mad_df.insert(1, "alignment_dir", alignment_dir)
-            mad_df["active_zone_index"] = int(az_idx)
+            mad_df["cleft_index"] = int(az_idx)
             mad_df["n_permutations"] = int(n_perm) if n_perm is not None else MONOMER_DIMER_N_PERM
             mad_df["n_segregation_replicates"] = (
                 int(n_perm) if n_perm is not None else MONOMER_DIMER_N_PERM
@@ -1697,7 +1697,7 @@ def _plot_pooled_family_figure(
     n_curves = int(meta[f"n_zone_curves_{tag}"]) if f"n_zone_curves_{tag}" in grp.columns else int(meta.get("n_zone_curves", 0))
     ax.set_title(
         f"Pooled monomer vs dimer ({tag}) — set: {set_name}\n"
-        f"{int(meta['n_tomograms'])} tomogram(s), {int(meta['n_active_zones'])} zone(s), "
+        f"{int(meta['n_tomograms'])} tomogram(s), {int(meta['n_clefts'])} zone(s), "
         f"{n_curves} curves"
     )
     ax.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else DEFAULT_RIPLEY_R_MAX_NM)

@@ -13,7 +13,7 @@ and copies them to:
 
 How to run
 ----------
-  python scripts/copy_surface_morphometrics_ply_to_tomograms.py \\
+  python scripts/surface_morphometrics/copy_surface_morphometrics_ply_to_tomograms.py \\
     --csv tomogram_csv_files/tomograms_15F1-H12Cys_FINAL.csv \\
     --data-dir data \\
     --source-dir /path/to/ply_folder

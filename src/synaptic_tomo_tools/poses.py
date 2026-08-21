@@ -1,158 +1,160 @@
-#!/usr/bin/env python3
 """
-CLI script for running AMPA poses analysis.
+CLI entry point for AMPA receptor pose analysis.
 
-This script estimates AMPA receptor poses based on AuNP pair analysis,
-implementing the functionality from findingampa's create-relion-starfile command.
+Estimates AMPA poses from AuNP pair analysis (findingampa-style create-relion-starfile).
+Core algorithms live in ``ampa_poses``; this module provides the command-line interface.
+
+Examples:
+  python -m synaptic_tomo_tools.poses --tomogram-path data/.../tomo --alignment-dir best_alignment --output-dir results/poses
+  python -m src.synaptic_tomo_tools.poses --tomogram-path data/.../tomo --alignment-dir best_alignment --output-dir results/poses
 """
+
+from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
-# Add the src directory to the Python path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from synaptic_tomo_tools.ampa_poses import run_ampa_poses_analysis_original, run_ampa_poses_analysis_optimized
+from .ampa_poses import run_ampa_poses_analysis_optimized, run_ampa_poses_analysis_original
 
 
-def main():
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="Run AMPA poses analysis on a tomogram",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python scripts/run_ampa_poses_analysis.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --alignment-dir best_alignment --output-dir results/ampa_poses
-  python scripts/run_ampa_poses_analysis.py --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --alignment-dir best_alignment --output-dir results/ampa_poses --aunp-min-distance 5 --aunp-max-distance 12 --membrane-min-distance 15 --membrane-max-distance 25
-        """
+  python -m synaptic_tomo_tools.poses --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --alignment-dir best_alignment --output-dir results/poses
+  python -m synaptic_tomo_tools.poses --tomogram-path data/15F1/TOP_TOMOS/20241030_AMmilled12-1_15 --alignment-dir best_alignment --output-dir results/poses --aunp-min-distance 5 --aunp-max-distance 12 --membrane-min-distance 15 --membrane-max-distance 25
+        """,
     )
-    
+
     parser.add_argument(
         "--tomogram-path",
         required=True,
-        help="Path to the tomogram directory"
+        help="Path to the tomogram directory",
     )
-
     parser.add_argument(
         "--alignment-dir",
         required=True,
         help="Alignment subdirectory under the tomogram (e.g. best_alignment, liza_az0); must match CSV alignment_dir",
     )
-    
     parser.add_argument(
         "--output-dir",
         required=True,
-        help="Directory to save results"
+        help="Directory to save results",
     )
-    
     parser.add_argument(
         "--aunp-min-distance",
         type=float,
         default=6.0,
-        help="Minimum distance between AuNPs in nm (default: 6.0)"
+        help="Minimum distance between AuNPs in nm (default: 6.0)",
     )
-    
     parser.add_argument(
         "--aunp-max-distance",
         type=float,
         default=12.0,
-        help="Maximum distance between AuNPs in nm (default: 12.0)"
+        help="Maximum distance between AuNPs in nm (default: 12.0)",
     )
-    
     parser.add_argument(
         "--no-aunp-distance-cutoff",
         action="store_true",
-        help="Disable AuNP distance cutoff (use all AuNP pairs)"
+        help="Disable AuNP distance cutoff (use all AuNP pairs)",
     )
-    
     parser.add_argument(
         "--membrane-min-distance",
         type=float,
         default=17.0,
-        help="Minimum distance from AuNP to membrane in nm (default: 17.0)"
+        help="Minimum distance from AuNP to membrane in nm (default: 17.0)",
     )
-    
     parser.add_argument(
         "--membrane-max-distance",
         type=float,
         default=23.0,
-        help="Maximum distance from AuNP to membrane in nm (default: 23.0)"
+        help="Maximum distance from AuNP to membrane in nm (default: 23.0)",
     )
-    
     parser.add_argument(
         "--no-membrane-distance-cutoff",
         action="store_true",
-        help="Disable membrane distance cutoff (use all pairs regardless of membrane distance)"
+        help="Disable membrane distance cutoff (use all pairs regardless of membrane distance)",
     )
-    
     parser.add_argument(
-        "--aunp-active-zones",
+        "--cleft-ids",
         nargs="+",
         type=int,
-        help="Specific active zone indices to analyze (default: all active zones)"
+        help="Specific synaptic cleft indices to analyze (default: all synaptic clefts)",
     )
-    
     parser.add_argument(
         "--method",
         choices=["original", "greedy", "ilp"],
         default="greedy",
-        help="Analysis method: 'original' for all poses (no optimization), 'greedy' for fast heuristic solution (saves to greedy/), 'ilp' for exact optimal solution using integer linear programming (saves to ilp/) (default: greedy)"
+        help=(
+            "Analysis method: 'original' for all poses (no optimization), "
+            "'greedy' for fast heuristic (saves to greedy/), "
+            "'ilp' for exact ILP solution (saves to ilp/) (default: greedy)"
+        ),
     )
-    
     parser.add_argument(
         "--steric-radius",
         type=float,
         default=5.0,
-        help="Minimum distance between particle positions in nm (default: 5.0)"
+        help="Minimum distance between particle positions in nm (default: 5.0)",
     )
-    
     parser.add_argument(
         "--pdb-file",
         type=str,
-        help="Path to PDB file for structure template. If provided, generates PDB files with AMPA structures at calculated poses. Leave empty to skip PDB generation."
+        help=(
+            "Path to PDB file for structure template. If provided, generates PDB files "
+            "with AMPA structures at calculated poses. Leave empty to skip PDB generation."
+        ),
     )
-    
     parser.add_argument(
         "--aunp-pick-star-pattern",
         type=str,
         default=None,
         help=(
-            "Per-active-zone AuNP pick STAR filename pattern; use '*' for the active zone index "
+            "Per-synaptic-cleft AuNP pick STAR filename pattern; use '*' for the synaptic cleft index "
             "(default: aunp_tm_BP_active_zone_*_manual_refined.star)"
         ),
     )
-    
-    args = parser.parse_args()
-    
-    # Validate arguments only if cutoffs are enabled
+
+    args = parser.parse_args(argv)
+
     if not args.no_aunp_distance_cutoff and args.aunp_min_distance >= args.aunp_max_distance:
         print("Error: AuNP minimum distance must be less than maximum distance")
         sys.exit(1)
-    
-    if not args.no_membrane_distance_cutoff and args.membrane_min_distance >= args.membrane_max_distance:
+
+    if (
+        not args.no_membrane_distance_cutoff
+        and args.membrane_min_distance >= args.membrane_max_distance
+    ):
         print("Error: Membrane minimum distance must be less than maximum distance")
         sys.exit(1)
-    
-    # Run the analysis
+
     try:
         print(f"Running AMPA poses analysis on {args.tomogram_path}")
         print(f"Alignment directory: {args.alignment_dir}")
         print(f"Output directory: {args.output_dir}")
-        
+
         if args.no_aunp_distance_cutoff:
             print("AuNP distance range: No cutoff (using all AuNP pairs)")
         else:
             print(f"AuNP distance range: {args.aunp_min_distance}-{args.aunp_max_distance} nm")
-            
+
         if args.no_membrane_distance_cutoff:
-            print("Membrane distance range: No cutoff (using all pairs regardless of membrane distance)")
+            print(
+                "Membrane distance range: No cutoff "
+                "(using all pairs regardless of membrane distance)"
+            )
         else:
-            print(f"Membrane distance range: {args.membrane_min_distance}-{args.membrane_max_distance} nm")
-            
-        if args.aunp_active_zones:
-            print(f"Active zones: {args.aunp_active_zones}")
+            print(
+                f"Membrane distance range: "
+                f"{args.membrane_min_distance}-{args.membrane_max_distance} nm"
+            )
+
+        if args.cleft_ids:
+            print(f"Synaptic clefts: {args.cleft_ids}")
         else:
-            print("Active zones: all")
+            print("Synaptic clefts: all")
         print(f"Method: {args.method}")
         print(f"Steric radius: {args.steric_radius} nm")
         if args.pdb_file:
@@ -162,24 +164,22 @@ Examples:
         if args.aunp_pick_star_pattern:
             print(f"AuNP pick STAR pattern: {args.aunp_pick_star_pattern}")
         print()
-        
-        # Set distance parameters based on cutoff flags
+
         if args.no_aunp_distance_cutoff:
             inter_aunp_distance = None
         else:
             inter_aunp_distance = (args.aunp_min_distance, args.aunp_max_distance)
-            
+
         if args.no_membrane_distance_cutoff:
             aunp_membrane_distance = None
         else:
             aunp_membrane_distance = (args.membrane_min_distance, args.membrane_max_distance)
-        
-        # Choose the appropriate analysis method
+
         if args.method == "original":
             results = run_ampa_poses_analysis_original(
                 tomo_path=args.tomogram_path,
                 output_dir=args.output_dir,
-                aunp_active_zones=args.aunp_active_zones,
+                cleft_ids=args.cleft_ids,
                 inter_aunp_distance=inter_aunp_distance,
                 aunp_membrane_distance=aunp_membrane_distance,
                 pdb_file=args.pdb_file,
@@ -190,7 +190,7 @@ Examples:
             results = run_ampa_poses_analysis_optimized(
                 tomo_path=args.tomogram_path,
                 output_dir=args.output_dir,
-                aunp_active_zones=args.aunp_active_zones,
+                cleft_ids=args.cleft_ids,
                 inter_aunp_distance=inter_aunp_distance,
                 aunp_membrane_distance=aunp_membrane_distance,
                 ampa_steric_radius=args.steric_radius,
@@ -199,9 +199,9 @@ Examples:
                 alignment_dir=args.alignment_dir,
                 aunp_pick_star_pattern=args.aunp_pick_star_pattern,
             )
-        
+
         if results["status"] == "success":
-            print(f"AMPA poses analysis completed successfully!")
+            print("AMPA poses analysis completed successfully!")
             print(f"Found {results['pairs_found']} AMPA receptor poses")
             print(f"RELION star file: {results['star_file']}")
             print(f"AuNPs star file: {results['aunps_file']}")
@@ -214,7 +214,7 @@ Examples:
         else:
             print(f"Analysis failed with status: {results['status']}")
             sys.exit(1)
-            
+
     except Exception as e:
         print(f"Error running AMPA poses analysis: {e}")
         sys.exit(1)

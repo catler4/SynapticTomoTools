@@ -1,7 +1,7 @@
-tomoname,set,alignment_dir,activezone,vesicles,aunps,aunp_active_zones
-20231017_EGmilled24-2_68,15F1,liza_az2,True,True,True,0
-20231026_HippAu_14,15F1,best_alignment,True,True,True,0
-20240111_WaffleHipp_116,15F1,best_alignment,True,True,True,0
-20240111_WaffleHipp_133,15F1,liza_az0,True,True,True,0
-20241030_AMmilled12-1_15,15F1,best_alignment,True,True,True,0
-20241030_AMmilled12-1_15,15F1,liza_az2,True,True,True,2
+tomoname,set,alignment_dir,cleft_IDs
+20231017_EGmilled24-2_68,15F1,liza_az2,0
+20231026_HippAu_14,15F1,best_alignment,0
+20240111_WaffleHipp_116,15F1,best_alignment,0
+20240111_WaffleHipp_133,15F1,liza_az0,0
+20241030_AMmilled12-1_15,15F1,best_alignment,0
+20241030_AMmilled12-1_15,15F1,liza_az2,2

@@ -8,11 +8,11 @@ from scipy.spatial import KDTree, cKDTree
 from sklearn.cluster import DBSCAN
 from pathlib import Path
 import starfile
-from .activezone import import_membrane_segmentations
-from .activezone import import_active_zone_segmentations
+from .cleft import import_membrane_segmentations
+from .cleft import import_cleft_segmentations
 from datetime import datetime
 import json
-from .vesicles import import_presynaptic_membranes_and_active_zones
+from .vesicles import import_presynaptic_membranes_and_clefts
 from .alignment_utils import require_alignment_dir
 import re
 
@@ -28,22 +28,22 @@ def normalize_aunp_pick_star_pattern(pattern: Optional[str]) -> str:
     pat = str(pattern).strip()
     if "*" not in pat:
         raise ValueError(
-            "AuNP pick STAR pattern must contain exactly one '*' for the active zone index "
+            "AuNP pick STAR pattern must contain exactly one '*' for the synaptic cleft index "
             f"(e.g. {DEFAULT_AUNP_PICK_STAR_PATTERN!r})."
         )
     if pat.count("*") != 1:
         raise ValueError(
-            "AuNP pick STAR pattern must contain exactly one '*' for the active zone index."
+            "AuNP pick STAR pattern must contain exactly one '*' for the synaptic cleft index."
         )
     if not pat.endswith(".star"):
         raise ValueError("AuNP pick STAR pattern must end with '.star'.")
     return pat
 
 
-def aunp_pick_star_filename(active_zone_idx: int, pattern: Optional[str] = None) -> str:
-    """Build pick STAR filename for one active zone (``*`` replaced by index)."""
+def aunp_pick_star_filename(cleft_idx: int, pattern: Optional[str] = None) -> str:
+    """Build pick STAR filename for one synaptic cleft (``*`` replaced by index)."""
     pat = normalize_aunp_pick_star_pattern(pattern)
-    return pat.replace("*", str(int(active_zone_idx)), 1)
+    return pat.replace("*", str(int(cleft_idx)), 1)
 
 
 def _aunp_pick_star_regex(pattern: str) -> re.Pattern:
@@ -53,22 +53,22 @@ def _aunp_pick_star_regex(pattern: str) -> re.Pattern:
 
 def discover_aunp_pick_star_files(
     aunps_dir: Path,
-    active_zone_indices: Optional[List[int]] = None,
+    cleft_indices: Optional[List[int]] = None,
     *,
     pattern: Optional[str] = None,
 ) -> List[Tuple[int, Path]]:
     """
-    Find per-active-zone AuNP pick STAR files under ``aunps_dir``.
+    Find per-synaptic-cleft AuNP pick STAR files under ``aunps_dir``.
 
-    ``pattern`` uses a single ``*`` as the active zone index placeholder
+    ``pattern`` uses a single ``*`` as the synaptic cleft index placeholder
     (default: ``aunp_tm_BP_active_zone_*_manual_refined.star``).
     """
     pat = normalize_aunp_pick_star_pattern(pattern)
     aunps_dir = Path(aunps_dir)
     found: List[Tuple[int, Path]] = []
 
-    if active_zone_indices is not None:
-        for idx in active_zone_indices:
+    if cleft_indices is not None:
+        for idx in cleft_indices:
             star_file = aunps_dir / aunp_pick_star_filename(idx, pat)
             print("Trying to load:", star_file)
             if star_file.exists():
@@ -97,29 +97,29 @@ def _read_aunp_pick_star_dataframe(star_file: Path) -> Optional[pd.DataFrame]:
 
 def load_aunp_pick_star_dataframes(
     aunps_dir: Path,
-    active_zone_indices: Optional[List[int]] = None,
+    cleft_indices: Optional[List[int]] = None,
     *,
     pattern: Optional[str] = None,
 ) -> List[pd.DataFrame]:
-    """Load AuNP pick STAR files; each DataFrame gets an ``active_zone`` column from the file index."""
+    """Load AuNP pick STAR files; each DataFrame gets an ``cleft`` column from the file index."""
     star_dfs: List[pd.DataFrame] = []
     for az_id, star_file in discover_aunp_pick_star_files(
-        aunps_dir, active_zone_indices, pattern=pattern
+        aunps_dir, cleft_indices, pattern=pattern
     ):
         df = _read_aunp_pick_star_dataframe(star_file)
         if df is not None:
-            df["active_zone"] = az_id
+            df["cleft"] = az_id
             star_dfs.append(df)
     return star_dfs
 
 
-def load_active_zone_max_distance_nm_from_results(
+def load_cleft_max_distance_nm_from_results(
     tomogram_path,
     alignment_dir: str,
     results_dir: str = "results",
 ) -> Optional[float]:
     """
-    Load tomogram-level active_zone_max_distance (nm) from a prior activezone analysis run.
+    Load tomogram-level cleft_max_distance (nm) from a prior cleft analysis run.
 
     Returns None if results are missing or the field is absent/invalid.
     """
@@ -128,13 +128,13 @@ def load_active_zone_max_distance_nm_from_results(
 
     tomogram_name = Path(tomogram_path).name
     analysis_name = f"{tomogram_name}__{alignment_dir}"
-    stored = ResultsManager(results_dir).get_tomogram_results(analysis_name, "activezone")
+    stored = ResultsManager(results_dir).get_tomogram_results(analysis_name, "cleft")
     if not stored or "results" not in stored:
         return None
-    az_data = stored["results"].get("active_zone", {})
+    az_data = stored["results"].get("cleft", {})
     if not isinstance(az_data, dict):
         return None
-    val = az_data.get("active_zone_max_distance")
+    val = az_data.get("cleft_max_distance")
     if val is None:
         return None
     try:
@@ -524,7 +524,7 @@ def compute_cluster_concave_hull_2d_area_nm2(
 
 
 def calculate_packing_density_using_sliding_cylinder(
-    active_zone: dict,
+    cleft: dict,
     active_zonogram: dict,
     aunp_coordinates: np.ndarray,
     cylinder_radius: float = 25.0,
@@ -536,7 +536,7 @@ def calculate_packing_density_using_sliding_cylinder(
     Calculate packing density of AuNPs (receptors) on postsynaptic membrane using sliding cylinder method.
     
     Args:
-        active_zone: Dictionary containing 'active_postsynaptic_mesh' with vertices and vertex_normals
+        cleft: Dictionary containing 'active_postsynaptic_mesh' with vertices and vertex_normals
         active_zonogram: Dictionary with zonogram data (not currently used but kept for API consistency)
         aunp_coordinates: Array of shape (N, 3) with AuNP 3D coordinates in nm
         cylinder_radius: Radius of the sliding cylinder probe in nm (default: 25.0)
@@ -551,13 +551,13 @@ def calculate_packing_density_using_sliding_cylinder(
         - aunp_density_per_nm2: num_aunps_in_cylinder / (π × cylinder_radius²)
         - packing_coefficient: Estimated receptor packing coefficient at each vertex
     """
-    ps_mesh = active_zone['active_postsynaptic_mesh']
+    ps_mesh = cleft['active_postsynaptic_mesh']
     step = max(1, int(vertex_sampling_step))
 
     # active_postsynaptic_mesh includes both outer (cleft-facing) and inner
     # (back-facing) vertices; only sample from the outer-facing ones, since
     # those are the ones actually facing the AuNPs.
-    outer_points = active_zone.get('active_postsynaptic_outer_points')
+    outer_points = cleft.get('active_postsynaptic_outer_points')
     if outer_points is not None and len(outer_points) > 0:
         outer_tree = cKDTree(np.asarray(outer_points))
         dist_to_outer, _ = outer_tree.query(ps_mesh.vertices)
@@ -607,23 +607,23 @@ def calculate_packing_density_using_sliding_cylinder(
 
 def _compute_fusion_point_from_vesicle(
     vesicle: dict,
-    membrane_active_zone_pairs: dict[str, dict],
+    membrane_cleft_pairs: dict[str, dict],
     fusion_point_threshold: float,
 ) -> np.ndarray | None:
     """Putative fusion point (nm) — same geometry as per-vesicle AuNP distance histograms."""
     vesicle_points = np.array(vesicle["coordinates"])
     membrane_name = vesicle.get("closest_membrane")
-    if not membrane_name or membrane_name not in membrane_active_zone_pairs:
+    if not membrane_name or membrane_name not in membrane_cleft_pairs:
         return None
-    active_zone_points = membrane_active_zone_pairs[membrane_name]["active_zone_points"]
-    if active_zone_points is None or len(active_zone_points) == 0:
+    cleft_points = membrane_cleft_pairs[membrane_name]["cleft_points"]
+    if cleft_points is None or len(cleft_points) == 0:
         return None
-    tree = KDTree(active_zone_points)
+    tree = KDTree(cleft_points)
     close_points = []
     for pt in vesicle_points:
         idxs = tree.query_ball_point(pt, r=fusion_point_threshold)
         if idxs:
-            close_points.extend(active_zone_points[idxs])
+            close_points.extend(cleft_points[idxs])
     if not close_points:
         return None
     return np.mean(np.vstack(close_points), axis=0)
@@ -652,7 +652,7 @@ def enumerate_close_vesicle_fusion_points(
         return []
     with open(vesicles_file, "r") as f:
         vesicles = json.load(f)["vesicles"]
-    membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(
+    membrane_cleft_pairs = import_presynaptic_membranes_and_clefts(
         tomogram_path, alignment_dir=alignment_dir
     )
     rows: list[dict] = []
@@ -672,7 +672,7 @@ def enumerate_close_vesicle_fusion_points(
         if fusing_only and not is_fusing:
             continue
         fusion_point = _compute_fusion_point_from_vesicle(
-            vesicle, membrane_active_zone_pairs, fusion_point_threshold
+            vesicle, membrane_cleft_pairs, fusion_point_threshold
         )
         if fusion_point is None:
             continue
@@ -762,7 +762,7 @@ def build_packing_density_at_fusion_points_dataframe(
                 "packing_coefficient": float(nearest["packing_coefficient"]),
                 "aunp_count_in_cylinder": int(nearest["aunp_count_in_cylinder"]),
                 "aunp_density_per_nm2": float(nearest["aunp_density_per_nm2"]),
-                "nearest_scan_active_zone_name": nearest["active_zone_name"],
+                "nearest_scan_cleft_name": nearest["cleft_name"],
                 "nearest_scan_vertex_index": int(nearest["scan_vertex_index"]),
                 "nearest_scan_vertex_x_nm": float(nearest["vertex_x_nm"]),
                 "nearest_scan_vertex_y_nm": float(nearest["vertex_y_nm"]),
@@ -796,7 +796,7 @@ def compute_fusion_points_with_sources(
     with open(vesicles_file, 'r') as f:
         vesicle_data = json.load(f)
     vesicles = vesicle_data['vesicles']
-    membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir=alignment_dir)
+    membrane_cleft_pairs = import_presynaptic_membranes_and_clefts(tomogram_path, alignment_dir=alignment_dir)
     fusion_points: List[np.ndarray] = []
     sources: List[Dict[str, Any]] = []
     for vesicle in vesicles:
@@ -804,17 +804,17 @@ def compute_fusion_points_with_sources(
             continue
         vesicle_points = np.array(vesicle['coordinates'])
         membrane_name = vesicle.get('closest_membrane', None)
-        if not membrane_name or membrane_name not in membrane_active_zone_pairs:
+        if not membrane_name or membrane_name not in membrane_cleft_pairs:
             continue
-        active_zone_points = membrane_active_zone_pairs[membrane_name]['active_zone_points']
-        if active_zone_points is None or len(active_zone_points) == 0:
+        cleft_points = membrane_cleft_pairs[membrane_name]['cleft_points']
+        if cleft_points is None or len(cleft_points) == 0:
             continue
-        tree = KDTree(active_zone_points)
+        tree = KDTree(cleft_points)
         close_points = []
         for pt in vesicle_points:
             idxs = tree.query_ball_point(pt, r=fusion_point_threshold)
             if idxs:
-                close_points.extend(active_zone_points[idxs])
+                close_points.extend(cleft_points[idxs])
         if close_points:
             fusion_point = np.mean(np.vstack(close_points), axis=0)
             fusion_points.append(fusion_point)
@@ -826,8 +826,8 @@ def compute_fusion_points_with_sources(
 
 def compute_fusion_points(tomogram_path, vesicle_distance_threshold=20.0, fusion_point_threshold=20.0, *, alignment_dir: str):
     """
-    For each vesicle within ``vesicle_distance_threshold`` nm of the presynaptic active zone, compute the putative
-    fusion point as the average of presynaptic active zone points within ``fusion_point_threshold`` nm of any
+    For each vesicle within ``vesicle_distance_threshold`` nm of the presynaptic synaptic cleft, compute the putative
+    fusion point as the average of presynaptic synaptic cleft points within ``fusion_point_threshold`` nm of any
     vesicle point. Returns an array of shape (N, 3).
     """
     pts, _ = compute_fusion_points_with_sources(
@@ -844,7 +844,7 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
                                                   fusing_only=False, fusing_perimeter_threshold=1.0,
                                                   *, alignment_dir: str):
     """
-    For each vesicle within vesicle_distance_threshold of the presynaptic active zone:
+    For each vesicle within vesicle_distance_threshold of the presynaptic synaptic cleft:
     1. Compute the putative fusion point
     2. Calculate distances from all AuNPs to this fusion point
     3. Bin the AuNPs into distance histogram bins
@@ -877,8 +877,8 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
         vesicle_data = json.load(f)
     vesicles = vesicle_data['vesicles']
     
-    # Load presynaptic membranes and active zones
-    membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(tomogram_path, alignment_dir=alignment_dir)
+    # Load presynaptic membranes and synaptic clefts
+    membrane_cleft_pairs = import_presynaptic_membranes_and_clefts(tomogram_path, alignment_dir=alignment_dir)
     
     # Create histogram bin edges
     bin_edges = np.arange(0, max_distance + bin_width, bin_width)
@@ -889,20 +889,20 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
     long_rows: List[dict] = []
     
     for vesicle_idx, vesicle in enumerate(vesicles):
-        # Only consider vesicles within vesicle_distance_threshold of the presynaptic active zone
+        # Only consider vesicles within vesicle_distance_threshold of the presynaptic synaptic cleft
         distance_to_az = vesicle.get('distance_to_az', 0.0)
         if distance_to_az > vesicle_distance_threshold:
             continue
         
         vesicle_points = np.array(vesicle['coordinates'])
         
-        # Find closest presynaptic membrane and its active zone points
+        # Find closest presynaptic membrane and its synaptic cleft points
         membrane_name = vesicle.get('closest_membrane', None)
-        if not membrane_name or membrane_name not in membrane_active_zone_pairs:
+        if not membrane_name or membrane_name not in membrane_cleft_pairs:
             continue
         
-        active_zone_points = membrane_active_zone_pairs[membrane_name]['active_zone_points']
-        if active_zone_points is None or len(active_zone_points) == 0:
+        cleft_points = membrane_cleft_pairs[membrane_name]['cleft_points']
+        if cleft_points is None or len(cleft_points) == 0:
             continue
         
         # Check if this is a fusing vesicle (if fusing_only is True).
@@ -920,12 +920,12 @@ def compute_aunp_distance_histograms_per_vesicle(tomogram_path, aunp_coords, ves
                 continue
         
         # Compute fusion point for this vesicle
-        tree = KDTree(active_zone_points)
+        tree = KDTree(cleft_points)
         close_points = []
         for pt in vesicle_points:
             idxs = tree.query_ball_point(pt, r=fusion_point_threshold)
             if idxs:
-                close_points.extend(active_zone_points[idxs])
+                close_points.extend(cleft_points[idxs])
         
         if not close_points:
             continue
@@ -989,32 +989,32 @@ def build_aunps_per_zone_rows(
     packing_density_results: Optional[Dict[str, Dict[str, Any]]] = None,
     status: str = "completed",
 ) -> List[Dict[str, Any]]:
-    """Build one CSV row per active zone from AuNP analysis results."""
+    """Build one CSV row per synaptic cleft from AuNP analysis results."""
     packing_density_results = packing_density_results or {}
 
     idx_to_name: Dict[int, str] = {}
     for zone_name, zdata in az_individual_zone_results.items():
-        idx = zdata.get("active_zone_index")
+        idx = zdata.get("cleft_index")
         if idx is not None:
             idx_to_name[int(idx)] = zone_name
 
     zone_names = sorted(set(az_individual_zone_results) | set(idx_to_name.values()))
     if not zone_names and not df_valid.empty:
-        for idx in sorted(df_valid["active_zone"].unique()):
-            zone_names.append(f"active_zone_{int(idx)}")
+        for idx in sorted(df_valid["cleft"].unique()):
+            zone_names.append(f"cleft_{int(idx)}")
 
     distance_cols = [
         "nearest_neighbor_distance",
         "distance_to_presynaptic",
         "distance_to_postsynaptic",
         "distance_to_postsynaptic_active_outer",
-        "distance_to_active_zone_center",
+        "distance_to_cleft_center",
     ]
 
     rows: List[Dict[str, Any]] = []
     for zone_name in zone_names:
         z_az = az_individual_zone_results.get(zone_name, {})
-        zone_idx = z_az.get("active_zone_index")
+        zone_idx = z_az.get("cleft_index")
         if zone_idx is None:
             for idx, name in idx_to_name.items():
                 if name == zone_name:
@@ -1022,7 +1022,7 @@ def build_aunps_per_zone_rows(
                     break
 
         if zone_idx is not None:
-            zone_df = df_valid[df_valid["active_zone"] == int(zone_idx)]
+            zone_df = df_valid[df_valid["cleft"] == int(zone_idx)]
         else:
             zone_df = df_valid.iloc[0:0]
 
@@ -1047,8 +1047,8 @@ def build_aunps_per_zone_rows(
             "tomogram_name": tomogram_name,
             "set_name": set_name or "",
             "alignment_dir": alignment_dir,
-            "active_zone": zone_name,
-            "active_zone_index": zone_idx,
+            "cleft": zone_name,
+            "cleft_index": zone_idx,
             "status": status,
             "aunp_count": n_aunps,
             "synaptic_aunp_count": n_synaptic,
@@ -1080,7 +1080,7 @@ def build_aunps_per_zone_rows(
     return rows
 
 
-def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None, 
+def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None, 
                   *,
                   alignment_dir: str,
                   vesicle_distance_threshold=20.0, dbscan_eps=16.0, dbscan_min_samples=1,
@@ -1100,7 +1100,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
 
     Parameters:
         tomogram_path (str or Path): Path to the tomogram file.
-        active_zone_indices (list of int or None): Which active zone .star files to read. If None, read all.
+        cleft_indices (list of int or None): Which synaptic cleft .star files to read. If None, read all.
         aunp_pick_star_pattern (str or None): Per-AZ pick STAR filename pattern with ``*`` for the active
             zone index (default: ``aunp_tm_BP_active_zone_*_manual_refined.star``).
         set_name (str, optional): Name of the experimental set.
@@ -1119,7 +1119,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         run_fusion_point_aunp_analyses (bool): Run 3D fusion-point vs monomer/dimer AuNP distance and
             Ripley L₁₂ analyses when monomer/dimer STAR files are available. Default: False.
         run_aunp_vs_az_center_ripley (bool): Run 3D Ripley L₁₂ of AuNP positions relative to the
-            per-zone active zone center. Default: False.
+            per-zone synaptic cleft center. Default: False.
         run_aunp_monomer_dimer_ripley (bool): Run 3D bivariate Ripley L₁₂ of monomer vs dimer AuNP
             positions with a label-permutation control. Default: False.
         monomer_star_pattern (str or None): Per-AZ monomer STAR filename pattern with ``*`` for the active
@@ -1146,7 +1146,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
     if run_fusion_point_aunp_analyses:
         print("Running 3D fusion-point vs AuNP distance and Ripley L12 analyses...")
         try:
-            from .activezone import load_active_zone_mapping
+            from .cleft import load_cleft_mapping
             from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
                 plot_pooled_fusion_point_aunp_ripley_bidirectional_visualizations,
                 plot_pooled_fusion_point_aunp_ripley_g12_visualizations,
@@ -1154,9 +1154,9 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                 run_fusion_point_aunp_analyses_for_tomogram,
             )
 
-            az_indices_for_analysis = active_zone_indices
+            az_indices_for_analysis = cleft_indices
             if az_indices_for_analysis is None:
-                az_mapping_for_analysis = load_active_zone_mapping(tomogram_path, alignment_dir) or {}
+                az_mapping_for_analysis = load_cleft_mapping(tomogram_path, alignment_dir) or {}
                 az_indices_for_analysis = sorted(int(k) for k in az_mapping_for_analysis)
             (
                 ripley_frames,
@@ -1167,7 +1167,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             ) = run_fusion_point_aunp_analyses_for_tomogram(
                 Path(tomogram_path),
                 alignment_dir,
-                active_zone_indices=az_indices_for_analysis,
+                cleft_indices=az_indices_for_analysis,
         vesicle_distance_threshold=vesicle_distance_threshold,
                 fusion_point_threshold=fusion_point_threshold,
                 write_figures=True,
@@ -1244,7 +1244,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
     if run_aunp_monomer_dimer_ripley:
         print("Running monomer vs dimer AuNP Ripley L₁₂ analyses...")
         try:
-            from .activezone import load_active_zone_mapping
+            from .cleft import load_cleft_mapping
             from .aunp_monomer_dimer_ripley import (
                 POOLED_CURVES_CSV as MONOMER_DIMER_POOLED_CURVES_CSV,
                 POOLED_INDIVIDUAL_CURVES_CSV as MONOMER_DIMER_POOLED_INDIVIDUAL_CURVES_CSV,
@@ -1253,9 +1253,9 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                 run_monomer_dimer_ripley_for_tomogram,
             )
 
-            az_indices_for_md = active_zone_indices
+            az_indices_for_md = cleft_indices
             if az_indices_for_md is None:
-                az_mapping_for_md = load_active_zone_mapping(
+                az_mapping_for_md = load_cleft_mapping(
                     tomogram_path, alignment_dir
                 ) or {}
                 az_indices_for_md = sorted(int(k) for k in az_mapping_for_md)
@@ -1268,7 +1268,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             ) = run_monomer_dimer_ripley_for_tomogram(
                     Path(tomogram_path),
                     alignment_dir,
-                    active_zone_indices=az_indices_for_md,
+                    cleft_indices=az_indices_for_md,
                     monomer_star_pattern=monomer_star_pattern,
                     dimer_star_pattern=dimer_star_pattern,
                     n_perm=monomer_dimer_ripley_n_perm,
@@ -1329,7 +1329,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         aunps_dir = Path(tomogram_path) / alignment_dir / "aunps"
         pick_pattern = normalize_aunp_pick_star_pattern(aunp_pick_star_pattern)
         star_dfs = load_aunp_pick_star_dataframes(
-            aunps_dir, active_zone_indices, pattern=pick_pattern
+            aunps_dir, cleft_indices, pattern=pick_pattern
         )
         
         if not star_dfs:
@@ -1351,22 +1351,22 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                 'error': 'No DataFrame found in .star file'
             }
         
-        # Only consider AuNPs within an active zone (active_zone != -1)
-        if 'active_zone' not in df.columns:
-            print("Column 'active_zone' not found in .star file.")
+        # Only consider AuNPs within an synaptic cleft (cleft != -1)
+        if 'cleft' not in df.columns:
+            print("Column 'cleft' not found in .star file.")
             return {
                 'aunp_count': 0,
                 'status': 'error',
-                'error': 'Column active_zone not found in .star file'
+                'error': 'Column cleft not found in .star file'
             }
         
-        df_valid = df[df['active_zone'] != -1].copy()
+        df_valid = df[df['cleft'] != -1].copy()
         if df_valid.empty:
-            print("No AuNPs within active zones found.")
+            print("No AuNPs within synaptic clefts found.")
             return {
                 'aunp_count': 0,
                 'status': 'completed',
-                'error': 'No AuNPs within active zones found'
+                'error': 'No AuNPs within synaptic clefts found'
             }
         
         coord_cols = ['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']
@@ -1405,7 +1405,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         print("Skipping membrane distance filtering (all AuNPs retained).")
         coords = np.asarray(df_valid[coord_cols]).astype(float)
         
-        # --- Calculate active-zone distances (on filtered AuNPs) ---
+        # --- Calculate synaptic-cleft distances (on filtered AuNPs) ---
         def _nearest_distances_to_cloud(points: np.ndarray, cloud: np.ndarray) -> np.ndarray:
             """Return nearest-neighbor distances from points to cloud (NaN if cloud empty)."""
             if cloud is None or len(cloud) == 0:
@@ -1415,7 +1415,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             return dists
 
         try:
-            az_segmentations = import_active_zone_segmentations(tomogram_path, alignment_dir=alignment_dir)
+            az_segmentations = import_cleft_segmentations(tomogram_path, alignment_dir=alignment_dir)
             all_az_points = []
             pre_outer_clouds = []
             post_outer_clouds = []
@@ -1471,7 +1471,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                 az_center = np.array([np.nan, np.nan, np.nan])
                 distances_to_center = np.full(coords.shape[0], np.nan)
         except Exception as e:
-            print(f"Error calculating active zone center: {e}")
+            print(f"Error calculating synaptic cleft center: {e}")
             az_center = np.array([np.nan, np.nan, np.nan])
             distances_to_center = np.full(coords.shape[0], np.nan)
             df_valid['distance_to_presynaptic_active_outer'] = np.full(coords.shape[0], np.nan)
@@ -1481,24 +1481,24 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             df_valid['distance_to_presynaptic_active_outer_inner_mean'] = np.full(coords.shape[0], np.nan)
             df_valid['distance_to_postsynaptic_active_outer_inner_mean'] = np.full(coords.shape[0], np.nan)
             df_valid['synaptic_designation'] = "extrasynaptic"
-        df_valid['distance_to_active_zone_center'] = distances_to_center
+        df_valid['distance_to_cleft_center'] = distances_to_center
 
-        # Scaled center distance uses active_zone_max_distance from prior activezone analysis only.
-        active_zone_max_distance_nm = load_active_zone_max_distance_nm_from_results(
+        # Scaled center distance uses cleft_max_distance from prior cleft analysis only.
+        cleft_max_distance_nm = load_cleft_max_distance_nm_from_results(
             tomogram_path, alignment_dir
         )
-        if active_zone_max_distance_nm is None:
+        if cleft_max_distance_nm is None:
             print(
-                f"Error: active_zone_max_distance not found in prior active zone analysis for "
+                f"Error: cleft_max_distance not found in prior synaptic cleft analysis for "
                 f"{Path(tomogram_path).name} ({alignment_dir}). "
-                "Skipping scaled_distance_to_active_zone_center (run activezone analysis first)."
+                "Skipping scaled_distance_to_cleft_center (run cleft analysis first)."
             )
-            df_valid['scaled_distance_to_active_zone_center'] = np.full(coords.shape[0], np.nan)
+            df_valid['scaled_distance_to_cleft_center'] = np.full(coords.shape[0], np.nan)
         else:
-            df_valid['scaled_distance_to_active_zone_center'] = (
-                df_valid['distance_to_active_zone_center'] / active_zone_max_distance_nm
+            df_valid['scaled_distance_to_cleft_center'] = (
+                df_valid['distance_to_cleft_center'] / cleft_max_distance_nm
             )
-        # --- End active zone center calculation ---
+        # --- End synaptic cleft center calculation ---
 
         # --- KDTree nearest neighbor analysis (on filtered AuNPs) ---
         tree = KDTree(coords)
@@ -1645,7 +1645,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             # Add calculated distance columns if they exist
             distance_cols = [
                 'nearest_neighbor_distance', 'distance_to_presynaptic', 'distance_to_postsynaptic',
-                'distance_to_fusion_point', 'distance_to_active_zone_center',
+                'distance_to_fusion_point', 'distance_to_cleft_center',
                 'distance_to_presynaptic_active_outer', 'distance_to_postsynaptic_active_outer',
                 'distance_to_presynaptic_active_inner', 'distance_to_postsynaptic_active_inner',
                 'distance_to_presynaptic_active_outer_inner_mean', 'distance_to_postsynaptic_active_outer_inner_mean',
@@ -1679,20 +1679,20 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
         df_valid['distance_to_fusion_point'] = fusion_dists
         # Update output columns (rename distance columns to include units)
         cols_out = [
-            'active_zone', 'faCoordinateX_nm', 'faCoordinateY_nm', 'faCoordinateZ_nm',
+            'cleft', 'faCoordinateX_nm', 'faCoordinateY_nm', 'faCoordinateZ_nm',
             'nearest_neighbor_distance_nm', 'distance_to_presynaptic_nm', 'distance_to_postsynaptic_nm',
-            'distance_to_fusion_point_nm', 'distance_to_active_zone_center_nm',
-            'scaled_distance_to_active_zone_center_nm',
+            'distance_to_fusion_point_nm', 'distance_to_cleft_center_nm',
+            'scaled_distance_to_cleft_center_nm',
             'distance_to_presynaptic_active_outer_nm', 'distance_to_postsynaptic_active_outer_nm',
             'distance_to_presynaptic_active_inner_nm', 'distance_to_postsynaptic_active_inner_nm',
             'distance_to_presynaptic_active_outer_inner_mean_nm', 'distance_to_postsynaptic_active_outer_inner_mean_nm',
             'synaptic_designation', 'aunp_cluster'
         ]
         # Create a copy with renamed columns for CSV output
-        df_output = df_valid[['active_zone', 'faCoordinateX', 'faCoordinateY', 'faCoordinateZ',
+        df_output = df_valid[['cleft', 'faCoordinateX', 'faCoordinateY', 'faCoordinateZ',
                               'nearest_neighbor_distance', 'distance_to_presynaptic', 'distance_to_postsynaptic',
-                              'distance_to_fusion_point', 'distance_to_active_zone_center',
-                              'scaled_distance_to_active_zone_center',
+                              'distance_to_fusion_point', 'distance_to_cleft_center',
+                              'scaled_distance_to_cleft_center',
                               'distance_to_presynaptic_active_outer', 'distance_to_postsynaptic_active_outer',
                               'distance_to_presynaptic_active_inner', 'distance_to_postsynaptic_active_inner',
                               'distance_to_presynaptic_active_outer_inner_mean', 'distance_to_postsynaptic_active_outer_inner_mean',
@@ -1727,8 +1727,8 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             'distance_to_presynaptic': 'distance_to_presynaptic_nm',
             'distance_to_postsynaptic': 'distance_to_postsynaptic_nm',
             'distance_to_fusion_point': 'distance_to_fusion_point_nm',
-            'distance_to_active_zone_center': 'distance_to_active_zone_center_nm',
-            'scaled_distance_to_active_zone_center': 'scaled_distance_to_active_zone_center_nm',
+            'distance_to_cleft_center': 'distance_to_cleft_center_nm',
+            'scaled_distance_to_cleft_center': 'scaled_distance_to_cleft_center_nm',
             'distance_to_presynaptic_active_outer': 'distance_to_presynaptic_active_outer_nm',
             'distance_to_postsynaptic_active_outer': 'distance_to_postsynaptic_active_outer_nm',
             'distance_to_presynaptic_active_inner': 'distance_to_presynaptic_active_inner_nm',
@@ -1876,22 +1876,22 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
 
 
         if run_aunp_vs_az_center_ripley:
-            print("Running AuNP vs active zone center Ripley L₁₂ analyses...")
+            print("Running AuNP vs synaptic cleft center Ripley L₁₂ analyses...")
             try:
-                from .activezone import load_active_zone_mapping
-                from .aunp_ripley_vs_active_zone_center import (
+                from .cleft import load_cleft_mapping
+                from .aunp_ripley_vs_cleft_center import (
                     POOLED_CURVES_CSV,
                     POOLED_G12_CSV,
                     plot_pooled_aunp_vs_az_center_ripley_visualizations,
                     run_aunp_vs_az_center_ripley_for_tomogram,
                 )
 
-                az_segmentations = import_active_zone_segmentations(
+                az_segmentations = import_cleft_segmentations(
                     tomogram_path, alignment_dir=alignment_dir
                 )
-                az_indices_for_ripley = active_zone_indices
+                az_indices_for_ripley = cleft_indices
                 if az_indices_for_ripley is None:
-                    az_mapping_for_ripley = load_active_zone_mapping(
+                    az_mapping_for_ripley = load_cleft_mapping(
                         tomogram_path, alignment_dir
                     ) or {}
                     az_indices_for_ripley = sorted(int(k) for k in az_mapping_for_ripley)
@@ -1899,7 +1899,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                 ripley_frames, prism_frames, g12_frames = run_aunp_vs_az_center_ripley_for_tomogram(
                     Path(tomogram_path),
                     alignment_dir,
-                    active_zone_indices=az_indices_for_ripley,
+                    cleft_indices=az_indices_for_ripley,
                     df_valid=df_valid,
                     az_segmentations=az_segmentations,
                     write_figures=True,
@@ -1934,29 +1934,29 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                 traceback.print_exc()
         else:
             print(
-                "Skipping AuNP vs active zone center Ripley L₁₂ analyses "
+                "Skipping AuNP vs synaptic cleft center Ripley L₁₂ analyses "
                 "(disabled by run_aunp_vs_az_center_ripley=False)."
             )
 
 # --- End per-vesicle AuNP outputs ---
         
-        # --- Calculate packing density for each active zone ---
+        # --- Calculate packing density for each synaptic cleft ---
         packing_density_results: dict = {}
         try:
-            from .activezone import import_membrane_segmentations_from_glb, find_active_zones_from_glb, define_active_zonogram
+            from .cleft import import_membrane_segmentations_from_glb, find_active_zones_from_glb, define_active_zonogram
             
-            print(f"Calculating packing density for active zones (cylinder radius {cylinder_radius} nm)...")
+            print(f"Calculating packing density for synaptic clefts (cylinder radius {cylinder_radius} nm)...")
             membrane_data = import_membrane_segmentations_from_glb(tomogram_path, alignment_dir=alignment_dir)
-            active_zones_glb = find_active_zones_from_glb(membrane_data, distance_range=(10.0, 40.0))
+            clefts_glb = find_active_zones_from_glb(membrane_data, distance_range=(10.0, 40.0))
             
-            if active_zones_glb and 'active_zones' in active_zones_glb and len(active_zones_glb['active_zones']) > 0:
-                zonogram_results = define_active_zonogram(active_zones_glb)
+            if clefts_glb and 'clefts' in clefts_glb and len(clefts_glb['clefts']) > 0:
+                zonogram_results = define_active_zonogram(clefts_glb)
                 
                 if zonogram_results['status'] == 'completed' and 'zonogram_data' in zonogram_results:
                     aunps_by_az = {}
-                    for az_idx in df_valid['active_zone'].unique():
+                    for az_idx in df_valid['cleft'].unique():
                         if az_idx != -1:
-                            az_df = df_valid[df_valid['active_zone'] == az_idx]
+                            az_df = df_valid[df_valid['cleft'] == az_idx]
                             aunps_by_az[az_idx] = az_df[coord_cols].values
                     
                     fusion_point_rows = enumerate_close_vesicle_fusion_points(
@@ -1968,7 +1968,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                     )
 
                     packing_scan_rows: list[dict] = []
-                    for zone_name, zone_data in active_zones_glb['active_zones'].items():
+                    for zone_name, zone_data in clefts_glb['clefts'].items():
                         if 'active_postsynaptic_mesh' not in zone_data:
                             continue
                         
@@ -2027,7 +2027,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                                     {
                                         "tomogram_name": tomogram_name,
                                         "alignment_dir": alignment_dir,
-                                        "active_zone_name": zone_name,
+                                        "cleft_name": zone_name,
                                         "scan_vertex_index": scan_idx,
                                         "vertex_x_nm": float(vertex[0]),
                                         "vertex_y_nm": float(vertex[1]),
@@ -2098,7 +2098,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
                 else:
                     print("  Could not define active zonograms for packing density calculation")
             else:
-                print("  No active zones found for packing density calculation")
+                print("  No synaptic clefts found for packing density calculation")
         except Exception as e:
             print(f"Error calculating packing density: {e}")
             import traceback
@@ -2112,11 +2112,11 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
 
         results_manager = ResultsManager("results")
         analysis_name = f"{tomogram_name}__{alignment_dir}"
-        active_zone_results = results_manager.get_tomogram_results(analysis_name, "activezone")
+        cleft_results = results_manager.get_tomogram_results(analysis_name, "cleft")
         az_data: Dict[str, Any] = {}
         az_individual_zone_results: Dict[str, Dict[str, Any]] = {}
-        if active_zone_results and "results" in active_zone_results:
-            az_data = active_zone_results["results"].get("active_zone", {})
+        if cleft_results and "results" in cleft_results:
+            az_data = cleft_results["results"].get("cleft", {})
             az_individual_zone_results = az_data.get("individual_zone_results") or {}
 
         summary_stats = {
@@ -2141,41 +2141,41 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             n_clusters = len(df_valid['aunp_cluster'].unique()) - (1 if -1 in df_valid['aunp_cluster'].values else 0)
             summary_stats['aunp_cluster_count'] = n_clusters
         
-        # Add AuNP density (AuNPs per unit active zone area)
-        # Use the saved active zone results which already contain the filtered zones
+        # Add AuNP density (AuNPs per unit synaptic cleft area)
+        # Use the saved synaptic cleft results which already contain the filtered zones
         if n_aunps > 0:
             try:
                 if not az_data:
                     raise ValueError(
-                        f"No active zone results available for '{analysis_name}'. "
+                        f"No synaptic cleft results available for '{analysis_name}'. "
                         "Cannot calculate AuNP density. Active zone analysis must be run first for this alignment_dir."
                     )
 
-                if "total_active_zone_post_area" not in az_data:
+                if "total_cleft_post_area" not in az_data:
                     raise ValueError(
-                        "No total postsynaptic active zone area available. "
+                        "No total postsynaptic synaptic cleft area available. "
                         "Cannot calculate AuNP density. Active zone analysis must be run with postsynaptic area calculation."
                     )
 
-                total_active_zone_area = az_data["total_active_zone_post_area"]
+                total_cleft_area = az_data["total_cleft_post_area"]
 
-                if total_active_zone_area <= 0:
+                if total_cleft_area <= 0:
                     raise ValueError(
-                        f"Invalid total active zone area: {total_active_zone_area}. Area must be positive."
+                        f"Invalid total synaptic cleft area: {total_cleft_area}. Area must be positive."
                     )
 
-                summary_stats["aunp_density"] = float(n_aunps / total_active_zone_area)
+                summary_stats["aunp_density"] = float(n_aunps / total_cleft_area)
             except Exception as e:
-                print(f"Error getting active zone area for density calculation: {e}")
+                print(f"Error getting synaptic cleft area for density calculation: {e}")
                 raise
         else:
             summary_stats["aunp_density"] = 0.0
         
-        # Add distance to active zone center mean
-        if 'distance_to_active_zone_center' in df_valid.columns and n_aunps > 0:
-            summary_stats['distance_to_active_zone_center_mean'] = float(df_valid['distance_to_active_zone_center'].mean())
+        # Add distance to synaptic cleft center mean
+        if 'distance_to_cleft_center' in df_valid.columns and n_aunps > 0:
+            summary_stats['distance_to_cleft_center_mean'] = float(df_valid['distance_to_cleft_center'].mean())
         else:
-            summary_stats['distance_to_active_zone_center_mean'] = 0.0
+            summary_stats['distance_to_cleft_center_mean'] = 0.0
         
         # Add packing density statistics
         if packing_density_results:
@@ -2210,7 +2210,7 @@ def analyze_aunps(tomogram_path, active_zone_indices=None, set_name=None,
             status="completed",
         )
         summary_stats["individual_zone_results"] = {
-            row["active_zone"]: row for row in per_zone_rows
+            row["cleft"]: row for row in per_zone_rows
         }
 
         return summary_stats

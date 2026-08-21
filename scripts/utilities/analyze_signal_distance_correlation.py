@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Analyze the relationship between vesicle signal values and distance to active zone.
+Analyze the relationship between vesicle signal values and distance to synaptic cleft.
 """
 
 import pandas as pd
@@ -10,13 +10,13 @@ from scipy import stats
 import seaborn as sns
 
 def analyze_signal_distance_correlation():
-    """Analyze the correlation between vesicle signal values and distance to active zone."""
+    """Analyze the correlation between vesicle signal values and distance to synaptic cleft."""
     
     # Load the vesicle distances CSV
     df = pd.read_csv('results/all_vesicle_distances.csv')
     
     # Filter out rows with missing signal values
-    df_with_signals = df.dropna(subset=['scaled_signal', 'distance_to_active_zone_nm'])
+    df_with_signals = df.dropna(subset=['scaled_signal', 'distance_to_cleft_nm'])
     
     if len(df_with_signals) == 0:
         print("No signal values found in the CSV file.")
@@ -24,7 +24,7 @@ def analyze_signal_distance_correlation():
     
     # Extract data
     scaled_signals = df_with_signals['scaled_signal'].values
-    distances = df_with_signals['distance_to_active_zone_nm'].values
+    distances = df_with_signals['distance_to_cleft_nm'].values
     
     print(f"Analyzing {len(scaled_signals)} vesicles with both signal and distance data")
     print(f"Signal range: {scaled_signals.min():.4f} to {scaled_signals.max():.4f}")
@@ -85,9 +85,9 @@ def analyze_signal_distance_correlation():
     
     # Scatter plot
     axes[0, 0].scatter(distances, scaled_signals, alpha=0.6, s=30)
-    axes[0, 0].set_xlabel('Distance to Active Zone (nm)')
+    axes[0, 0].set_xlabel('Distance to Cleft (nm)')
     axes[0, 0].set_ylabel('Scaled Signal Value')
-    axes[0, 0].set_title('Vesicle Signal vs Distance to Active Zone')
+    axes[0, 0].set_title('Vesicle Signal vs Distance to Cleft')
     
     # Add regression line
     x_range = np.linspace(distances.min(), distances.max(), 100)
@@ -148,11 +148,11 @@ def analyze_signal_distance_correlation():
     print("\n=== Summary ===")
     if abs(pearson_r) > 0.3 and pearson_p < 0.05:
         direction = "positive" if pearson_r > 0 else "negative"
-        print(f"There is a {direction} correlation between vesicle signal and distance to active zone")
+        print(f"There is a {direction} correlation between vesicle signal and distance to synaptic cleft")
     elif pearson_p < 0.05:
-        print("There is a weak but significant correlation between vesicle signal and distance to active zone")
+        print("There is a weak but significant correlation between vesicle signal and distance to synaptic cleft")
     else:
-        print("There is no significant correlation between vesicle signal and distance to active zone")
+        print("There is no significant correlation between vesicle signal and distance to synaptic cleft")
     
     print(f"Correlation strength: {abs(pearson_r):.3f} ({'strong' if abs(pearson_r) > 0.7 else 'moderate' if abs(pearson_r) > 0.3 else 'weak'})")
 

@@ -2,11 +2,11 @@
 """
 Vesicle Slice Extraction Script
 
-This script extracts slices from vesicles that are within 20nm of the presynaptic active zone membrane.
+This script extracts slices from vesicles that are within 20nm of the presynaptic synaptic cleft membrane.
 It saves PNG images of each vesicle slice with proper orientation and contrast adjustment.
 
 Usage:
-    python scripts/extract_vesicle_slices.py --csv data/tomograms.csv --output-dir results/vesicle_slices
+    python scripts/utilities/extract_vesicle_slices.py --csv data/tomograms.csv --output-dir results/vesicle_slices
 """
 
 import argparse
@@ -39,10 +39,10 @@ except ImportError:
     PSUTIL_AVAILABLE = False
 
 # Add the src directory to the Python path
-sys.path.append(str(Path(__file__).parent.parent / "src"))
+sys.path.append(str(Path(__file__).resolve().parent.parent.parent / "src"))
 
 from synaptic_tomo_tools.alignment_utils import require_alignment_dir
-from synaptic_tomo_tools.vesicles import import_presynaptic_membranes_and_active_zones
+from synaptic_tomo_tools.vesicles import import_presynaptic_membranes_and_clefts
 warnings.filterwarnings('ignore')
 
 def monitor_memory():
@@ -131,38 +131,38 @@ def load_vesicle_data(tomogram_path, alignment_dir: str):
         print(f"Error loading vesicle data: {e}")
         return []
 
-def load_active_zone_data(tomogram_path, alignment_dir: str):
-    """Load active zone data from the STT results."""
+def load_cleft_data(tomogram_path, alignment_dir: str):
+    """Load synaptic cleft data from the STT results."""
     alignment_dir = require_alignment_dir(alignment_dir)
-    az_dir = Path(tomogram_path) / alignment_dir / "STT_results" / "active_zones"
+    az_dir = Path(tomogram_path) / alignment_dir / "STT_results" / "clefts"
     
     if not az_dir.exists():
-        print(f"No active zones directory found: {az_dir}")
+        print(f"No synaptic clefts directory found: {az_dir}")
         return []
     
-    # Load all active zone pre outer files
+    # Load all synaptic cleft pre outer files
     az_files = list(az_dir.glob("*_pre_outer.txt"))
-    active_zone_points = []
+    cleft_points = []
     
     for az_file in az_files:
         try:
             points = np.loadtxt(az_file, delimiter=None)
             if points.ndim == 2 and points.shape[1] == 3:
-                active_zone_points.extend(points)
+                cleft_points.extend(points)
         except Exception as e:
-            print(f"Error loading active zone file {az_file}: {e}")
+            print(f"Error loading synaptic cleft file {az_file}: {e}")
     
-    return np.array(active_zone_points) if active_zone_points else np.array([])
+    return np.array(cleft_points) if cleft_points else np.array([])
 
-def find_closest_active_zone_point(vesicle_center, active_zone_points):
-    """Find the closest active zone point to the vesicle center."""
-    if len(active_zone_points) == 0:
+def find_closest_cleft_point(vesicle_center, cleft_points):
+    """Find the closest synaptic cleft point to the vesicle center."""
+    if len(cleft_points) == 0:
         return None, float('inf')
     
-    distances = cdist([vesicle_center], active_zone_points)[0]
+    distances = cdist([vesicle_center], cleft_points)[0]
     min_idx = np.argmin(distances)
     min_distance = distances[min_idx]
-    closest_point = active_zone_points[min_idx]
+    closest_point = cleft_points[min_idx]
     
     return closest_point, min_distance
 
@@ -173,7 +173,7 @@ def extract_vesicle_slice(tomogram_data, vesicle_center, closest_az_point, slice
     Args:
         tomogram_data: 3D tomogram data
         vesicle_center: (x, y, z) coordinates of vesicle center
-        closest_az_point: (x, y, z) coordinates of closest active zone point
+        closest_az_point: (x, y, z) coordinates of closest synaptic cleft point
         slice_size: Size of the extracted slice in pixels
     
     Returns:
@@ -363,7 +363,7 @@ def extract_large_slice_for_rotation(tomogram_data, vesicle_center, final_size=1
     return large_slice
 
 def rotate_slice_to_az_direction(large_slice, vesicle_center, closest_az_point, final_size=120):
-    """Rotate the slice so that the point closest to active zone points down."""
+    """Rotate the slice so that the point closest to synaptic cleft points down."""
     from scipy.ndimage import rotate
     
     # Calculate the vector from vesicle center to closest AZ point
@@ -624,12 +624,12 @@ def process_tomogram(tomogram_path, output_dir, alignment_dir: str):
         cleanup_memory()
         return 0
     
-    # Load membrane_active_zone_pairs for fusion point calculation
-    membrane_active_zone_pairs = import_presynaptic_membranes_and_active_zones(
+    # Load membrane_cleft_pairs for fusion point calculation
+    membrane_cleft_pairs = import_presynaptic_membranes_and_clefts(
         tomogram_path, alignment_dir
     )
-    if not membrane_active_zone_pairs:
-        print("No membrane-active zone pairs found")
+    if not membrane_cleft_pairs:
+        print("No membrane-synaptic cleft pairs found")
         # Clean up data
         del tomogram_data
         cleanup_memory()
@@ -639,10 +639,10 @@ def process_tomogram(tomogram_path, output_dir, alignment_dir: str):
     tomogram_output_dir = output_dir / tomogram_name
     tomogram_output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Process vesicles within 20nm of active zone
+    # Process vesicles within 20nm of synaptic cleft
     extracted_count = 0
     for i, vesicle in enumerate(vesicles):
-        # Check if vesicle is within 20nm of active zone
+        # Check if vesicle is within 20nm of synaptic cleft
         distance_to_az = vesicle.get('distance_to_az', float('inf'))
         if distance_to_az > 20.0:
             continue
@@ -664,7 +664,7 @@ def process_tomogram(tomogram_path, output_dir, alignment_dir: str):
         vesicle_diameter_nm = vesicle.get('diameter', 0)  # This should be the diameter from spherical fit
         
         # Calculate fusion point for this vesicle
-        fusion_point = calculate_fusion_point_for_vesicle(vesicle, membrane_active_zone_pairs)
+        fusion_point = calculate_fusion_point_for_vesicle(vesicle, membrane_cleft_pairs)
         if fusion_point is None:
             print(f"  Skipping vesicle {i} - no fusion point found")
             continue
@@ -755,7 +755,7 @@ def process_tomogram(tomogram_path, output_dir, alignment_dir: str):
     
     # Clean up large data structures
     del tomogram_data
-    del membrane_active_zone_pairs
+    del membrane_cleft_pairs
     cleanup_memory()
     
     memory_end = monitor_memory()
@@ -877,7 +877,7 @@ def create_vesicle_summary_pdf(output_dir):
         print(f"Error creating PDF: {e}")
 
 def create_close_vesicle_summary_pdf(output_dir, csv_path, data_dir):
-    """Create a PDF summary of vesicles within 4nm of active zone, pooled from all tomograms."""
+    """Create a PDF summary of vesicles within 4nm of synaptic cleft, pooled from all tomograms."""
     output_dir = Path(output_dir)
     
     if not output_dir.exists():
@@ -906,7 +906,7 @@ def create_close_vesicle_summary_pdf(output_dir, csv_path, data_dir):
     )
     
     # Add title
-    title = Paragraph("Close Vesicles Summary (≤4nm from Active Zone)", title_style)
+    title = Paragraph("Close Vesicles Summary (≤4nm from Cleft)", title_style)
     story.append(title)
     story.append(Spacer(1, 20))
     
@@ -945,10 +945,10 @@ def create_close_vesicle_summary_pdf(output_dir, csv_path, data_dir):
                 all_close_vesicles.append(vesicle)
     
     if not all_close_vesicles:
-        print("No vesicles found within 4nm of active zone")
+        print("No vesicles found within 4nm of synaptic cleft")
         return
     
-    # Sort by distance to active zone (closest to farthest, 0 to 4nm)
+    # Sort by distance to synaptic cleft (closest to farthest, 0 to 4nm)
     all_close_vesicles.sort(key=lambda x: x.get('distance_to_az', float('inf')))
     
     # Create table data
@@ -1083,41 +1083,41 @@ def create_close_vesicle_summary_pdf(output_dir, csv_path, data_dir):
     except Exception as e:
         print(f"Error creating PDF: {e}")
 
-def calculate_fusion_point_for_vesicle(vesicle, membrane_active_zone_pairs, fusion_point_threshold=10.0):
+def calculate_fusion_point_for_vesicle(vesicle, membrane_cleft_pairs, fusion_point_threshold=10.0):
     """
     Calculate the putative fusion point for a vesicle.
     
     Args:
         vesicle: Vesicle dictionary with coordinates and distance_to_az
-        membrane_active_zone_pairs: Dictionary of membrane-active zone pairs
+        membrane_cleft_pairs: Dictionary of membrane-synaptic cleft pairs
         fusion_point_threshold: Distance threshold for fusion point calculation
         
     Returns:
         Fusion point coordinates (np.ndarray) or None if not found
     """
-    # Only consider vesicles within 20 nm of the presynaptic active zone
+    # Only consider vesicles within 20 nm of the presynaptic synaptic cleft
     if vesicle.get('distance_to_az', 0.0) > 20.0:
         return None
     
     vesicle_points = np.array(vesicle['coordinates'])
     membrane_name = vesicle.get('closest_membrane', None)
     
-    if not membrane_name or membrane_name not in membrane_active_zone_pairs:
+    if not membrane_name or membrane_name not in membrane_cleft_pairs:
         return None
     
-    active_zone_points = membrane_active_zone_pairs[membrane_name]['active_zone_points']
-    if active_zone_points is None or len(active_zone_points) == 0:
+    cleft_points = membrane_cleft_pairs[membrane_name]['cleft_points']
+    if cleft_points is None or len(cleft_points) == 0:
         return None
     
-    # For each vesicle point, find all active zone points within fusion_point_threshold
+    # For each vesicle point, find all synaptic cleft points within fusion_point_threshold
     from scipy.spatial import KDTree
-    tree = KDTree(active_zone_points)
+    tree = KDTree(cleft_points)
     close_points = []
     
     for pt in vesicle_points:
         idxs = tree.query_ball_point(pt, r=fusion_point_threshold)
         if idxs:
-            close_points.extend(active_zone_points[idxs])
+            close_points.extend(cleft_points[idxs])
     
     if close_points:
         fusion_point = np.mean(np.vstack(close_points), axis=0)
@@ -1318,7 +1318,7 @@ def main():
     create_vesicle_summary_pdf(output_dir)
     
     # Create close vesicles summary PDF
-    print("\nCreating close vesicles summary PDF (≤4nm from active zone)...")
+    print("\nCreating close vesicles summary PDF (≤4nm from synaptic cleft)...")
     create_close_vesicle_summary_pdf(output_dir, args.csv, args.data_dir)
 
 if __name__ == "__main__":

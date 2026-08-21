@@ -1,4 +1,4 @@
-# src/synaptic_tomo_tools/activezone.py
+# src/synaptic_tomo_tools/cleft.py
 
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
@@ -9,8 +9,8 @@ from scipy.spatial.distance import cdist, pdist
 from scipy.spatial import ConvexHull, KDTree
 
 
-def _collect_active_zone_surface_points(zone_data: Dict[str, Any]) -> np.ndarray:
-    """All designated active-zone surface points (pre/post synaptic, inner and outer)."""
+def _collect_cleft_surface_points(zone_data: Dict[str, Any]) -> np.ndarray:
+    """All designated synaptic-cleft surface points (pre/post synaptic, inner and outer)."""
     point_keys = (
         'active_presynaptic_points',
         'active_presynaptic_outer_points',
@@ -29,15 +29,15 @@ def _collect_active_zone_surface_points(zone_data: Dict[str, Any]) -> np.ndarray
     return np.vstack(chunks)
 
 
-def _active_zone_membrane_area_from_hull_um2(
+def _cleft_membrane_area_from_hull_um2(
     inner_points: np.ndarray,
     outer_points: np.ndarray,
 ) -> float:
     """
-    Estimate one membrane sheet area (µm²) from inner+outer active-zone surface points.
+    Estimate one membrane sheet area (µm²) from inner+outer synaptic-cleft surface points.
 
     Builds a 3D convex hull over both sheets and uses half the hull surface area as the
-    active-zone membrane area (coordinates in nm; converted to µm²).
+    synaptic-cleft membrane area (coordinates in nm; converted to µm²).
     """
     chunks: List[np.ndarray] = []
     for pts in (inner_points, outer_points):
@@ -57,16 +57,16 @@ def _active_zone_membrane_area_from_hull_um2(
         return 0.0
 
 
-def compute_active_zone_max_distance_nm(zone_data: Dict[str, Any]) -> float:
+def compute_cleft_max_distance_nm(zone_data: Dict[str, Any]) -> float:
     """
-    Farthest distance between any two active-zone surface points (nm).
+    Farthest distance between any two synaptic-cleft surface points (nm).
 
-    Includes all pre- and postsynaptic active-zone designated points (inner and outer).
+    Includes all pre- and postsynaptic synaptic-cleft designated points (inner and outer).
     Uses the 3D convex hull: the maximum pairwise distance in the full point set is always
     attained by two hull vertices, so ``pdist`` is evaluated only on hull vertices.
     Falls back to all points if the hull cannot be built (degenerate geometry).
     """
-    points = _collect_active_zone_surface_points(zone_data)
+    points = _collect_cleft_surface_points(zone_data)
     n = len(points)
     if n < 2:
         return 0.0
@@ -100,9 +100,9 @@ def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarra
     tomogram_path = Path(tomogram_path)
     stt_results_dir = tomogram_path / alignment_dir / "STT_results"
     
-    # Create activezone directory
-    active_zones_dir = stt_results_dir / "activezone"
-    active_zones_dir.mkdir(parents=True, exist_ok=True)
+    # Create cleft directory
+    clefts_dir = stt_results_dir / "cleft"
+    clefts_dir.mkdir(parents=True, exist_ok=True)
     
     volumes_data = {}
     
@@ -158,7 +158,7 @@ def save_membrane_volumes_from_glb(membranes: Dict[str, List[Dict[str, np.ndarra
     
     # Save volumes to JSON file
     import json
-    volumes_file = active_zones_dir / "membrane_volumes.json"
+    volumes_file = clefts_dir / "membrane_volumes.json"
     with open(volumes_file, 'w') as f:
         json.dump(volumes_data, f, indent=2, default=str)
     
@@ -177,7 +177,7 @@ def load_membrane_volumes(tomogram_path, alignment_dir: str) -> Dict[str, Any]:
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_path = Path(tomogram_path)
-    volumes_file = tomogram_path / alignment_dir / "STT_results" / "activezone" / "membrane_volumes.json"
+    volumes_file = tomogram_path / alignment_dir / "STT_results" / "cleft" / "membrane_volumes.json"
     
     if not volumes_file.exists():
         print(f"Warning: Membrane volumes file not found: {volumes_file}")
@@ -317,9 +317,9 @@ def import_membrane_segmentations_from_glb(tomogram_path, alignment_dir: str) ->
     return membranes
 
 
-def find_active_zones(membranes: Dict[str, List[np.ndarray]], distance_threshold: float = 40.0) -> Dict[str, Any]:
+def find_clefts(membranes: Dict[str, List[np.ndarray]], distance_threshold: float = 40.0) -> Dict[str, Any]:
     """
-    Find active zones by identifying presynaptic points within distance_threshold of postsynaptic points.
+    Find synaptic clefts by identifying presynaptic points within distance_threshold of postsynaptic points.
     Uses KD-tree for efficient spatial queries.
     
     Note: This function is not used in the current pipeline, after switching to using the find_active_zones_from_glb function.
@@ -329,10 +329,10 @@ def find_active_zones(membranes: Dict[str, List[np.ndarray]], distance_threshold
         distance_threshold: Distance threshold in nm (default: 40.0)
         
     Returns:
-        Dictionary containing active zone information and segmentations
+        Dictionary containing synaptic cleft information and segmentations
     """
-    active_zones = {}
-    active_zone_count = 0
+    clefts = {}
+    cleft_count = 0
     
     presyn_membranes = membranes['presynaptic']
     postsyn_membranes = membranes['postsynaptic']
@@ -364,10 +364,10 @@ def find_active_zones(membranes: Dict[str, List[np.ndarray]], distance_threshold
                 active_post_mask = distances_post <= distance_threshold
                 active_post_indices = np.where(active_post_mask)[0]
             
-            # If we found an active zone
+            # If we found an synaptic cleft
             if len(active_pre_indices) > 0 or len(active_post_indices) > 0:
-                active_zone_count += 1
-                zone_name = f"active_zone_pre{pre_idx+1}_post{post_idx+1}"
+                cleft_count += 1
+                zone_name = f"cleft_pre{pre_idx+1}_post{post_idx+1}"
                 
                 # Calculate distance statistics for active presynaptic points
                 if len(active_pre_coords) > 0:
@@ -380,7 +380,7 @@ def find_active_zones(membranes: Dict[str, List[np.ndarray]], distance_threshold
                     max_dist = 0
                     avg_dist = 0
                 
-                active_zones[zone_name] = {
+                clefts[zone_name] = {
                     'presynaptic_membrane_index': pre_idx + 1,
                     'postsynaptic_membrane_index': post_idx + 1,
                     'active_presynaptic_points': active_pre_coords,
@@ -394,19 +394,19 @@ def find_active_zones(membranes: Dict[str, List[np.ndarray]], distance_threshold
                     'active_post_count': len(active_post_indices)
                 }
                 
-                # Found active zone with presynaptic and postsynaptic points
+                # Found synaptic cleft with presynaptic and postsynaptic points
             else:
-                print(f"No active zone found between presynaptic {pre_idx+1} and postsynaptic {post_idx+1}")
+                print(f"No synaptic cleft found between presynaptic {pre_idx+1} and postsynaptic {post_idx+1}")
     
     return {
-        'active_zones': active_zones,
-        'total_active_zones': active_zone_count,
+        'clefts': clefts,
+        'total_clefts': cleft_count,
         'distance_threshold': distance_threshold
     }
 
 def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]], distance_range: Tuple[float, float] = (10.0, 40.0)) -> Dict[str, Any]:
     """
-    Find active zones from GLB membrane meshes using KD-trees.
+    Find synaptic clefts from GLB membrane meshes using KD-trees.
 
     Membership (distance gate): presynaptic vertices whose nearest postsynaptic neighbor lies in
     ``distance_range``; postsynaptic vertices whose nearest such presynaptic vertex lies in the same
@@ -424,14 +424,14 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
         distance_range: Distance range in nm as (min_distance, max_distance) (default: (10.0, 40.0))
 
     Returns:
-        Dictionary containing active zone information and segmentations
+        Dictionary containing synaptic cleft information and segmentations
     """
     import trimesh
 
     min_distance, max_distance = distance_range
 
-    active_zones = {}
-    active_zone_count = 0
+    clefts = {}
+    cleft_count = 0
     presyn_membranes = membranes['presynaptic']
     postsyn_membranes = membranes['postsynaptic']
     for pre_idx, presyn_data in enumerate(presyn_membranes):
@@ -457,11 +457,11 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
                 active_post_indices = np.where(active_post_mask)[0]
 
             if len(active_pre_indices) == 0 or len(active_post_indices) == 0:
-                print(f"No active zone found between presynaptic {pre_idx + 1} and postsynaptic {post_idx + 1}")
+                print(f"No synaptic cleft found between presynaptic {pre_idx + 1} and postsynaptic {post_idx + 1}")
                 continue
 
-            active_zone_count += 1
-            zone_name = f"active_zone_pre{pre_idx + 1}_post{post_idx + 1}"
+            cleft_count += 1
+            zone_name = f"cleft_pre{pre_idx + 1}_post{post_idx + 1}"
 
             distances_active = distances_pre[active_pre_indices]
             min_dist = float(np.min(distances_active))
@@ -508,7 +508,7 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
             front_facing_faces = int(np.sum(pre_outer_face_mask))
             back_facing_faces = int(np.sum(pre_inner_face_mask))
 
-            active_pre_area = _active_zone_membrane_area_from_hull_um2(
+            active_pre_area = _cleft_membrane_area_from_hull_um2(
                 active_pre_inner_points, active_pre_outer_points
             )
 
@@ -521,11 +521,11 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
                 post_front_facing_faces = 0
                 post_back_facing_faces = 0
 
-            active_post_area = _active_zone_membrane_area_from_hull_um2(
+            active_post_area = _cleft_membrane_area_from_hull_um2(
                 active_post_inner_points, active_post_outer_points
             )
 
-            active_zones[zone_name] = {
+            clefts[zone_name] = {
                 'presynaptic_membrane_index': pre_idx + 1,
                 'postsynaptic_membrane_index': post_idx + 1,
                 'active_presynaptic_points': active_pre_coords,
@@ -556,65 +556,65 @@ def find_active_zones_from_glb(membranes: Dict[str, List[Dict[str, np.ndarray]]]
             }
 
     return {
-        'active_zones': active_zones,
-        'total_active_zones': active_zone_count,
+        'clefts': clefts,
+        'total_clefts': cleft_count,
         'distance_range': distance_range,
     }
 
 
-def save_active_zone_segmentations(active_zones: Dict[str, Any], tomogram_path, alignment_dir: str):
+def save_cleft_segmentations(clefts: Dict[str, Any], tomogram_path, alignment_dir: str):
     """
-    Save active zone segmentations to files.
+    Save synaptic cleft segmentations to files.
     
     Args:
-        active_zones: Active zones dictionary from find_active_zones
+        clefts: Clefts dictionary from find_clefts
         tomogram_path: Path to tomogram directory (str or Path)
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_path = Path(tomogram_path)
     stt_results_dir = tomogram_path / alignment_dir / "STT_results"
     
-    # Create activezone directory
-    active_zone_dir = stt_results_dir / "activezone"
-    active_zone_dir.mkdir(parents=True, exist_ok=True)
+    # Create cleft directory
+    cleft_dir = stt_results_dir / "cleft"
+    cleft_dir.mkdir(parents=True, exist_ok=True)
     
-    for zone_name, zone_data in active_zones['active_zones'].items():
+    for zone_name, zone_data in clefts['clefts'].items():
         # Save outer-facing (toward cleft) membranes for downstream usage
         pre_outer = zone_data.get('active_presynaptic_outer_points', zone_data.get('active_presynaptic_points', np.array([])))
         post_outer = zone_data.get('active_postsynaptic_outer_points', zone_data.get('active_postsynaptic_points', np.array([])))
         if len(pre_outer) > 0:
-            np.savetxt(active_zone_dir / f"{zone_name}_pre_outer.txt", pre_outer, fmt='%.6e')
+            np.savetxt(cleft_dir / f"{zone_name}_pre_outer.txt", pre_outer, fmt='%.6e')
         if len(post_outer) > 0:
-            np.savetxt(active_zone_dir / f"{zone_name}_post_outer.txt", post_outer, fmt='%.6e')
+            np.savetxt(cleft_dir / f"{zone_name}_post_outer.txt", post_outer, fmt='%.6e')
 
         # Save inner-facing (away from cleft) membranes for future use
         pre_inner = zone_data.get('active_presynaptic_inner_points', np.array([]))
         post_inner = zone_data.get('active_postsynaptic_inner_points', np.array([]))
         if len(pre_inner) > 0:
-            np.savetxt(active_zone_dir / f"{zone_name}_pre_inner.txt", pre_inner, fmt='%.6e')
+            np.savetxt(cleft_dir / f"{zone_name}_pre_inner.txt", pre_inner, fmt='%.6e')
         if len(post_inner) > 0:
-            np.savetxt(active_zone_dir / f"{zone_name}_post_inner.txt", post_inner, fmt='%.6e')
+            np.savetxt(cleft_dir / f"{zone_name}_post_inner.txt", post_inner, fmt='%.6e')
 
 
-def match_active_zones_by_aunps(
+def match_clefts_by_aunps(
     tomogram_path,
-    active_zone_indices,
-    all_active_zones,
+    cleft_indices,
+    all_clefts,
     alignment_dir: str,
     *,
     aunp_pick_star_pattern=None,
 ) -> Dict[int, str]:
     """
-    Match active zone indices to zone names using smart matching based on AuNP locations.
+    Match synaptic cleft indices to zone names using smart matching based on AuNP locations.
     This is done once and the mapping can be reused.
     
     Args:
         tomogram_path: Path to the tomogram file
-        active_zone_indices: List of active zone indices to match
-        all_active_zones: Dictionary of all active zones from GLB
+        cleft_indices: List of synaptic cleft indices to match
+        all_clefts: Dictionary of all synaptic clefts from GLB
         
     Returns:
-        Dictionary mapping active_zone_index -> zone_name
+        Dictionary mapping cleft_index -> zone_name
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     az_mapping = {}
@@ -627,7 +627,7 @@ def match_active_zones_by_aunps(
         aunps_dir = Path(tomogram_path) / alignment_dir / "aunps"
         star_dfs = load_aunp_pick_star_dataframes(
             aunps_dir,
-            list(active_zone_indices),
+            list(cleft_indices),
             pattern=aunp_pick_star_pattern,
         )
         
@@ -636,33 +636,33 @@ def match_active_zones_by_aunps(
         
         aunp_data = pd.concat(star_dfs, ignore_index=True)
         
-        if 'active_zone' not in aunp_data.columns or 'faCoordinateX' not in aunp_data.columns:
+        if 'cleft' not in aunp_data.columns or 'faCoordinateX' not in aunp_data.columns:
             return az_mapping
         
         # Match each index to a zone name
-        for az_idx in active_zone_indices:
-            # Get AuNPs for this active zone index
-            aunps_in_az = aunp_data[aunp_data['active_zone'] == az_idx]
+        for az_idx in cleft_indices:
+            # Get AuNPs for this synaptic cleft index
+            aunps_in_az = aunp_data[aunp_data['cleft'] == az_idx]
             
             if aunps_in_az.empty:
-                print(f"Warning: No AuNPs found for active zone index {az_idx}, skipping")
+                print(f"Warning: No AuNPs found for synaptic cleft index {az_idx}, skipping")
                 continue
             
-            # Calculate center of AuNPs for this active zone index
+            # Calculate center of AuNPs for this synaptic cleft index
             aunp_center = np.mean(aunps_in_az[['faCoordinateX', 'faCoordinateY', 'faCoordinateZ']].values, axis=0)
             
-            # Find the active zone closest to these AuNPs
+            # Find the synaptic cleft closest to these AuNPs
             best_az_name = None
             min_distance = float('inf')
             
-            for zone_name, zone_data in all_active_zones.items():
+            for zone_name, zone_data in all_clefts.items():
                 if len(zone_data['active_presynaptic_points']) > 0 and len(zone_data['active_postsynaptic_points']) > 0:
-                    # Calculate center of this active zone (paired pre/post membranes)
+                    # Calculate center of this synaptic cleft (paired pre/post membranes)
                     pre_center = np.mean(zone_data['active_presynaptic_points'], axis=0)
                     post_center = np.mean(zone_data['active_postsynaptic_points'], axis=0)
                     az_center = (pre_center + post_center) / 2.0
                     
-                    # Calculate distance from AuNP center to active zone center
+                    # Calculate distance from AuNP center to synaptic cleft center
                     distance = np.linalg.norm(aunp_center - az_center)
                     
                     if distance < min_distance:
@@ -671,9 +671,9 @@ def match_active_zones_by_aunps(
             
             if best_az_name is not None:
                 az_mapping[az_idx] = best_az_name
-                print(f"Matched active zone index {az_idx} to {best_az_name} (distance: {min_distance:.2f} nm)")
+                print(f"Matched synaptic cleft index {az_idx} to {best_az_name} (distance: {min_distance:.2f} nm)")
             else:
-                print(f"Warning: No active zone found for active zone index {az_idx}")
+                print(f"Warning: No synaptic cleft found for synaptic cleft index {az_idx}")
     
     except Exception as e:
         print(f"Warning: Could not perform smart matching: {e}")
@@ -681,60 +681,59 @@ def match_active_zones_by_aunps(
     return az_mapping
 
 
-def save_active_zone_mapping(tomogram_path, az_mapping: Dict[int, str], alignment_dir: str):
-    """Save the active zone index to zone name mapping to a JSON file."""
+def save_cleft_mapping(tomogram_path, az_mapping: Dict[int, str], alignment_dir: str):
+    """Save the synaptic cleft index to zone name mapping to a JSON file."""
     alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_path = Path(tomogram_path)
-    active_zone_dir = tomogram_path / alignment_dir / "STT_results" / "activezone"
-    active_zone_dir.mkdir(parents=True, exist_ok=True)
+    cleft_dir = tomogram_path / alignment_dir / "STT_results" / "cleft"
+    cleft_dir.mkdir(parents=True, exist_ok=True)
     
-    mapping_file = active_zone_dir / "active_zone_mapping.json"
+    mapping_file = cleft_dir / "cleft_mapping.json"
     import json
     with open(mapping_file, 'w') as f:
         json.dump(az_mapping, f, indent=2)
-    print(f"Saved active zone mapping to {mapping_file}")
+    print(f"Saved synaptic cleft mapping to {mapping_file}")
 
 
-def load_active_zone_mapping(tomogram_path, alignment_dir: str) -> Dict[int, str]:
-    """Load the active zone index to zone name mapping from JSON file."""
+def load_cleft_mapping(tomogram_path, alignment_dir: str) -> Dict[int, str]:
+    """Load the synaptic cleft index to zone name mapping from JSON file."""
     alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_path = Path(tomogram_path)
-    active_zone_dir = tomogram_path / alignment_dir / "STT_results" / "activezone"
-    mapping_file = active_zone_dir / "active_zone_mapping.json"
-    
+    mapping_file = tomogram_path / alignment_dir / "STT_results" / "cleft" / "cleft_mapping.json"
+
     if mapping_file.exists():
         try:
             import json
             with open(mapping_file, 'r') as f:
                 return json.load(f)
         except Exception as e:
-            print(f"Warning: Could not load active zone mapping: {e}")
+            print(f"Warning: Could not load synaptic cleft mapping: {e}")
     
     return {}
 
 
-def define_active_zone(
+def define_cleft(
     tomogram_path,
-    active_zone_indices=None,
+    cleft_indices=None,
     distance_range=None,
     *,
     alignment_dir: str,
     aunp_pick_star_pattern=None,
 ) -> Dict[str, Any]:
     """
-    Define active zone in tomogram.
-    If active_zone_indices is specified, only includes active zones that correspond to those indices.
+    Define synaptic cleft in tomogram.
+    If cleft_indices is specified, only includes synaptic clefts that correspond to those indices.
     
     Args:
         tomogram_path: Path to the tomogram file.
-        active_zone_indices: List of active zone indices to include (None = all).
-        distance_range: Tuple of (min_distance, max_distance) in nm for active zone definition (default: (10.0, 40.0)).
+        cleft_indices: List of synaptic cleft indices to include (None = all).
+        distance_range: Tuple of (min_distance, max_distance) in nm for synaptic cleft definition (default: (10.0, 40.0)).
     
     Returns:
-        Dictionary containing active zone analysis results.
+        Dictionary containing synaptic cleft analysis results.
     """
     alignment_dir = require_alignment_dir(alignment_dir)
-    print(f"Defining active zone in {Path(tomogram_path).name}")
+    print(f"Defining synaptic cleft in {Path(tomogram_path).name}")
     
     # Use custom distance range if provided, otherwise use default
     if distance_range is None:
@@ -744,17 +743,17 @@ def define_active_zone(
     try:
         membranes = import_membrane_segmentations_from_glb(tomogram_path, alignment_dir=alignment_dir)
         
-        # Find active zones from GLB
-        active_zones = find_active_zones_from_glb(membranes, distance_range=distance_range)
+        # Find synaptic clefts from GLB
+        clefts = find_active_zones_from_glb(membranes, distance_range=distance_range)
         
-        # Filter active zones if indices are specified using smart matching based on AuNP locations
+        # Filter synaptic clefts if indices are specified using smart matching based on AuNP locations
         az_mapping = {}
-        if active_zone_indices is not None and len(active_zone_indices) > 0:
+        if cleft_indices is not None and len(cleft_indices) > 0:
             # Do smart matching once
-            az_mapping = match_active_zones_by_aunps(
+            az_mapping = match_clefts_by_aunps(
                 tomogram_path,
-                active_zone_indices,
-                active_zones['active_zones'],
+                cleft_indices,
+                clefts['clefts'],
                 alignment_dir=alignment_dir,
                 aunp_pick_star_pattern=aunp_pick_star_pattern,
             )
@@ -762,84 +761,84 @@ def define_active_zone(
             if az_mapping:
                 # Filter to only include matched zones
                 zones_to_include = set(az_mapping.values())
-                filtered_zones = {name: data for name, data in active_zones['active_zones'].items() if name in zones_to_include}
-                active_zones['active_zones'] = filtered_zones
-                active_zones['total_active_zones'] = len(filtered_zones)
+                filtered_zones = {name: data for name, data in clefts['clefts'].items() if name in zones_to_include}
+                clefts['clefts'] = filtered_zones
+                clefts['total_clefts'] = len(filtered_zones)
                 
                 # Save the mapping for reuse by other functions
-                save_active_zone_mapping(tomogram_path, az_mapping, alignment_dir=alignment_dir)
-                print(f"Filtered to {len(filtered_zones)} active zones using smart matching (indices: {active_zone_indices})")
+                save_cleft_mapping(tomogram_path, az_mapping, alignment_dir=alignment_dir)
+                print(f"Filtered to {len(filtered_zones)} synaptic clefts using smart matching (indices: {cleft_indices})")
             else:
                 # Fallback to order-based matching if smart matching failed
                 print("Warning: Smart matching failed. Using order-based matching (may be incorrect).")
-                active_zone_names = list(active_zones['active_zones'].keys())
+                cleft_names = list(clefts['clefts'].keys())
                 zones_to_include = set()
-                for az_idx in active_zone_indices:
-                    if 0 <= az_idx < len(active_zone_names):
-                        zone_name = active_zone_names[az_idx]
+                for az_idx in cleft_indices:
+                    if 0 <= az_idx < len(cleft_names):
+                        zone_name = cleft_names[az_idx]
                         zones_to_include.add(zone_name)
                         az_mapping[az_idx] = zone_name
                 
                 # Filter to only include specified zones
-                filtered_zones = {name: data for name, data in active_zones['active_zones'].items() if name in zones_to_include}
-                active_zones['active_zones'] = filtered_zones
-                active_zones['total_active_zones'] = len(filtered_zones)
-                save_active_zone_mapping(tomogram_path, az_mapping, alignment_dir=alignment_dir)
-                print(f"Filtered to {len(filtered_zones)} active zones using order-based matching (indices: {active_zone_indices})")
+                filtered_zones = {name: data for name, data in clefts['clefts'].items() if name in zones_to_include}
+                clefts['clefts'] = filtered_zones
+                clefts['total_clefts'] = len(filtered_zones)
+                save_cleft_mapping(tomogram_path, az_mapping, alignment_dir=alignment_dir)
+                print(f"Filtered to {len(filtered_zones)} synaptic clefts using order-based matching (indices: {cleft_indices})")
         
-        # Save active zone segmentations
-        save_active_zone_segmentations(active_zones, tomogram_path, alignment_dir=alignment_dir)
+        # Save synaptic cleft segmentations
+        save_cleft_segmentations(clefts, tomogram_path, alignment_dir=alignment_dir)
         
         # Calculate summary statistics
-        total_active_pre_points = sum(len(zone['active_presynaptic_points']) for zone in active_zones['active_zones'].values())
-        total_active_post_points = sum(len(zone['active_postsynaptic_points']) for zone in active_zones['active_zones'].values())
+        total_active_pre_points = sum(len(zone['active_presynaptic_points']) for zone in clefts['clefts'].values())
+        total_active_post_points = sum(len(zone['active_postsynaptic_points']) for zone in clefts['clefts'].values())
         
-        # Calculate active zone areas and max point-to-point span per zone
-        active_zone_pre_areas = []
-        active_zone_post_areas = []
-        active_zone_max_distances_nm: List[float] = []
-        for zone_name, zone_data in active_zones['active_zones'].items():
-            max_dist_nm = compute_active_zone_max_distance_nm(zone_data)
-            zone_data['active_zone_max_distance_nm'] = max_dist_nm
-            active_zone_max_distances_nm.append(max_dist_nm)
-            print(f"Active zone max distance {zone_name}: {max_dist_nm:.2f} nm")
+        # Calculate synaptic cleft areas and max point-to-point span per zone
+        cleft_pre_areas = []
+        cleft_post_areas = []
+        cleft_max_distances_nm: List[float] = []
+        for zone_name, zone_data in clefts['clefts'].items():
+            max_dist_nm = compute_cleft_max_distance_nm(zone_data)
+            zone_data['cleft_max_distance_nm'] = max_dist_nm
+            cleft_max_distances_nm.append(max_dist_nm)
+            print(f"Cleft max distance {zone_name}: {max_dist_nm:.2f} nm")
 
             # Require presynaptic area data - raise error if missing
             if 'active_presynaptic_area' not in zone_data:
-                raise ValueError(f"No presynaptic area data available for {zone_name}. All active zones must have area data.")
-            active_zone_pre_areas.append(zone_data['active_presynaptic_area'])
+                raise ValueError(f"No presynaptic area data available for {zone_name}. All synaptic clefts must have area data.")
+            cleft_pre_areas.append(zone_data['active_presynaptic_area'])
             total_faces = zone_data.get('total_faces', 0)
             front_facing_faces = zone_data.get('front_facing_faces', 0)
             back_facing_faces = zone_data.get('back_facing_faces', 0)
             print(
-                f"Presynaptic active zone area {zone_name}: {zone_data['active_presynaptic_area']:.6f} µm² "
+                f"Presynaptic synaptic cleft area {zone_name}: {zone_data['active_presynaptic_area']:.6f} µm² "
                 f"(3D hull inner+outer, area/2; mesh faces: {front_facing_faces}/{total_faces} outer, "
                 f"{back_facing_faces} inner)"
             )
             
             # Require postsynaptic area data - raise error if missing
             if 'active_postsynaptic_area' not in zone_data:
-                raise ValueError(f"No postsynaptic area data available for {zone_name}. All active zones must have area data.")
-            active_zone_post_areas.append(zone_data['active_postsynaptic_area'])
+                raise ValueError(f"No postsynaptic area data available for {zone_name}. All synaptic clefts must have area data.")
+            cleft_post_areas.append(zone_data['active_postsynaptic_area'])
             post_total_faces = zone_data.get('postsynaptic_total_faces', 0)
             post_front_facing_faces = zone_data.get('postsynaptic_front_facing_faces', 0)
             post_back_facing_faces = zone_data.get('postsynaptic_back_facing_faces', 0)
             print(
-                f"Postsynaptic active zone area {zone_name}: {zone_data['active_postsynaptic_area']:.6f} µm² "
+                f"Postsynaptic synaptic cleft area {zone_name}: {zone_data['active_postsynaptic_area']:.6f} µm² "
                 f"(3D hull inner+outer, area/2; mesh faces: {post_front_facing_faces}/{post_total_faces} outer, "
                 f"{post_back_facing_faces} inner)"
             )
         
-        if not active_zone_pre_areas:
-            raise ValueError("No active zone presynaptic areas calculated. Cannot compute average area.")
-        if not active_zone_post_areas:
-            raise ValueError("No active zone postsynaptic areas calculated. Cannot compute average area.")
-        avg_active_zone_pre_area = np.mean(active_zone_pre_areas)
-        avg_active_zone_post_area = np.mean(active_zone_post_areas)
-        total_active_zone_pre_area = np.sum(active_zone_pre_areas)
-        total_active_zone_post_area = np.sum(active_zone_post_areas)
-        active_zone_max_distance = (
-            float(np.max(active_zone_max_distances_nm)) if active_zone_max_distances_nm else 0.0
+        if not cleft_pre_areas:
+            raise ValueError("No synaptic cleft presynaptic areas calculated. Cannot compute average area.")
+        if not cleft_post_areas:
+            raise ValueError("No synaptic cleft postsynaptic areas calculated. Cannot compute average area.")
+        avg_cleft_pre_area = np.mean(cleft_pre_areas)
+        avg_cleft_post_area = np.mean(cleft_post_areas)
+        total_cleft_pre_area = np.sum(cleft_pre_areas)
+        total_cleft_post_area = np.sum(cleft_post_areas)
+        cleft_max_distance = (
+            float(np.max(cleft_max_distances_nm)) if cleft_max_distances_nm else 0.0
         )
 
         if az_mapping:
@@ -847,16 +846,16 @@ def define_active_zone(
         else:
             az_index_by_zone = {
                 zone_name: i
-                for i, zone_name in enumerate(sorted(active_zones['active_zones'].keys()))
+                for i, zone_name in enumerate(sorted(clefts['clefts'].keys()))
             }
 
         individual_zone_results: Dict[str, Dict[str, Any]] = {}
-        for zone_name, zone_data in active_zones['active_zones'].items():
+        for zone_name, zone_data in clefts['clefts'].items():
             individual_zone_results[zone_name] = {
-                'active_zone_index': az_index_by_zone.get(zone_name),
+                'cleft_index': az_index_by_zone.get(zone_name),
                 'active_presynaptic_area': float(zone_data['active_presynaptic_area']),
                 'active_postsynaptic_area': float(zone_data['active_postsynaptic_area']),
-                'active_zone_max_distance_nm': float(zone_data['active_zone_max_distance_nm']),
+                'cleft_max_distance_nm': float(zone_data['cleft_max_distance_nm']),
                 'active_pre_count': int(zone_data['active_pre_count']),
                 'active_post_count': int(zone_data['active_post_count']),
                 'az_min_distance_nm': float(zone_data['min_distance']),
@@ -876,36 +875,36 @@ def define_active_zone(
         volumes_data = load_membrane_volumes(tomogram_path, alignment_dir=alignment_dir)
         
         results = {
-            'active_zone_count': active_zones['total_active_zones'],
+            'cleft_count': clefts['total_clefts'],
             'total_active_pre_points': total_active_pre_points,
             'total_active_post_points': total_active_post_points,
-            'avg_active_zone_area': avg_active_zone_pre_area,  # Presynaptic area (kept for backward compatibility)
-            'avg_active_zone_pre_area': avg_active_zone_pre_area,  # Presynaptic area
-            'avg_active_zone_post_area': avg_active_zone_post_area,  # Postsynaptic area
-            'total_active_zone_pre_area': total_active_zone_pre_area,  # Sum of all presynaptic areas
-            'total_active_zone_post_area': total_active_zone_post_area,  # Sum of all postsynaptic areas (use this for AuNP density)
-            'active_zone_max_distance': active_zone_max_distance,  # Max span (nm) across zones; exported as *_nm in CSV
-            'distance_range': active_zones['distance_range'],
-            'active_zone_names': list(active_zones['active_zones'].keys()),
+            'avg_cleft_area': avg_cleft_pre_area,  # Presynaptic area (kept for backward compatibility)
+            'avg_cleft_pre_area': avg_cleft_pre_area,  # Presynaptic area
+            'avg_cleft_post_area': avg_cleft_post_area,  # Postsynaptic area
+            'total_cleft_pre_area': total_cleft_pre_area,  # Sum of all presynaptic areas
+            'total_cleft_post_area': total_cleft_post_area,  # Sum of all postsynaptic areas (use this for AuNP density)
+            'cleft_max_distance': cleft_max_distance,  # Max span (nm) across zones; exported as *_nm in CSV
+            'distance_range': clefts['distance_range'],
+            'cleft_names': list(clefts['clefts'].keys()),
             'individual_zone_results': individual_zone_results,
             'membrane_volumes': volumes_data,
             'status': 'completed'
         }
         
     except Exception as e:
-        print(f"Error defining active zones: {e}")
+        print(f"Error defining synaptic clefts: {e}")
         results = {
-            'active_zone_count': 0,
+            'cleft_count': 0,
             'total_active_pre_points': 0,
             'total_active_post_points': 0,
-            'avg_active_zone_area': 0.0,
-            'avg_active_zone_pre_area': 0.0,
-            'avg_active_zone_post_area': 0.0,
-            'total_active_zone_pre_area': 0.0,
-            'total_active_zone_post_area': 0.0,
-            'active_zone_max_distance': 0.0,
+            'avg_cleft_area': 0.0,
+            'avg_cleft_pre_area': 0.0,
+            'avg_cleft_post_area': 0.0,
+            'total_cleft_pre_area': 0.0,
+            'total_cleft_post_area': 0.0,
+            'cleft_max_distance': 0.0,
             'distance_range': (10.0, 40.0),
-            'active_zone_names': [],
+            'cleft_names': [],
             'individual_zone_results': {},
             'membrane_volumes': {},
             'status': 'error',
@@ -915,10 +914,10 @@ def define_active_zone(
     return results
 
 
-ACTIVEZONE_RESULTS_CSV = Path("results/activezone/activezone_results.csv")
+CLEFT_RESULTS_CSV = Path("results/cleft/cleft_results.csv")
 
 
-def build_activezone_per_zone_rows(
+def build_cleft_per_zone_rows(
     *,
     tomogram_name: str,
     set_name: str,
@@ -926,7 +925,7 @@ def build_activezone_per_zone_rows(
     az_results: Dict[str, Any],
     cleft_results: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
-    """Build one CSV row per active zone from define_active_zone + calculate_cleft_width results."""
+    """Build one CSV row per synaptic cleft from define_cleft + calculate_cleft_width results."""
     az_zones = az_results.get("individual_zone_results") or {}
     cleft_zones = cleft_results.get("individual_zone_results") or {}
     az_status = az_results.get("status", "")
@@ -940,13 +939,13 @@ def build_activezone_per_zone_rows(
             "tomogram_name": tomogram_name,
             "set_name": set_name or "",
             "alignment_dir": alignment_dir,
-            "active_zone": zone_name,
-            "active_zone_index": z.get("active_zone_index"),
+            "cleft": zone_name,
+            "cleft_index": z.get("cleft_index"),
             "az_status": az_status,
             "cleft_status": cleft_status,
             "active_presynaptic_area_um2": z.get("active_presynaptic_area"),
             "active_postsynaptic_area_um2": z.get("active_postsynaptic_area"),
-            "active_zone_max_distance_nm": z.get("active_zone_max_distance_nm"),
+            "cleft_max_distance_nm": z.get("cleft_max_distance_nm"),
             "active_pre_count": z.get("active_pre_count"),
             "active_post_count": z.get("active_post_count"),
             "az_min_distance_nm": z.get("az_min_distance_nm"),
@@ -969,16 +968,16 @@ def build_activezone_per_zone_rows(
     return rows
 
 
-def upsert_activezone_per_zone_csv(
+def upsert_cleft_per_zone_csv(
     rows: List[Dict[str, Any]],
     tomogram_name: str,
     alignment_dir: str,
     results_dir: str = "results",
 ) -> Path:
-    """Upsert per-zone active zone rows for one tomogram into the global CSV."""
+    """Upsert per-zone synaptic cleft rows for one tomogram into the global CSV."""
     import pandas as pd
 
-    csv_path = Path(results_dir) / "activezone" / "activezone_results.csv"
+    csv_path = Path(results_dir) / "cleft" / "cleft_results.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     df_new = pd.DataFrame(rows)
     if csv_path.exists():
@@ -999,37 +998,37 @@ def upsert_activezone_per_zone_csv(
             df_new.to_csv(csv_path, index=False)
     else:
         df_new.to_csv(csv_path, index=False)
-    print(f"Saved {len(rows)} active zone result row(s) for {tomogram_name} to {csv_path}")
+    print(f"Saved {len(rows)} synaptic cleft result row(s) for {tomogram_name} to {csv_path}")
     return csv_path
 
 
-def import_active_zone_segmentations(tomogram_path, alignment_dir: str) -> Dict[str, Any]:
+def import_cleft_segmentations(tomogram_path, alignment_dir: str) -> Dict[str, Any]:
     """
-    Import active zone segmentation files.
+    Import synaptic cleft segmentation files.
     
     Args:
         tomogram_path: Path to tomogram directory (str or Path)
         
     Returns:
-        Dictionary containing active zone segmentations
+        Dictionary containing synaptic cleft segmentations
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_path = Path(tomogram_path)
-    active_zone_dir = tomogram_path / alignment_dir / "STT_results" / "activezone"
+    cleft_dir = tomogram_path / alignment_dir / "STT_results" / "cleft"
     
-    if not active_zone_dir.exists():
-        raise FileNotFoundError(f"Active zones directory not found: {active_zone_dir}")
+    if not cleft_dir.exists():
+        raise FileNotFoundError(f"Cleft directory not found: {cleft_dir}")
     
-    active_zones = {}
+    clefts = {}
     
-    # Find all active zone outer files
-    pre_files = list(active_zone_dir.glob("*_pre_outer.txt"))
-    post_files = list(active_zone_dir.glob("*_post_outer.txt"))
+    # Find all synaptic cleft outer files
+    pre_files = list(cleft_dir.glob("*_pre_outer.txt"))
+    post_files = list(cleft_dir.glob("*_post_outer.txt"))
     
     print(f"Found {len(pre_files)} active presynaptic files")
     print(f"Found {len(post_files)} active postsynaptic files")
     
-    # Group files by active zone name
+    # Group files by synaptic cleft name
     for pre_file in pre_files:
         # Extract zone name from *_pre_outer
         stem = pre_file.stem
@@ -1038,20 +1037,20 @@ def import_active_zone_segmentations(tomogram_path, alignment_dir: str) -> Dict[
         else:
             zone_name = stem
 
-        post_file = active_zone_dir / f"{zone_name}_post_outer.txt"
+        post_file = cleft_dir / f"{zone_name}_post_outer.txt"
         
         if post_file.exists():
             try:
                 pre_coords = np.atleast_2d(np.loadtxt(pre_file, delimiter=None))
                 post_coords = np.atleast_2d(np.loadtxt(post_file, delimiter=None))
                 
-                pre_inner_file = active_zone_dir / f"{zone_name}_pre_inner.txt"
-                post_inner_file = active_zone_dir / f"{zone_name}_post_inner.txt"
+                pre_inner_file = cleft_dir / f"{zone_name}_pre_inner.txt"
+                post_inner_file = cleft_dir / f"{zone_name}_post_inner.txt"
                 pre_inner_coords = np.atleast_2d(np.loadtxt(pre_inner_file, delimiter=None)) if pre_inner_file.exists() else np.array([])
                 post_inner_coords = np.atleast_2d(np.loadtxt(post_inner_file, delimiter=None)) if post_inner_file.exists() else np.array([])
 
-                active_zones[zone_name] = {
-                    # Backward-compatible keys (outer membranes)
+                clefts[zone_name] = {
+                    # Outer membranes (also exposed as generic coords keys)
                     'presynaptic_coords': pre_coords,
                     'postsynaptic_coords': post_coords,
                     # Explicit outer/inner keys
@@ -1065,27 +1064,27 @@ def import_active_zone_segmentations(tomogram_path, alignment_dir: str) -> Dict[
                     'postsynaptic_inner_count': len(post_inner_coords) if np.size(post_inner_coords) > 0 else 0,
                 }
                 
-                print(f"  ✓ Imported active zone: {zone_name} ({len(pre_coords)} pre, {len(post_coords)} post points)")
+                print(f"  ✓ Imported synaptic cleft: {zone_name} ({len(pre_coords)} pre, {len(post_coords)} post points)")
                 
             except Exception as e:
-                print(f"  ✗ Error importing active zone {zone_name}: {e}")
+                print(f"  ✗ Error importing synaptic cleft {zone_name}: {e}")
         else:
             print(f"  ✗ Post file not found: {post_file}")
             # Try to find any post file that might match
-            potential_matches = list(active_zone_dir.glob(f"*{zone_name}*"))
+            potential_matches = list(cleft_dir.glob(f"*{zone_name}*"))
             if potential_matches:
                 print(f"    Potential matches: {[f.name for f in potential_matches]}")
     
-    return active_zones
+    return clefts
 
 
-def calculate_cleft_width_for_active_zone(pre_coords: np.ndarray, post_coords: np.ndarray) -> Dict[str, Any]:
+def calculate_cleft_width_for_cleft(pre_coords: np.ndarray, post_coords: np.ndarray) -> Dict[str, Any]:
     """
-    Calculate cleft width for a single active zone using KD-tree.
+    Calculate cleft width for a single synaptic cleft using KD-tree.
     
     Args:
-        pre_coords: Presynaptic active zone coordinates
-        post_coords: Postsynaptic active zone coordinates
+        pre_coords: Presynaptic synaptic cleft coordinates
+        post_coords: Postsynaptic synaptic cleft coordinates
         
     Returns:
         Dictionary with cleft width statistics
@@ -1125,18 +1124,18 @@ def calculate_cleft_width_for_active_zone(pre_coords: np.ndarray, post_coords: n
 
 def calculate_cleft_width(
     tomogram_path,
-    active_zone_indices=None,
+    cleft_indices=None,
     set_name=None,
     *,
     alignment_dir: str,
 ) -> Dict[str, Any]:
     """
-    Calculate synaptic cleft width for active zones.
-    If active_zone_indices is specified, only includes active zones that correspond to those indices.
+    Calculate synaptic cleft width for synaptic clefts.
+    If cleft_indices is specified, only includes synaptic clefts that correspond to those indices.
     
     Args:
         tomogram_path: Path to the tomogram file.
-        active_zone_indices: List of active zone indices to include (None = all).
+        cleft_indices: List of synaptic cleft indices to include (None = all).
         set_name: Name of the dataset/set this tomogram belongs to (from CSV).
     
     Returns:
@@ -1146,36 +1145,36 @@ def calculate_cleft_width(
     print(f"Calculating cleft width in {Path(tomogram_path).name}")
     
     try:
-        # Import active zone segmentations
-        active_zones = import_active_zone_segmentations(tomogram_path, alignment_dir=alignment_dir)
+        # Import synaptic cleft segmentations
+        clefts = import_cleft_segmentations(tomogram_path, alignment_dir=alignment_dir)
         
-        # Filter active zones if indices are specified - use saved mapping from define_active_zone
-        if active_zone_indices is not None and len(active_zone_indices) > 0:
-            # Load the saved mapping (created by define_active_zone)
-            az_mapping = load_active_zone_mapping(tomogram_path, alignment_dir=alignment_dir)
+        # Filter synaptic clefts if indices are specified - use saved mapping from define_cleft
+        if cleft_indices is not None and len(cleft_indices) > 0:
+            # Load the saved mapping (created by define_cleft)
+            az_mapping = load_cleft_mapping(tomogram_path, alignment_dir=alignment_dir)
             
             if az_mapping:
                 # Convert string keys to int (JSON stores dict keys as strings)
                 az_mapping = {int(k): v for k, v in az_mapping.items()}
                 
                 # Filter to only include zones in the mapping
-                zones_to_include = {az_mapping[az_idx] for az_idx in active_zone_indices if az_idx in az_mapping}
-                active_zones = {name: data for name, data in active_zones.items() if name in zones_to_include}
-                print(f"Filtered to {len(active_zones)} active zones for cleft width using saved mapping (indices: {active_zone_indices})")
+                zones_to_include = {az_mapping[az_idx] for az_idx in cleft_indices if az_idx in az_mapping}
+                clefts = {name: data for name, data in clefts.items() if name in zones_to_include}
+                print(f"Filtered to {len(clefts)} synaptic clefts for cleft width using saved mapping (indices: {cleft_indices})")
             else:
                 # If no saved mapping exists, the zones were already filtered when saved
                 # Just use all loaded zones (they're already filtered)
-                print(f"Using {len(active_zones)} active zones for cleft width (already filtered by define_active_zone)")
+                print(f"Using {len(clefts)} synaptic clefts for cleft width (already filtered by define_cleft)")
         
-        if not active_zones:
-            print("No active zones found for cleft width calculation")
+        if not clefts:
+            print("No synaptic clefts found for cleft width calculation")
             return {
                 'average_cleft_width': 0.0,
                 'cleft_width_std': 0.0,
                 'min_cleft_width': 0.0,
                 'max_cleft_width': 0.0,
-                'active_zone_count': 0,
-                'status': 'no_active_zones'
+                'cleft_count': 0,
+                'status': 'no_clefts'
             }
         
         tomogram_name = Path(tomogram_path).name
@@ -1187,13 +1186,13 @@ def calculate_cleft_width(
                     set_name = part.replace("_tomograms", "")
                     break
         
-        # Calculate cleft width for each active zone
+        # Calculate cleft width for each synaptic cleft
         cleft_results = {}
         all_distances = []
         measurement_rows: List[Dict[str, Any]] = []
         
-        for zone_name, zone_data in active_zones.items():
-            cleft_stats = calculate_cleft_width_for_active_zone(
+        for zone_name, zone_data in clefts.items():
+            cleft_stats = calculate_cleft_width_for_cleft(
                 zone_data['presynaptic_coords'],
                 zone_data['postsynaptic_coords']
             )
@@ -1227,7 +1226,7 @@ def calculate_cleft_width(
                             'tomogram_name': tomogram_name,
                             'set_name': set_name,
                             'alignment_dir': alignment_dir,
-                            'active_zone': zone_name,
+                            'cleft': zone_name,
                             'direction': 'pre_to_post',
                             'cleft_distance_nm': float(d),
                         })
@@ -1236,7 +1235,7 @@ def calculate_cleft_width(
                             'tomogram_name': tomogram_name,
                             'set_name': set_name,
                             'alignment_dir': alignment_dir,
-                            'active_zone': zone_name,
+                            'cleft': zone_name,
                             'direction': 'post_to_pre',
                             'cleft_distance_nm': float(d),
                         })
@@ -1248,14 +1247,14 @@ def calculate_cleft_width(
                 'cleft_width_std': float(np.std(all_distances)),
                 'min_cleft_width': float(np.min(all_distances)),
                 'max_cleft_width': float(np.max(all_distances)),
-                'active_zone_count': len(active_zones),
+                'cleft_count': len(clefts),
                 'total_measurements': len(all_distances),
                 'individual_zone_results': cleft_results,
                 'status': 'completed'
             }
             
             # --- Append to global results/all_cleft_distances.csv ---
-            # One row per tomogram + active zone (unique tomogram+AZ).
+            # One row per tomogram + synaptic cleft (unique tomogram+AZ).
             import pandas as pd
 
             cleft_rows = []
@@ -1264,7 +1263,7 @@ def calculate_cleft_width(
                     'tomogram_name': tomogram_name,
                     'set_name': set_name,
                     'alignment_dir': alignment_dir,
-                    'active_zone': zone_name,
+                    'cleft': zone_name,
                     'average_cleft_width_nm': zone_stats['average_cleft_width'],
                     'cleft_width_std_nm': zone_stats['cleft_width_std'],
                     'min_cleft_width_nm': zone_stats['min_cleft_width'],
@@ -1274,7 +1273,7 @@ def calculate_cleft_width(
 
             # Save to global CSV
             df_cleft = pd.DataFrame(cleft_rows)
-            global_csv = Path("results/activezone/all_cleft_distances.csv")
+            global_csv = Path("results/cleft/all_cleft_distances.csv")
             global_csv.parent.mkdir(parents=True, exist_ok=True)
             if global_csv.exists():
                 try:
@@ -1296,11 +1295,11 @@ def calculate_cleft_width(
             else:
                 df_cleft.to_csv(global_csv, index=False)
             print(
-                f"Saved cleft width for {len(cleft_rows)} active zone(s) in "
+                f"Saved cleft width for {len(cleft_rows)} synaptic cleft(s) in "
                 f"{tomogram_name} to {global_csv}"
             )
             
-            meas_csv = Path("results/activezone/all_cleft_measurements.csv")
+            meas_csv = Path("results/cleft/all_cleft_measurements.csv")
             df_meas = pd.DataFrame(measurement_rows)
             if meas_csv.exists():
                 try:
@@ -1328,10 +1327,10 @@ def calculate_cleft_width(
             overall_stats['cleft_measurements_csv'] = str(meas_csv)
             # --- End global results ---
         else:
-            raise ValueError("No cleft width measurements found. Cannot calculate cleft width statistics. Active zones must have both presynaptic and postsynaptic points.")
+            raise ValueError("No cleft width measurements found. Cannot calculate cleft width statistics. Synaptic clefts must have both presynaptic and postsynaptic points.")
         
         print(f"Overall cleft width: {overall_stats['average_cleft_width']:.2f} ± {overall_stats['cleft_width_std']:.2f} nm")
-        print(f"Calculated cleft width for {len(active_zones)} active zones")
+        print(f"Calculated cleft width for {len(clefts)} synaptic clefts")
         
         return overall_stats
         
@@ -1342,7 +1341,7 @@ def calculate_cleft_width(
             'cleft_width_std': 0.0,
             'min_cleft_width': 0.0,
             'max_cleft_width': 0.0,
-            'active_zone_count': 0,
+            'cleft_count': 0,
             'total_measurements': 0,
             'individual_zone_results': {},
             'status': 'error',
@@ -1350,12 +1349,12 @@ def calculate_cleft_width(
         }
 
 
-def define_active_zonogram(active_zones):
+def define_active_zonogram(clefts):
     """
-    Define active zonogram from active zones.
+    Define active zonogram from synaptic clefts.
     
     Args:
-        active_zones: Dictionary containing active zone data.
+        clefts: Dictionary containing synaptic cleft data.
         
     Returns:
         Dictionary containing active zonogram results.
@@ -1366,23 +1365,23 @@ def define_active_zonogram(active_zones):
     import torch
     import einops
     
-    if not active_zones or 'active_zones' not in active_zones:
-        print("No active zones found for zonogram definition")
+    if not clefts or 'clefts' not in clefts:
+        print("No synaptic clefts found for zonogram definition")
         return {
-            'status': 'no_active_zones',
-            'active_zone_count': 0,
+            'status': 'no_clefts',
+            'cleft_count': 0,
             'zonogram_data': {}
         }
     
     # Prepare zonogram data
     zonogram_data = {}
     
-    for zone_name, zone_data in active_zones['active_zones'].items():
+    for zone_name, zone_data in clefts['clefts'].items():
         # Define center of active zonogram
         if len(zone_data['active_presynaptic_points']) == 0:
-            raise ValueError(f"No presynaptic points found for {zone_name}. Cannot calculate active zone center.")
+            raise ValueError(f"No presynaptic points found for {zone_name}. Cannot calculate synaptic cleft center.")
         if len(zone_data['active_postsynaptic_points']) == 0:
-            raise ValueError(f"No postsynaptic points found for {zone_name}. Cannot calculate active zone center.")
+            raise ValueError(f"No postsynaptic points found for {zone_name}. Cannot calculate synaptic cleft center.")
         
         center_presyn = np.mean(zone_data['active_presynaptic_points'], axis=0)
         center_postsyn = np.mean(zone_data['active_postsynaptic_points'], axis=0)
@@ -1423,14 +1422,14 @@ def define_active_zonogram(active_zones):
 
     return {
         'status': 'completed',
-        'active_zone_count': len(active_zones['active_zones']),
+        'cleft_count': len(clefts['clefts']),
         'zonogram_data': zonogram_data
     }
 
 
 def extract_active_zonogram(
     active_zonograms,
-    active_zones,
+    clefts,
     tomo_path,
     tomo_type="ddw",
     *,
@@ -1441,7 +1440,7 @@ def extract_active_zonogram(
     
     Args:
         active_zonograms: Dictionary containing active zonogram data.
-        active_zones: Dictionary containing active zone data.
+        clefts: Dictionary containing synaptic cleft data.
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     import mrcfile
@@ -1455,7 +1454,7 @@ def extract_active_zonogram(
         print("No active zonograms found for rendering")
         return {
             'status': 'no_active_zonograms',
-            'active_zone_count': 0,
+            'cleft_count': 0,
             'rendered_zonograms': []
         }
     
@@ -1468,18 +1467,18 @@ def extract_active_zonogram(
         print(f"No {tomo_type} MRC files found in {Path(tomo_path) / alignment_dir}")
         return {
             'status': 'no_mrc_files',
-            'active_zone_count': 0,
+            'cleft_count': 0,
             'rendered_zonograms': {}
         }
     with mrcfile.open(mrcs[0], 'r') as mrc:
         data = torch.tensor(mrc.data)
     
     for zone_name, zone_data in active_zonograms['zonogram_data'].items():
-        if zone_name not in active_zones['active_zones']:
+        if zone_name not in clefts['clefts']:
             continue
         
-        # Get active zone information
-        active_zone = active_zones['active_zones'][zone_name]
+        # Get synaptic cleft information
+        cleft = clefts['clefts'][zone_name]
 
         new_center = zone_data['extent'] // 2
 
@@ -1503,7 +1502,7 @@ def extract_active_zonogram(
     
     return {
         'status': 'completed',
-        'active_zone_count': len(active_zones['active_zones']),
+        'cleft_count': len(clefts['clefts']),
         'rendered_zonograms': rendered_zonograms
     }
 
