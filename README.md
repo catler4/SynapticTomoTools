@@ -22,6 +22,8 @@ A Python toolkit for running various analyses on cryo-electron tomography (cryo-
 
 Before running analysis modules, tilt series should first be processed using Etomo and then tomograms should be reconstructed and further processed using the [FindingAMPA](https://github.com/jojoelfe/findingampa) preprocessing pipeline (which is a standalone repo, or is installed as a python package within the SynapticTomoTools environment). Within the findingampa pipeline, tomogram reconstruction, denoising (wrapper to DeepDeWedge with pretrained models), membrane segmentation (wrapper to Membrain), membrane and vesicle annotation (wrapper to Blender-based manual annotation platform), and AuNP picking (template-matching approach constrained to cleft regions) need to be completed.
 
+**Naming note:** FindingAMPA calls synaptic regions **active zones**; SynapticTomoTools calls the same regions **clefts**. Pick STAR filenames from FindingAMPA still use `active_zone` in the name; STT analysis outputs and CSV columns use `cleft` / `cleft_IDs`.
+
 Following pre-processing, the following analysis modules can be run.
 
 Modules should be run in the following order:
@@ -138,7 +140,7 @@ Outputs are written in two places:
   - slice overlays such as `{tomo_name}_vesicles_clefts_*.png`, `{tomo_name}_vesicles_aunps_*.png`, `{tomo_name}_combined_*.png`
   - cluster / synaptic-designation overlays when generated
 - Organized copies: `results/visualizations/{tomogram_name}/{alignment_dir}/`
-- Active zonograms: `{alignment_dir}/STT_results/visualizations/active_zonograms/` and under `results/visualizations/.../active_zonograms/`
+- Cleft MIPs: `{alignment_dir}/STT_results/visualizations/cleft_MIPs/` and under `results/visualizations/.../cleft_MIPs/`
 - PDF summaries: `results/visualizations/pdf_summaries/` (including `all_tomograms_summary.pdf` when PDF generation is enabled)
 
 ---
@@ -159,7 +161,7 @@ Tomograms are grouped by experimental set under a root directory (GUI: Home tab 
     └── TOP_TOMOS/
         └── {tomoname}/
             └── {alignment_dir}/
-                ├── {tomoname}_ddw.mrc          # DeepDeWedge volume (viz; optional for some analyses)
+                ├── {tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc          # DeepDeWedge volume (only for vizualizations)
                 ├── aunps/                      # primary analysis inputs
                 │   ├── presynapticmembranes.glb
                 │   ├── postsynapticmembranes.glb
@@ -177,7 +179,7 @@ Tomograms are grouped by experimental set under a root directory (GUI: Home tab 
                     └── visualizations/
 ```
 
-Pick STAR filenames still use `active_zone` in the name; analysis outputs and the optional CSV column use `cleft` / `cleft_IDs`.
+FindingAMPA names these regions **active zones**; STT names them **clefts**. Pick STAR filenames still use `active_zone` in the name; analysis outputs and the optional CSV column use `cleft` / `cleft_IDs`.
 
 ### Input files by analysis
 

@@ -615,11 +615,11 @@ def _find_precalculated_zonogram_mrc(
         / alignment_dir
         / "STT_results"
         / "visualizations"
-        / "active_zonograms"
+        / "cleft_MIPs"
     )
     if not az_dir.is_dir():
         return None
-    matches = sorted(az_dir.glob(f"{tomogram_path.name}_active_zonogram_{zone_name}*.mrc"))
+    matches = sorted(az_dir.glob(f"{tomogram_path.name}_cleft_MIP_{zone_name}*.mrc"))
     return matches[0] if matches else None
 
 
@@ -668,7 +668,7 @@ def _load_precalculated_zonogram_for_zone(
     if mrc_path is None:
         raise FileNotFoundError(
             f"No precalculated zonogram MRC for zone '{zone_name}' under "
-            f"{tomogram_path / alignment_dir / 'STT_results' / 'visualizations' / 'active_zonograms'}"
+            f"{tomogram_path / alignment_dir / 'STT_results' / 'visualizations' / 'cleft_MIPs'}"
         )
 
     with mrcfile.open(mrc_path, mode="r") as mrc:
@@ -1088,7 +1088,7 @@ def _membrain_ripley_o_on_r_grid(
         "positions_target": _snap_points_to_mesh_vertices(target_xyz, mesh_verts),
     }
     with _suppress_membrain_mesh_stdout():
-    ripley_stat = compute_ripleys_stats(mesh_dict, method=geodesic_method)
+        ripley_stat = compute_ripleys_stats(mesh_dict, method=geodesic_method)
     x_vals, o_vals = _membrain_aggregate_ripley_o(
         [ripley_stat],
         bin_size_nm=bin_size_nm,
@@ -1709,20 +1709,20 @@ def _plot_ripley_dual_envelope_panel(
         secondary_line_label if secondary_line_label is not None else secondary_median_label
     )
     if secondary_show_envelope:
-    ax.fill_between(
-        r_vals,
-        secondary_lo,
-        secondary_hi,
-        color="0.85",
-        zorder=1,
-        label=secondary_band_label,
-    )
-    ax.plot(
-        r_vals,
+        ax.fill_between(
+            r_vals,
+            secondary_lo,
+            secondary_hi,
+            color="0.85",
+            zorder=1,
+            label=secondary_band_label,
+        )
+        ax.plot(
+            r_vals,
             secondary_plot,
-        color="0.45",
-        lw=1.8,
-        zorder=2,
+            color="0.45",
+            lw=1.8,
+            zorder=2,
             label=secondary_label,
         )
     else:
@@ -1733,7 +1733,7 @@ def _plot_ripley_dual_envelope_panel(
             lw=1.8,
             zorder=2,
             label=secondary_label,
-    )
+        )
     fusion_line = primary_line if primary_line is not None else primary_med
     fusion_label = primary_line_label if primary_line_label is not None else primary_median_label
     if primary_show_envelope:
@@ -1985,11 +1985,11 @@ def _load_aunp_coordinates_for_zone(
             )
         aunp_df = pd.concat(pick_dfs, ignore_index=True)
     else:
-    star_data = starfile.read(star_path)
-    if isinstance(star_data, dict):
-        aunp_df = next(v for v in star_data.values() if isinstance(v, pd.DataFrame))
-    else:
-        aunp_df = star_data
+        star_data = starfile.read(star_path)
+        if isinstance(star_data, dict):
+            aunp_df = next(v for v in star_data.values() if isinstance(v, pd.DataFrame))
+        else:
+            aunp_df = star_data
 
     if "cleft" in aunp_df.columns:
         mapping = load_cleft_mapping(tomogram_path, alignment_dir)
@@ -2962,14 +2962,14 @@ def plot_results(
 
     if not ctrl.empty and tomogram_path is not None:
         try:
-        _plot_fusion_vs_control_zonogram(
-            real,
-            ctrl,
-            tomogram_path=tomogram_path,
-            alignment_dir=alignment_dir,
-            probe_radius_nm=mid_radius,
+            _plot_fusion_vs_control_zonogram(
+                real,
+                ctrl,
+                tomogram_path=tomogram_path,
+                alignment_dir=alignment_dir,
+                probe_radius_nm=mid_radius,
                 output_path=output_dir / f"fusion_vs_control_zonogram{name_suffix}.png",
-        )
+            )
         except Exception as exc:
             print(f"  Warning: zonogram overlay failed{f' for {filename_tag}' if filename_tag else ''}: {exc}")
 
@@ -3107,7 +3107,7 @@ def fusion_point_vs_aunp_density_output_dir(
         / alignment_dir
         / "STT_results"
         / "visualizations"
-        / "active_zonograms"
+        / "cleft_MIPs"
         / FUSION_POINT_VS_AUNP_DENSITY_SUBDIR
         / zone_name
     )
@@ -3252,7 +3252,7 @@ def run_fusion_point_vs_aunp_density_for_tomogram(
         / alignment_dir
         / "STT_results"
         / "visualizations"
-        / "active_zonograms"
+        / "cleft_MIPs"
         / FUSION_POINT_VS_AUNP_DENSITY_SUBDIR
         / _scan_cache_subdir_name(aunp_pick_star_pattern)
     )
@@ -3320,7 +3320,7 @@ def collect_per_tomogram_fusion_point_vs_aunp_density_tables(
             / alignment_dir
             / "STT_results"
             / "visualizations"
-            / "active_zonograms"
+            / "cleft_MIPs"
             / FUSION_POINT_VS_AUNP_DENSITY_SUBDIR
         )
         if not base.is_dir():
@@ -3441,7 +3441,7 @@ def _collect_ripley_vesicle_artifacts(
             / alignment_dir
             / "STT_results"
             / "visualizations"
-            / "active_zonograms"
+            / "cleft_MIPs"
             / FUSION_POINT_VS_AUNP_DENSITY_SUBDIR
         )
         if not base.is_dir():

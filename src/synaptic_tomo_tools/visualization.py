@@ -1417,7 +1417,7 @@ def run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=Non
             import_membrane_segmentations_from_glb, find_active_zones_from_glb
         )
         
-        # Individual files are saved to organized structure: results/visualizations/{tomogram_name}/active_zonograms/
+        # Individual files are saved to organized structure: results/visualizations/{tomogram_name}/cleft_MIPs/
         
         print(f"Running active zonogram analysis for {len(tomo_paths)} tomograms...")
         
@@ -1490,7 +1490,7 @@ def run_zonogram_analysis_for_all_tomograms(tomo_paths, output_dir, csv_path=Non
         
         print(
             "\nActive zonogram analysis complete! Organized outputs under "
-            "results/visualizations/{tomogram_name}/{alignment_dir}/active_zonograms/"
+            "results/visualizations/{tomogram_name}/{alignment_dir}/cleft_MIPs/"
         )
         
     except ImportError as e:
@@ -2740,15 +2740,15 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, cleft_
             
             if extracted_results and isinstance(extracted_results, dict) and 'rendered_zonograms' in extracted_results and extracted_results.get('rendered_zonograms'):
                 # Create output directories (per alignment to avoid collisions)
-                # 1. results/visualizations/{tomogram_name}/{alignment_dir}/active_zonograms/full/
-                results_active_zonograms_dir_full = organized_results_viz_path(
-                    "results", tomogram_name, alignment_dir, "active_zonograms", "full"
+                # 1. results/visualizations/{tomogram_name}/{alignment_dir}/cleft_MIPs/full/
+                results_cleft_mips_dir_full = organized_results_viz_path(
+                    "results", tomogram_name, alignment_dir, "cleft_MIPs", "full"
                 )
-                results_active_zonograms_dir_full.mkdir(parents=True, exist_ok=True)
+                results_cleft_mips_dir_full.mkdir(parents=True, exist_ok=True)
                 
-                # 2. In tomogram's STT_results/visualizations/active_zonograms directory
-                tomogram_active_zonograms_dir = Path(tomogram_path) / alignment_dir / "STT_results" / "visualizations" / "active_zonograms"
-                tomogram_active_zonograms_dir.mkdir(parents=True, exist_ok=True)
+                # 2. In tomogram's STT_results/visualizations/cleft_MIPs directory
+                tomogram_cleft_mips_dir = Path(tomogram_path) / alignment_dir / "STT_results" / "visualizations" / "cleft_MIPs"
+                tomogram_cleft_mips_dir.mkdir(parents=True, exist_ok=True)
                 
                 files_created = []
                 
@@ -2799,24 +2799,24 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, cleft_
                         suffix = default_suffix
                     
                     # Save MRC file to tomogram directory only
-                    mrc_filename = f"{tomogram_name}_active_zonogram_{zone_name}{suffix}.mrc"
-                    mrcfile.write(tomogram_active_zonograms_dir / mrc_filename, zone_data['transformed_tomogram'], overwrite=True)
+                    mrc_filename = f"{tomogram_name}_cleft_MIP_{zone_name}{suffix}.mrc"
+                    mrcfile.write(tomogram_cleft_mips_dir / mrc_filename, zone_data['transformed_tomogram'], overwrite=True)
                     print(f"    ✓ Saved MRC: {mrc_filename}")
                     
                     # Save NPY file to tomogram directory only
-                    npy_filename = f"{tomogram_name}_active_zonogram_{zone_name}{suffix}.npy"
+                    npy_filename = f"{tomogram_name}_cleft_MIP_{zone_name}{suffix}.npy"
                     npy_data = {
                         "cs": np.eye(3),
                         "center": np.zeros(3),
                         "objects": ()
                     }
-                    np.save(tomogram_active_zonograms_dir / npy_filename, npy_data, allow_pickle=True)
+                    np.save(tomogram_cleft_mips_dir / npy_filename, npy_data, allow_pickle=True)
                     print(f"    ✓ Saved MRC: {mrc_filename}")
                     
                     # Generate main PNG and save to organized structure and tomogram directory
-                    png_filename = f"{tomogram_name}_active_zonogram_{zone_name}{suffix}.png"
-                    png_path_results_organized = results_active_zonograms_dir_full / png_filename
-                    png_path_tomogram = tomogram_active_zonograms_dir / png_filename
+                    png_filename = f"{tomogram_name}_cleft_MIP_{zone_name}{suffix}.png"
+                    png_path_results_organized = results_cleft_mips_dir_full / png_filename
+                    png_path_tomogram = tomogram_cleft_mips_dir / png_filename
                     
                     if png_path_results_organized.exists() and png_path_tomogram.exists() and not rerun:
                         print(f"    Skipping {png_filename}, already exists.")
@@ -2831,12 +2831,12 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, cleft_
 
                     # Active zonogram with synaptic-cleft center marked (mean pre/post membrane center)
                     center_png_filename = (
-                        f"{tomogram_name}_active_zonogram_{zone_name}{suffix}_center.png"
+                        f"{tomogram_name}_cleft_MIP_{zone_name}{suffix}_center.png"
                     )
                     center_path_results_organized = (
-                        results_active_zonograms_dir_full / center_png_filename
+                        results_cleft_mips_dir_full / center_png_filename
                     )
-                    center_path_tomogram = tomogram_active_zonograms_dir / center_png_filename
+                    center_path_tomogram = tomogram_cleft_mips_dir / center_png_filename
 
                     if (
                         center_path_results_organized.exists()
@@ -2896,9 +2896,9 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, cleft_
                         alignment_dir=alignment_dir,
                     )
                     if len(selected_aunps) > 0:
-                        aunp_filename = f"{tomogram_name}_active_zonogram_{zone_name}_selected_aunps{suffix}.png"
-                        aunp_path_results_organized = results_active_zonograms_dir_full / aunp_filename
-                        aunp_path_tomogram = tomogram_active_zonograms_dir / aunp_filename
+                        aunp_filename = f"{tomogram_name}_cleft_MIP_{zone_name}_selected_aunps{suffix}.png"
+                        aunp_path_results_organized = results_cleft_mips_dir_full / aunp_filename
+                        aunp_path_tomogram = tomogram_cleft_mips_dir / aunp_filename
                         
                         if aunp_path_results_organized.exists() and aunp_path_tomogram.exists() and not rerun:
                             print(f"    Skipping {aunp_filename}, already exists.")
@@ -2929,9 +2929,9 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, cleft_
                         selected_aunps_dist = selected_aunps_with_distances['positions']
                         post_distances = selected_aunps_with_distances['distances']
                         
-                        dist_filename = f"{tomogram_name}_active_zonogram_{zone_name}_selected_aunps_by_distance_to_post{suffix}.png"
-                        dist_path_results_organized = results_active_zonograms_dir_full / dist_filename
-                        dist_path_tomogram = tomogram_active_zonograms_dir / dist_filename
+                        dist_filename = f"{tomogram_name}_cleft_MIP_{zone_name}_selected_aunps_by_distance_to_post{suffix}.png"
+                        dist_path_results_organized = results_cleft_mips_dir_full / dist_filename
+                        dist_path_tomogram = tomogram_cleft_mips_dir / dist_filename
                         
                         if dist_path_results_organized.exists() and dist_path_tomogram.exists() and not rerun:
                             print(f"    Skipping {dist_filename}, already exists.")
@@ -3018,9 +3018,9 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, cleft_
                             filtered_distances = post_distances[filter_mask]
                             
                             if len(filtered_positions) > 0:
-                                cutoff_filename = f"{tomogram_name}_active_zonogram_{zone_name}_selected_aunps_by_distance_to_post_{cutoff_direction}_{cutoff_value}nm{suffix}.png"
-                                cutoff_path_results_organized = results_active_zonograms_dir_full / cutoff_filename
-                                cutoff_path_tomogram = tomogram_active_zonograms_dir / cutoff_filename
+                                cutoff_filename = f"{tomogram_name}_cleft_MIP_{zone_name}_selected_aunps_by_distance_to_post_{cutoff_direction}_{cutoff_value}nm{suffix}.png"
+                                cutoff_path_results_organized = results_cleft_mips_dir_full / cutoff_filename
+                                cutoff_path_tomogram = tomogram_cleft_mips_dir / cutoff_filename
                                 
                                 if cutoff_path_results_organized.exists() and cutoff_path_tomogram.exists() and not rerun:
                                     print(f"    Skipping {cutoff_filename}, already exists.")
@@ -3258,9 +3258,9 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, cleft_
                                       fontsize=8, frameon=True, fancybox=True, shadow=True)
                         
                         # Save the version with fusion points
-                        cluster_filename = f"{tomogram_name}_active_zonogram_{zone_name}_selected_aunps_by_cluster{suffix}.png"
-                        cluster_path_results_organized = results_active_zonograms_dir_full / cluster_filename
-                        cluster_path_tomogram = tomogram_active_zonograms_dir / cluster_filename
+                        cluster_filename = f"{tomogram_name}_cleft_MIP_{zone_name}_selected_aunps_by_cluster{suffix}.png"
+                        cluster_path_results_organized = results_cleft_mips_dir_full / cluster_filename
+                        cluster_path_tomogram = tomogram_cleft_mips_dir / cluster_filename
                         
                         if cluster_path_results_organized.exists() and cluster_path_tomogram.exists() and not rerun:
                             print(f"    Skipping {cluster_filename}, already exists.")
@@ -3301,9 +3301,9 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, cleft_
                                                fontsize=8, frameon=True, fancybox=True, shadow=True)
                         
                         # Save the version without fusion points
-                        cluster_no_fusion_filename = f"{tomogram_name}_active_zonogram_{zone_name}_selected_aunps_by_cluster_no_fusion{suffix}.png"
-                        cluster_no_fusion_path_results_organized = results_active_zonograms_dir_full / cluster_no_fusion_filename
-                        cluster_no_fusion_path_tomogram = tomogram_active_zonograms_dir / cluster_no_fusion_filename
+                        cluster_no_fusion_filename = f"{tomogram_name}_cleft_MIP_{zone_name}_selected_aunps_by_cluster_no_fusion{suffix}.png"
+                        cluster_no_fusion_path_results_organized = results_cleft_mips_dir_full / cluster_no_fusion_filename
+                        cluster_no_fusion_path_tomogram = tomogram_cleft_mips_dir / cluster_no_fusion_filename
                         
                         if cluster_no_fusion_path_results_organized.exists() and cluster_no_fusion_path_tomogram.exists() and not rerun:
                             print(f"    Skipping {cluster_no_fusion_filename}, already exists.")
@@ -3336,13 +3336,13 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, cleft_
                                     )
                                 )
                                 packing_filename = (
-                                    f"{tomogram_name}_active_zonogram_{zone_name}_packing_density{suffix}.png"
+                                    f"{tomogram_name}_cleft_MIP_{zone_name}_packing_density{suffix}.png"
                                 )
                                 packing_path_results_organized = (
-                                    results_active_zonograms_dir_full / packing_filename
+                                    results_cleft_mips_dir_full / packing_filename
                                 )
                                 packing_path_tomogram = (
-                                    tomogram_active_zonograms_dir / packing_filename
+                                    tomogram_cleft_mips_dir / packing_filename
                                 )
                                 created_names = save_packing_density_zonogram_overlay(
                                     zone_packing_data,
@@ -3371,14 +3371,14 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, cleft_
                     )
                     if len(shift_query_world) > 0 or len(reference_fusion_world) > 0:
                         shift_png_filename = (
-                            f"{tomogram_name}_active_zonogram_{zone_name}"
+                            f"{tomogram_name}_cleft_MIP_{zone_name}"
                             f"_fusing_40nm_shift_controls{suffix}.png"
                         )
                         shift_path_results = (
-                            results_active_zonograms_dir_full / shift_png_filename
+                            results_cleft_mips_dir_full / shift_png_filename
                         )
                         shift_path_tomogram = (
-                            tomogram_active_zonograms_dir / shift_png_filename
+                            tomogram_cleft_mips_dir / shift_png_filename
                         )
                         if _save_active_zonogram_query_point_overlay(
                             zonogram_findingampa=zonogram_findingampa,
@@ -3404,14 +3404,14 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, cleft_
                     )
                     if len(perm_query_world) > 0 or len(reference_fusion_world) > 0:
                         perm_png_filename = (
-                            f"{tomogram_name}_active_zonogram_{zone_name}"
+                            f"{tomogram_name}_cleft_MIP_{zone_name}"
                             f"_label_permutation_fusion_sites{suffix}.png"
                         )
                         perm_path_results = (
-                            results_active_zonograms_dir_full / perm_png_filename
+                            results_cleft_mips_dir_full / perm_png_filename
                         )
                         perm_path_tomogram = (
-                            tomogram_active_zonograms_dir / perm_png_filename
+                            tomogram_cleft_mips_dir / perm_png_filename
                         )
                         if _save_active_zonogram_query_point_overlay(
                             zonogram_findingampa=zonogram_findingampa,
@@ -3492,17 +3492,17 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, cleft_
                 
                 # Create mini zonogram (use filtered synaptic clefts)
                 # Create mini zonogram directory in organized structure
-                results_active_zonograms_dir_mini = organized_results_viz_path(
-                    "results", tomogram_name, alignment_dir, "active_zonograms", "mini"
+                results_cleft_mips_dir_mini = organized_results_viz_path(
+                    "results", tomogram_name, alignment_dir, "cleft_MIPs", "mini"
                 )
-                results_active_zonograms_dir_mini.mkdir(parents=True, exist_ok=True)
+                results_cleft_mips_dir_mini.mkdir(parents=True, exist_ok=True)
                 
                 success = create_mini_zonogram_for_cluster(
                     cluster_data,
                     cluster_id,
                     tomogram_path,
-                    tomogram_active_zonograms_dir,
-                    results_active_zonograms_dir_mini,
+                    tomogram_cleft_mips_dir,
+                    results_cleft_mips_dir_mini,
                     clefts_data,
                     cluster_color_map,
                     tomogram_name,
@@ -3524,7 +3524,7 @@ def run_combined_zonogram_analysis_single_tomogram(tomo_path, output_dir, cleft_
         
         return {
             "success": True,
-            "regular_zonograms": len([f for f in files_created if 'active_zonogram' in f and 'mini' not in f]),
+            "regular_zonograms": len([f for f in files_created if 'cleft_MIP' in f and 'mini' not in f]),
             "mini_zonograms": mini_zonogram_count,
             "files_created": files_created
         }
@@ -3556,7 +3556,7 @@ def create_mini_zonogram_for_cluster(
     Create a mini zonogram centered on a specific small cluster.
     Uses the same transformation matrix calculation as regular active zonograms.
     Uses the same color scheme as the regular zonogram analysis.
-    Saves files in both tomogram's STT_results/active_zonograms and results/visualizations/active_zonograms.
+    Saves files in both tomogram's STT_results/visualizations/cleft_MIPs and results/visualizations/cleft_MIPs.
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     # Creating mini zonogram for cluster
@@ -3982,11 +3982,11 @@ def generate_all_zonograms_pdf(tomo_paths, data_dir=None):
                         print(f"    Warning: Error parsing synaptic cleft indices for {tomogram_name}: {e}")
 
             azograms_dir = organized_results_viz_path(
-                "results", tomogram_name, alignment_dir, "active_zonograms", "full"
+                "results", tomogram_name, alignment_dir, "cleft_MIPs", "full"
             )
             
             if not azograms_dir.exists():
-                print(f"    Warning: Active zonograms directory not found: {azograms_dir}")
+                print(f"    Warning: Cleft MIPs directory not found: {azograms_dir}")
                 continue
             
             story.append(
@@ -3995,13 +3995,13 @@ def generate_all_zonograms_pdf(tomo_paths, data_dir=None):
             story.append(Spacer(1, 10))
             
             # Find regular active zonogram files (aunps_by_cluster.png) for this specific tomogram
-            regular_zonogram_files = list(azograms_dir.glob(f"{tomogram_name}_active_zonogram_*_selected_aunps_by_cluster_az*.png"))
+            regular_zonogram_files = list(azograms_dir.glob(f"{tomogram_name}_cleft_MIP_*_selected_aunps_by_cluster_az*.png"))
             
             # Add regular active zonograms first
             for zonogram_file in sorted(regular_zonogram_files):
                 try:
                     # Get zone name from filename
-                    zone_name = zonogram_file.stem.split('_active_zonogram_')[1].split('_selected_aunps_by_cluster')[0]
+                    zone_name = zonogram_file.stem.split('_cleft_MIP_')[1].split('_selected_aunps_by_cluster')[0]
                     
                     # Filter by synaptic cleft indices if specified in CSV
                     if selected_az_indices is not None:
@@ -4058,7 +4058,7 @@ def generate_all_zonograms_pdf(tomo_paths, data_dir=None):
             # Find mini zonogram comparison files for this specific tomogram
             # Look for mini zonograms in the mini subdirectory
             mini_azograms_dir = organized_results_viz_path(
-                "results", tomogram_name, alignment_dir, "active_zonograms", "mini"
+                "results", tomogram_name, alignment_dir, "cleft_MIPs", "mini"
             )
             mini_zonogram_files = list(mini_azograms_dir.glob(f"{tomogram_name}_mini_zonogram_cluster_*_comparison.png")) if mini_azograms_dir.exists() else []
             
@@ -4208,11 +4208,11 @@ def generate_mini_zonograms_pdf(tomo_paths, data_dir=None):
             print(f"    [{i}/{len(tomo_paths)}] Processing {tomogram_name} ({alignment_dir})...", end=" ", flush=True)
 
             azograms_dir_organized = organized_results_viz_path(
-                "results", tomogram_name, alignment_dir, "active_zonograms", "mini"
+                "results", tomogram_name, alignment_dir, "cleft_MIPs", "mini"
             )
             
             if not azograms_dir_organized.exists():
-                print(f"    Warning: Active zonograms directory not found: {azograms_dir_organized}")
+                print(f"    Warning: Cleft MIPs directory not found: {azograms_dir_organized}")
                 continue
             
             mini_zonogram_files = list(azograms_dir_organized.glob("*_mini_zonogram_cluster_*_comparison.png"))

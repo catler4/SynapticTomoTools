@@ -3140,24 +3140,24 @@ Do you want to continue?"""
                     
                     # Build tomogram path
                     tomogram_path = Path(self.root_dir.get()) / tomogram_set / "TOP_TOMOS" / tomogram_name
-                    active_zonograms_dir = tomogram_path / align_sub / "STT_results" / "active_zonograms"
+                    cleft_mips_dir = tomogram_path / align_sub / "STT_results" / "visualizations" / "cleft_MIPs"
                     
-                    if not active_zonograms_dir.exists():
-                        self._log(f"Warning: Active zonograms directory not found: {active_zonograms_dir}\n")
+                    if not cleft_mips_dir.exists():
+                        self._log(f"Warning: Cleft MIPs directory not found: {cleft_mips_dir}\n")
                         continue
                     
                     # Add tomogram name as title
                     story.append(Paragraph(f"Tomogram: {tomogram_name}", title_style))
                     story.append(Spacer(1, 10))
                     
-                    # Find regular active zonogram files (aunps_by_cluster.png)
-                    regular_zonogram_files = list(active_zonograms_dir.glob("*_active_zonogram_*_selected_aunps_by_cluster.png"))
+                    # Find regular cleft MIP files (aunps_by_cluster.png)
+                    regular_zonogram_files = list(cleft_mips_dir.glob("*_cleft_MIP_*_selected_aunps_by_cluster.png"))
                     
-                    # Add regular active zonograms first
+                    # Add regular cleft MIPs first
                     for zonogram_file in sorted(regular_zonogram_files):
                         try:
                             # Get zone name from filename
-                            zone_name = zonogram_file.stem.split('_active_zonogram_')[1].split('_selected_aunps_by_cluster')[0]
+                            zone_name = zonogram_file.stem.split('_cleft_MIP_')[1].split('_selected_aunps_by_cluster')[0]
                             
                             # Add zone name as subtitle
                             zone_style = ParagraphStyle(
@@ -3199,7 +3199,7 @@ Do you want to continue?"""
                             self._log(f"  Error adding regular zonogram {zonogram_file}: {e}\n")
                     
                     # Find mini zonogram comparison files
-                    mini_zonogram_files = list(active_zonograms_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
+                    mini_zonogram_files = list(cleft_mips_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
                     
                     if mini_zonogram_files:
                         # Add mini zonograms section title
@@ -3412,14 +3412,14 @@ Do you want to continue?"""
                     
                     # Build tomogram path
                     tomogram_path = Path(self.root_dir.get()) / tomogram_set / "TOP_TOMOS" / tomogram_name
-                    active_zonograms_dir = tomogram_path / align_sub / "STT_results" / "active_zonograms"
+                    cleft_mips_dir = tomogram_path / align_sub / "STT_results" / "visualizations" / "cleft_MIPs"
                     
-                    if not active_zonograms_dir.exists():
-                        self._log(f"Warning: Active zonograms directory not found: {active_zonograms_dir}\n")
+                    if not cleft_mips_dir.exists():
+                        self._log(f"Warning: Cleft MIPs directory not found: {cleft_mips_dir}\n")
                         continue
                     
                     # Find mini zonogram comparison files
-                    mini_zonogram_files = list(active_zonograms_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
+                    mini_zonogram_files = list(cleft_mips_dir.glob("*_mini_zonogram_cluster_*_comparison.png"))
                     
                     # Get cluster data to identify clusters with 4 AuNPs
                     cluster_data_path = tomogram_path / align_sub / "STT_results" / "aunps" / "aunp_clusters.star"

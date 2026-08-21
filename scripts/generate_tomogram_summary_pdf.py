@@ -124,18 +124,18 @@ def get_stats(tomo_name, base_data_dir, selected_az_indices=None, *, alignment_d
             print(f"File analysis: {check_file_corruption(aunp_star[0])}")
     return stats
 
-def get_active_zonogram_images(tomo_name, base_data_dir, selected_az_indices=None, *, alignment_dir: str):
-    # Find the active_zonogram folder for this tomogram
+def get_cleft_mip_images(tomo_name, base_data_dir, selected_az_indices=None, *, alignment_dir: str):
+    # Find the cleft_MIPs folder for this tomogram
     az_dir_candidates = list(
-        Path(base_data_dir).glob(f"**/{tomo_name}/{alignment_dir}/active_zonograms")
+        Path(base_data_dir).glob(f"**/{tomo_name}/{alignment_dir}/cleft_MIPs")
     )
     if not az_dir_candidates:
         return []
     az_dir = az_dir_candidates[0]
     
     # Find all *_position.png and *_selected_aunps_manual.png pairs
-    position_imgs = sorted(az_dir.glob('active_zonogram_*_position.png'))
-    selected_imgs = sorted(az_dir.glob('active_zonogram_*_selected_aunps_manual.png'))
+    position_imgs = sorted(az_dir.glob('cleft_MIP_*_position.png'))
+    selected_imgs = sorted(az_dir.glob('cleft_MIP_*_selected_aunps_manual.png'))
     
     # Filter by selected synaptic cleft indices if provided
     if selected_az_indices is not None:
@@ -144,8 +144,8 @@ def get_active_zonogram_images(tomo_name, base_data_dir, selected_az_indices=Non
         # Filter position images to only include selected indices
         filtered_position_imgs = []
         for pos_img in position_imgs:
-            # Extract index from filename like: active_zonogram_0_position.png
-            m = re.search(r'active_zonogram_(\d+)_position.png', pos_img.name)
+            # Extract index from filename like: cleft_MIP_0_position.png
+            m = re.search(r'cleft_MIP_(\d+)_position.png', pos_img.name)
             if m:
                 idx = int(m.group(1))
                 if idx in selected_indices:
@@ -156,12 +156,12 @@ def get_active_zonogram_images(tomo_name, base_data_dir, selected_az_indices=Non
     pairs = []
     for pos_img in position_imgs:
         # Extract index
-        m = re.search(r'active_zonogram_(\d+)_position.png', pos_img.name)
+        m = re.search(r'cleft_MIP_(\d+)_position.png', pos_img.name)
         if not m:
             continue
         idx = m.group(1)
         # Find corresponding selected_aunps_manual image
-        sel_img = az_dir / f"active_zonogram_{idx}_selected_aunps_manual.png"
+        sel_img = az_dir / f"cleft_MIP_{idx}_selected_aunps_manual.png"
         if sel_img.exists():
             pairs.append((pos_img, sel_img))
         else:
@@ -299,16 +299,16 @@ def generate_pdf_for_tomogram(
         # Add all visualizations for each synaptic cleft
         for az_idx in selected_az_indices:
             # Add active zonogram images for this synaptic cleft
-            img_types.append((f"Active Zonogram Position (AZ {az_idx})", f"active_zonogram_{az_idx}_position.png"))
-            img_types.append((f"Active Zonogram Selected AuNPs manual (AZ {az_idx})", f"active_zonogram_{az_idx}_selected_aunps_manual.png"))
+            img_types.append((f"Cleft MIP Position (AZ {az_idx})", f"cleft_MIP_{az_idx}_position.png"))
+            img_types.append((f"Cleft MIP Selected AuNPs manual (AZ {az_idx})", f"cleft_MIP_{az_idx}_selected_aunps_manual.png"))
             # Add main visualizations for this synaptic cleft
             img_types.append((f"Analysis Summary (AZ {az_idx})", f"{tomo_name}_combined_az{az_idx}.png"))
             img_types.append((f"AuNP Clusters Overlay (AZ {az_idx})", f"{tomo_name}_combined_aunpclusters_az{az_idx}.png"))
             # Add cluster image for this synaptic cleft - need to find the actual zone name
             # Look for the actual active zonogram cluster file
             # Look in the new organized structure for cluster files
-            az_dir_organized = viz_root / "active_zonograms" / "full"
-            cluster_pattern = f"{tomo_name}_active_zonogram_*_selected_aunps_by_cluster_az{az_idx}.png"
+            az_dir_organized = viz_root / "cleft_MIPs" / "full"
+            cluster_pattern = f"{tomo_name}_cleft_MIP_*_selected_aunps_by_cluster_az{az_idx}.png"
             print(f"Looking for cluster files with pattern: {cluster_pattern}")
             print(f"In directory: {az_dir_organized}")
             cluster_files = list(az_dir_organized.glob(cluster_pattern))
@@ -319,40 +319,40 @@ def generate_pdf_for_tomogram(
                 img_types.append((f"Cleft AuNP Clusters (AZ {az_idx})", actual_filename))
             else:
                 # Fallback to default pattern
-                fallback_filename = f"{tomo_name}_active_zonogram_cleft_pre1_post1_selected_aunps_by_cluster_az{az_idx}.png"
+                fallback_filename = f"{tomo_name}_cleft_MIP_cleft_pre1_post1_selected_aunps_by_cluster_az{az_idx}.png"
                 print(f"No cluster files found, using fallback: {fallback_filename}")
                 img_types.append((f"Cleft AuNP Clusters (AZ {az_idx})", fallback_filename))
     else:
         # No synaptic clefts specified - use az0 as default
         img_types = [
-            ("Active Zonogram Position (AZ 0)", f"active_zonogram_0_position.png"),
-            ("Active Zonogram Selected AuNPs manual (AZ 0)", f"active_zonogram_0_selected_aunps_manual.png"),
+            ("Cleft MIP Position (AZ 0)", f"cleft_MIP_0_position.png"),
+            ("Cleft MIP Selected AuNPs manual (AZ 0)", f"cleft_MIP_0_selected_aunps_manual.png"),
             ("Analysis Summary (AZ 0)", f"{tomo_name}_combined_az0.png"),
             ("AuNP Clusters Overlay (AZ 0)", f"{tomo_name}_combined_aunpclusters_az0.png"),
-            ("Cleft AuNP Clusters (AZ 0)", f"{tomo_name}_active_zonogram_cleft_pre1_post1_selected_aunps_by_cluster_az0.png"),
+            ("Cleft AuNP Clusters (AZ 0)", f"{tomo_name}_cleft_MIP_cleft_pre1_post1_selected_aunps_by_cluster_az0.png"),
         ]
     # Group images by synaptic cleft and render each group
     img_paths = []
     for _, fname in img_types:
         print(f"Processing image: {fname}")
-        if "active_zonogram" in fname and "cleft_pre1_post1" not in fname and "selected_aunps_by_cluster" not in fname:
-            # position.png and selected_aunps_manual.png under tomogram .../active_zonograms/
+        if "cleft_MIP" in fname and "cleft_pre1_post1" not in fname and "selected_aunps_by_cluster" not in fname:
+            # position.png and selected_aunps_manual.png under tomogram .../cleft_MIPs/
             tomo_dirs = list(base_data_dir.glob(f"**/{tomo_name}"))
             if tomo_dirs:
-                az_dir = tomo_dirs[0] / alignment_dir / "active_zonograms"
+                az_dir = tomo_dirs[0] / alignment_dir / "cleft_MIPs"
                 img_path = az_dir / fname
                 print(f"  Using tomogram directory: {img_path}")
                 print(f"  File exists: {img_path.exists()}")
             else:
-                az_dir = base_data_dir / f"{tomo_name}" / alignment_dir / "active_zonograms"
+                az_dir = base_data_dir / f"{tomo_name}" / alignment_dir / "cleft_MIPs"
                 img_path = az_dir / fname
                 print(f"  Using path: {img_path}")
                 print(f"  File exists: {img_path.exists()}")
             img_paths.append(img_path)
-        elif "active_zonogram" in fname:
-            # Active zonogram cluster images are in the organized structure
-            # Look in vis_dir/{tomo_name}/active_zonograms/full/
-            az_dir_organized = viz_root / "active_zonograms" / "full"
+        elif "cleft_MIP" in fname:
+            # Cleft MIP cluster images are in the organized structure
+            # Look in vis_dir/{tomo_name}/cleft_MIPs/full/
+            az_dir_organized = viz_root / "cleft_MIPs" / "full"
             img_path = az_dir_organized / fname
             print(f"  Using organized structure: {img_path}")
             print(f"  File exists: {img_path.exists()}")
@@ -362,11 +362,11 @@ def generate_pdf_for_tomogram(
         else:
             # Regular visualization images are in the organized structure
             # Look in vis_dir/{tomo_name}/aunps_and_vesicles/ for combined images
-            # Look in vis_dir/{tomo_name}/active_zonograms/full/ for active zonogram images
+            # Look in vis_dir/{tomo_name}/cleft_MIPs/full/ for cleft MIP images
             if 'combined' in fname or 'aunpclusters' in fname:
                 img_path = viz_root / "aunps_and_vesicles" / fname
-            elif 'active_zonogram' in fname:
-                img_path = viz_root / "active_zonograms" / "full" / fname
+            elif 'cleft_MIP' in fname:
+                img_path = viz_root / "cleft_MIPs" / "full" / fname
             else:
                 # Unknown image type - try aunps_and_vesicles as default
                 img_path = viz_root / "aunps_and_vesicles" / fname
@@ -396,7 +396,7 @@ def generate_pdf_for_tomogram(
         main_vis = []
         cluster_img = None
         for label, path in az_images:
-            if "Active Zonogram Position" in label or "Active Zonogram Selected AuNPs" in label:
+            if "Cleft MIP Position" in label or "Cleft MIP Selected AuNPs" in label:
                 zonogram_imgs.append((label, path))
             elif "Cleft AuNP Clusters" in label:
                 cluster_img = (label, path)
@@ -410,7 +410,7 @@ def generate_pdf_for_tomogram(
             side_width = (width - 2*margin - gap) // 2
             max_height = 320
             
-            # PAGE 1: Active zonogram images (stacked vertically)
+            # PAGE 1: Cleft MIP images (stacked vertically)
             # For the first synaptic cleft, put zonogram images on the same page as header
             # For subsequent synaptic clefts, start a new page
             if zonogram_imgs:
