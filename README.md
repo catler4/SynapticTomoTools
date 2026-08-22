@@ -240,3 +240,7 @@ tomoname,set,alignment_dir,cleft_IDs
 ```
 
 ---
+
+## Acknowledgments and Disclosures
+
+Parts of this codebase were written with assistance from [Cursor](https://cursor.com) (AI-assisted editing and development). The authors reviewed, edited, and tested all code to the best of their ability and take responsibility for its contents and for its use in published analyses.
