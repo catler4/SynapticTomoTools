@@ -605,28 +605,44 @@ def calculate_packing_density_using_sliding_cylinder(
     return (v_array, num_aunps_in_cylinder, aunp_density_per_nm2, packing_coefficient)
 
 
+def _as_xyz_cloud(points, *, label: str) -> np.ndarray:
+    """Coerce to float (N, 3); raise if the cloud is not XYZ points."""
+    arr = np.asarray(points, dtype=float)
+    if arr.size == 0:
+        return np.zeros((0, 3), dtype=float)
+    arr = np.atleast_2d(arr)
+    if arr.ndim != 2 or arr.shape[1] != 3:
+        raise ValueError(f"{label} must have shape (N, 3), got {arr.shape}")
+    return arr
+
+
 def _compute_fusion_point_from_vesicle(
     vesicle: dict,
     membrane_cleft_pairs: dict[str, dict],
     fusion_point_threshold: float,
 ) -> np.ndarray | None:
     """Putative fusion point (nm) — same geometry as per-vesicle AuNP distance histograms."""
-    vesicle_points = np.array(vesicle["coordinates"])
     membrane_name = vesicle.get("closest_membrane")
     if not membrane_name or membrane_name not in membrane_cleft_pairs:
         return None
-    cleft_points = membrane_cleft_pairs[membrane_name]["cleft_points"]
-    if cleft_points is None or len(cleft_points) == 0:
+    try:
+        vesicle_points = _as_xyz_cloud(vesicle["coordinates"], label="vesicle coordinates")
+        cleft_points = _as_xyz_cloud(
+            membrane_cleft_pairs[membrane_name]["cleft_points"],
+            label=f"cleft_points for {membrane_name}",
+        )
+    except ValueError as exc:
+        print(f"Skipping fusion-point for vesicle ({membrane_name}): {exc}")
+        return None
+    if len(vesicle_points) == 0 or len(cleft_points) == 0:
         return None
     tree = KDTree(cleft_points)
-    close_points = []
-    for pt in vesicle_points:
-        idxs = tree.query_ball_point(pt, r=fusion_point_threshold)
-        if idxs:
-            close_points.extend(cleft_points[idxs])
-    if not close_points:
+    # Unique cleft indices near any vesicle surface point (avoids huge duplicate lists).
+    nearby = tree.query_ball_point(vesicle_points, r=fusion_point_threshold)
+    idxs = {int(i) for hits in nearby for i in hits}
+    if not idxs:
         return None
-    return np.mean(np.vstack(close_points), axis=0)
+    return np.mean(cleft_points[sorted(idxs)], axis=0)
 
 
 def enumerate_close_vesicle_fusion_points(
@@ -802,23 +818,13 @@ def compute_fusion_points_with_sources(
     for vesicle in vesicles:
         if vesicle.get('distance_to_az', 0.0) > vesicle_distance_threshold:
             continue
-        vesicle_points = np.array(vesicle['coordinates'])
-        membrane_name = vesicle.get('closest_membrane', None)
-        if not membrane_name or membrane_name not in membrane_cleft_pairs:
+        fusion_point = _compute_fusion_point_from_vesicle(
+            vesicle, membrane_cleft_pairs, fusion_point_threshold
+        )
+        if fusion_point is None:
             continue
-        cleft_points = membrane_cleft_pairs[membrane_name]['cleft_points']
-        if cleft_points is None or len(cleft_points) == 0:
-            continue
-        tree = KDTree(cleft_points)
-        close_points = []
-        for pt in vesicle_points:
-            idxs = tree.query_ball_point(pt, r=fusion_point_threshold)
-            if idxs:
-                close_points.extend(cleft_points[idxs])
-        if close_points:
-            fusion_point = np.mean(np.vstack(close_points), axis=0)
-            fusion_points.append(fusion_point)
-            sources.append(vesicle)
+        fusion_points.append(fusion_point)
+        sources.append(vesicle)
     if fusion_points:
         return np.vstack(fusion_points), sources
     return np.zeros((0, 3)), []
@@ -889,18 +895,7 @@ def compute_fusion_point_aunp_distances_per_vesicle(
         distance_to_az = vesicle.get('distance_to_az', 0.0)
         if distance_to_az > vesicle_distance_threshold:
             continue
-        
-        vesicle_points = np.array(vesicle['coordinates'])
-        
-        # Find closest presynaptic membrane and its synaptic cleft points
-        membrane_name = vesicle.get('closest_membrane', None)
-        if not membrane_name or membrane_name not in membrane_cleft_pairs:
-            continue
-        
-        cleft_points = membrane_cleft_pairs[membrane_name]['cleft_points']
-        if cleft_points is None or len(cleft_points) == 0:
-            continue
-        
+
         # Check if this is a fusing vesicle (if fusing_only is True).
         # Strict mode: require precomputed vesicle label from vesicles.py.
         if fusing_only:
@@ -915,18 +910,11 @@ def compute_fusion_point_aunp_distances_per_vesicle(
             if not is_fusing:
                 continue
         
-        # Compute fusion point for this vesicle
-        tree = KDTree(cleft_points)
-        close_points = []
-        for pt in vesicle_points:
-            idxs = tree.query_ball_point(pt, r=fusion_point_threshold)
-            if idxs:
-                close_points.extend(cleft_points[idxs])
-        
-        if not close_points:
+        fusion_point = _compute_fusion_point_from_vesicle(
+            vesicle, membrane_cleft_pairs, fusion_point_threshold
+        )
+        if fusion_point is None:
             continue
-        
-        fusion_point = np.mean(np.vstack(close_points), axis=0)
         vesicle_name = f"{tomogram_name}_vesicle_{vesicle_idx}"
         
         # Calculate distances from all AuNPs to this fusion point
@@ -1350,8 +1338,16 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
         # --- Calculate distance to closest pre/post membrane segmentation (before filtering to determine filter) ---
         membranes = import_membrane_segmentations(tomogram_path, alignment_dir=alignment_dir)
         # Ensure all arrays are 2D and have shape (N, 3)
-        pre_arrays = [np.atleast_2d(arr) for arr in membranes['presynaptic'] if np.atleast_2d(arr).shape[1] == 3]
-        post_arrays = [np.atleast_2d(arr) for arr in membranes['postsynaptic'] if np.atleast_2d(arr).shape[1] == 3]
+        def _xyz_clouds(arrays):
+            out = []
+            for arr in arrays:
+                pts = np.atleast_2d(np.asarray(arr, dtype=float))
+                if pts.ndim == 2 and pts.shape[1] == 3 and pts.size:
+                    out.append(pts)
+            return out
+
+        pre_arrays = _xyz_clouds(membranes['presynaptic'])
+        post_arrays = _xyz_clouds(membranes['postsynaptic'])
         pre_points = np.concatenate(pre_arrays, axis=0) if pre_arrays else np.zeros((0, 3))
         post_points = np.concatenate(post_arrays, axis=0) if post_arrays else np.zeros((0, 3))
         if len(pre_points) > 0:
@@ -1391,18 +1387,23 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
             pre_inner_clouds = []
             post_inner_clouds = []
             for az in az_segmentations.values():
+                def _append_xyz(cloud_list, pts):
+                    arr = np.atleast_2d(np.asarray(pts, dtype=float))
+                    if arr.ndim == 2 and arr.shape[1] == 3 and arr.size:
+                        cloud_list.append(arr)
+
                 if 'presynaptic_coords' in az and len(az['presynaptic_coords']) > 0:
-                    all_az_points.append(np.atleast_2d(np.asarray(az['presynaptic_coords'])))
+                    _append_xyz(all_az_points, az['presynaptic_coords'])
                 if 'postsynaptic_coords' in az and len(az['postsynaptic_coords']) > 0:
-                    all_az_points.append(np.atleast_2d(np.asarray(az['postsynaptic_coords'])))
+                    _append_xyz(all_az_points, az['postsynaptic_coords'])
                 if 'presynaptic_outer_coords' in az and len(az['presynaptic_outer_coords']) > 0:
-                    pre_outer_clouds.append(np.atleast_2d(np.asarray(az['presynaptic_outer_coords'])))
+                    _append_xyz(pre_outer_clouds, az['presynaptic_outer_coords'])
                 if 'postsynaptic_outer_coords' in az and len(az['postsynaptic_outer_coords']) > 0:
-                    post_outer_clouds.append(np.atleast_2d(np.asarray(az['postsynaptic_outer_coords'])))
+                    _append_xyz(post_outer_clouds, az['postsynaptic_outer_coords'])
                 if 'presynaptic_inner_coords' in az and len(az['presynaptic_inner_coords']) > 0:
-                    pre_inner_clouds.append(np.atleast_2d(np.asarray(az['presynaptic_inner_coords'])))
+                    _append_xyz(pre_inner_clouds, az['presynaptic_inner_coords'])
                 if 'postsynaptic_inner_coords' in az and len(az['postsynaptic_inner_coords']) > 0:
-                    post_inner_clouds.append(np.atleast_2d(np.asarray(az['postsynaptic_inner_coords'])))
+                    _append_xyz(post_inner_clouds, az['postsynaptic_inner_coords'])
 
             pre_outer_points = np.vstack(pre_outer_clouds) if pre_outer_clouds else np.array([])
             post_outer_points = np.vstack(post_outer_clouds) if post_outer_clouds else np.array([])

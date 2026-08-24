@@ -2981,9 +2981,13 @@ def presynaptic_membrane_name_for_zone(zone_name: str, zone_data: dict | None = 
     if zone_data and zone_data.get("presynaptic_membrane_index") is not None:
         pre_idx = int(zone_data["presynaptic_membrane_index"])
     else:
-        # cleft_pre1_post1 -> 1
-        pre_part = zone_name.split("_")[2]
-        pre_idx = int(pre_part.replace("pre", ""))
+        # cleft_pre1_post1 -> 1  (split("_")[2] is post1 — do not use that)
+        match = re.search(r"pre(\d+)", str(zone_name))
+        if not match:
+            raise ValueError(
+                f"Cannot parse presynaptic membrane index from zone name {zone_name!r}"
+            )
+        pre_idx = int(match.group(1))
     return f"presynapticmembranes_{pre_idx}"
 
 

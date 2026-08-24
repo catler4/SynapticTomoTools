@@ -290,10 +290,19 @@ def import_presynaptic_membranes_and_clefts(tomogram_path, alignment_dir: str) -
                     zone_parts: list[np.ndarray] = []
                     pre_outer_file = stt_results_dir / f"{zone_name}_pre_outer.txt"
                     pre_inner_file = stt_results_dir / f"{zone_name}_pre_inner.txt"
-                    if pre_outer_file.is_file():
-                        zone_parts.append(np.atleast_2d(np.loadtxt(pre_outer_file, delimiter=None)))
-                    if pre_inner_file.is_file():
-                        zone_parts.append(np.atleast_2d(np.loadtxt(pre_inner_file, delimiter=None)))
+                    for surf_file in (pre_outer_file, pre_inner_file):
+                        if not surf_file.is_file():
+                            continue
+                        surf = np.atleast_2d(np.loadtxt(surf_file, delimiter=None))
+                        if surf.size == 0:
+                            continue
+                        if surf.ndim != 2 or surf.shape[1] != 3:
+                            print(
+                                f"Warning: skipping {surf_file.name} "
+                                f"(expected Nx3 coordinates, got shape {surf.shape})"
+                            )
+                            continue
+                        zone_parts.append(surf.astype(float))
                     if zone_parts:
                         combined_zone_points = np.vstack(zone_parts)
                         all_cleft_points.append(combined_zone_points)
