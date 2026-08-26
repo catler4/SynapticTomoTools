@@ -63,14 +63,14 @@ MAD_R_RANGES: tuple[tuple[str, float | None, float | None], ...] = (
     ("30-50nm", 30.0, 50.0),
 )
 
-AunpKind = Literal["monomer", "dimer"]
-AunpSubset = Literal["monomer", "dimer", "both"]
-AUNP_SUBSETS: tuple[AunpSubset, ...] = ("monomer", "dimer", "both")
+AunpKind = Literal["monomer", "dimer", "all"]
+AunpSubset = Literal["monomer", "dimer", "both", "all"]
+AUNP_SUBSETS: tuple[AunpSubset, ...] = ("monomer", "dimer", "both", "all")
 
 
 @dataclass(frozen=True)
 class ZoneAunpLoadResult:
-    """Monomer and/or dimer pick coordinates loaded for one synaptic cleft."""
+    """Monomer and/or dimer (or single-pool) pick coordinates for one synaptic cleft."""
 
     coords: np.ndarray
     meta: pd.DataFrame
@@ -80,6 +80,8 @@ class ZoneAunpLoadResult:
 def available_aunp_subsets(kinds_loaded: Sequence[AunpKind]) -> tuple[AunpSubset, ...]:
     """Analysis subsets to run given which STAR files were found."""
     kinds = tuple(kinds_loaded)
+    if kinds == ("all",) or (len(kinds) == 1 and kinds[0] == "all"):
+        return ("all",)
     out: list[AunpSubset] = []
     if "monomer" in kinds:
         out.append("monomer")
@@ -207,11 +209,16 @@ def load_monomer_dimer_aunps_for_zone(
     *,
     monomer_star_pattern: Optional[str] = None,
     dimer_star_pattern: Optional[str] = None,
+    single_pick_star_pattern: Optional[str] = None,
+    use_single_pick_pool: bool = False,
 ) -> ZoneAunpLoadResult:
-    """Load monomer and/or dimer pick coordinates for one synaptic cleft index.
+    """Load AuNP pick coordinates for one synaptic cleft index.
 
-    Runs when at least one STAR file is present. Missing monomer or dimer files are
-    skipped; ``kinds_loaded`` records which were found.
+    When ``use_single_pick_pool`` is True, loads the general AuNP pick STAR
+    (``single_pick_star_pattern``, or the default pick pattern) as kind ``all``.
+
+    Otherwise loads monomer and/or dimer STAR files. Missing monomer or dimer files
+    are skipped; ``kinds_loaded`` records which were found.
     """
     tomogram_path = Path(tomogram_path)
     alignment_dir = require_alignment_dir(alignment_dir)
@@ -221,34 +228,52 @@ def load_monomer_dimer_aunps_for_zone(
     frames: list[pd.DataFrame] = []
     kinds_loaded: list[AunpKind] = []
 
-    for kind, pattern in (
-        ("monomer", monomer_star_pattern),
-        ("dimer", dimer_star_pattern),
-    ):
-        path = _find_monomer_dimer_star_path(
-            aunps_dir,
-            tomogram_name,
-            alignment_dir,
-            cleft_index,
-            kind=kind,
-            pattern=pattern,
-        )
-        if path is None:
-            continue
-        frames.append(
-            _read_aunp_kind_star_frame(
-                path, kind=kind, cleft_index=cleft_index
-            )
-        )
-        kinds_loaded.append(kind)
+    if use_single_pick_pool:
+        from .aunps import discover_aunp_pick_star_files, normalize_aunp_pick_star_pattern
 
-    if not frames:
-        raise FileNotFoundError(
-            f"No monomer or dimer AuNP STAR files found for synaptic cleft "
-            f"{cleft_index} in {aunps_dir} "
-            f"(monomer pattern {monomer_star_pattern or DEFAULT_MONOMER_STAR_PATTERN!r}, "
-            f"dimer pattern {dimer_star_pattern or DEFAULT_DIMER_STAR_PATTERN!r})"
+        pat = normalize_aunp_pick_star_pattern(single_pick_star_pattern)
+        found = discover_aunp_pick_star_files(
+            aunps_dir, [int(cleft_index)], pattern=pat
         )
+        if not found:
+            raise FileNotFoundError(
+                f"No AuNP pick STAR file found for synaptic cleft {cleft_index} "
+                f"in {aunps_dir} (pattern {pat!r})"
+            )
+        path = found[0][1]
+        frames.append(
+            _read_aunp_kind_star_frame(path, kind="all", cleft_index=cleft_index)
+        )
+        kinds_loaded.append("all")
+    else:
+        for kind, pattern in (
+            ("monomer", monomer_star_pattern),
+            ("dimer", dimer_star_pattern),
+        ):
+            path = _find_monomer_dimer_star_path(
+                aunps_dir,
+                tomogram_name,
+                alignment_dir,
+                cleft_index,
+                kind=kind,
+                pattern=pattern,
+            )
+            if path is None:
+                continue
+            frames.append(
+                _read_aunp_kind_star_frame(
+                    path, kind=kind, cleft_index=cleft_index
+                )
+            )
+            kinds_loaded.append(kind)
+
+        if not frames:
+            raise FileNotFoundError(
+                f"No monomer or dimer AuNP STAR files found for synaptic cleft "
+                f"{cleft_index} in {aunps_dir} "
+                f"(monomer pattern {monomer_star_pattern or DEFAULT_MONOMER_STAR_PATTERN!r}, "
+                f"dimer pattern {dimer_star_pattern or DEFAULT_DIMER_STAR_PATTERN!r})"
+            )
 
     meta = pd.concat(frames, ignore_index=True)
     meta["aunp_index"] = np.arange(len(meta), dtype=int)
@@ -1377,8 +1402,17 @@ def _k12_curves_matrix(
     return ripley_k12_from_l12(l_mat, r_vals[None, :])
 
 
+def mean_l_from_k_curves(k_curves: np.ndarray, r_vals: np.ndarray) -> np.ndarray:
+    """``L(nanmean(K, axis=0), r)`` — average replicate K curves, convert once with ``ripley_l12``."""
+    r_vals = np.asarray(r_vals, dtype=float)
+    k_mat = np.atleast_2d(np.asarray(k_curves, dtype=float))
+    if k_mat.size == 0 or k_mat.shape[0] == 0:
+        return np.full(len(r_vals), np.nan)
+    return ripley_l12(np.nanmean(k_mat, axis=0), r_vals)
+
+
 def mean_l12_from_averaged_k12(
-    l12_curves: np.ndarray,
+    l12_curves: np.ndarray | None,
     r_vals: np.ndarray,
     *,
     k12_curves: np.ndarray | None = None,
@@ -1386,16 +1420,18 @@ def mean_l12_from_averaged_k12(
     """
     Pool on the K₁₂ scale, then convert the mean K back to L₁₂.
 
-    If ``k12_curves`` is provided it is averaged directly; otherwise each L₁₂ curve is
-    inverted to K₁₂ first. Empty input yields an all-NaN L₁₂ vector.
+    Prefer ``k12_curves`` when available. If only L₁₂ curves are passed, each is inverted
+    to K₁₂ first (valid for invertible single-curve-per-row summaries; do not use L→K
+    inversion as a substitute for averaging raw L replicates when K is available).
+    Empty input yields an all-NaN L₁₂ vector.
     """
     return prism_sd_envelope_columns_from_averaged_k12(
         l12_curves, r_vals, prefix="tmp", k12_curves=k12_curves
-    )["tmp_mean_from_k"]
+    )["tmp_mean"]
 
 
 def prism_sd_envelope_columns_from_averaged_k12(
-    l12_curves: np.ndarray,
+    l12_curves: np.ndarray | None,
     r_vals: np.ndarray,
     *,
     prefix: str,
@@ -1403,7 +1439,11 @@ def prism_sd_envelope_columns_from_averaged_k12(
     weights: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """
-    Mean ± SD/SEM on the K₁₂ scale, then map those three curves back to L₁₂.
+    Mean ± SD/SEM on the K₁₂ scale, then map mean and mean±SD/SEM through ``ripley_l12``.
+
+    Prefer ``k12_curves`` when available. Passing only ``l12_curves`` inverts L→K first —
+    acceptable for invertible single-curve-per-row zone summaries, not as a substitute for
+    averaging raw L replicates when stored K is available.
 
     Because L₁₂(K) is nonlinear, these envelopes differ from mean±SD computed on L₁₂.
     Percentile envelopes of L and of K→L are identical (monotone transform), so they are
@@ -1414,22 +1454,28 @@ def prism_sd_envelope_columns_from_averaged_k12(
     every curve as equally informative — so a curve backed by very little data can't
     dominate the average the way an unweighted mean would let it.
 
-    Columns: ``{prefix}_mean_from_k``, ``{prefix}_sd_from_k`` (SD of K),
-    ``{prefix}_sd_envelope_{lo,hi}_from_k``, ``{prefix}_sem_from_k`` (SEM of K),
-    ``{prefix}_sem_envelope_{lo,hi}_from_k``.
+    Columns (primary / only K→L reporting): ``{prefix}_mean``, ``{prefix}_sd`` (SD of K),
+    ``{prefix}_sd_envelope_{lo,hi}``, ``{prefix}_sem`` (SEM of K),
+    ``{prefix}_sem_envelope_{lo,hi}``.
     """
     r_vals = np.asarray(r_vals, dtype=float)
     nan = np.full(len(r_vals), np.nan)
     empty = {
-        f"{prefix}_mean_from_k": nan.copy(),
-        f"{prefix}_sd_from_k": nan.copy(),
-        f"{prefix}_sd_envelope_lo_from_k": nan.copy(),
-        f"{prefix}_sd_envelope_hi_from_k": nan.copy(),
-        f"{prefix}_sem_from_k": nan.copy(),
-        f"{prefix}_sem_envelope_lo_from_k": nan.copy(),
-        f"{prefix}_sem_envelope_hi_from_k": nan.copy(),
+        f"{prefix}_mean": nan.copy(),
+        f"{prefix}_sd": nan.copy(),
+        f"{prefix}_sd_envelope_lo": nan.copy(),
+        f"{prefix}_sd_envelope_hi": nan.copy(),
+        f"{prefix}_sem": nan.copy(),
+        f"{prefix}_sem_envelope_lo": nan.copy(),
+        f"{prefix}_sem_envelope_hi": nan.copy(),
     }
-    k_mat = _k12_curves_matrix(l12_curves, r_vals, k12_curves=k12_curves)
+    if k12_curves is None and l12_curves is None:
+        return empty
+    k_mat = _k12_curves_matrix(
+        np.empty((0, len(r_vals))) if l12_curves is None else l12_curves,
+        r_vals,
+        k12_curves=k12_curves,
+    )
     if k_mat.size == 0 or k_mat.shape[0] == 0:
         return empty
 
@@ -1452,13 +1498,13 @@ def prism_sd_envelope_columns_from_averaged_k12(
     sem_k = np.where(n_valid > 1, sem_k, 0.0)
 
     return {
-        f"{prefix}_mean_from_k": ripley_l12(mean_k, r_vals),
-        f"{prefix}_sd_from_k": sd_k,
-        f"{prefix}_sd_envelope_lo_from_k": ripley_l12(mean_k - sd_k, r_vals),
-        f"{prefix}_sd_envelope_hi_from_k": ripley_l12(mean_k + sd_k, r_vals),
-        f"{prefix}_sem_from_k": sem_k,
-        f"{prefix}_sem_envelope_lo_from_k": ripley_l12(mean_k - sem_k, r_vals),
-        f"{prefix}_sem_envelope_hi_from_k": ripley_l12(mean_k + sem_k, r_vals),
+        f"{prefix}_mean": ripley_l12(mean_k, r_vals),
+        f"{prefix}_sd": sd_k,
+        f"{prefix}_sd_envelope_lo": ripley_l12(mean_k - sd_k, r_vals),
+        f"{prefix}_sd_envelope_hi": ripley_l12(mean_k + sd_k, r_vals),
+        f"{prefix}_sem": sem_k,
+        f"{prefix}_sem_envelope_lo": ripley_l12(mean_k - sem_k, r_vals),
+        f"{prefix}_sem_envelope_hi": ripley_l12(mean_k + sem_k, r_vals),
     }
 
 

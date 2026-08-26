@@ -89,6 +89,7 @@ from .ripley_library import (
     load_synaptic_cleft_cleft_points,
     mad_result_to_curves_dataframe,
     mad_result_to_summary_row,
+    mean_l_from_k_curves,
     plot_ripley_window_geometry_diagnostic,
     prism_sd_envelope_columns_from_averaged_k12,
     run_mad_tests_over_r_ranges,
@@ -126,10 +127,15 @@ def _family_tag(fam: str) -> str:
     return ("L" if fam.startswith("l") else "G") + fam[1:]
 
 
+def _k_family_key(fam: str) -> str:
+    """Map an L-family key to its K counterpart (``l12``→``k12``, ``l_combined``→``k_combined``)."""
+    return "k" + fam[1:]
+
+
+K_FAMILIES: tuple[str, ...] = tuple(_k_family_key(fam) for fam in L_FAMILIES)
+
+
 POOLED_CURVES_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_curves.csv")
-POOLED_INDIVIDUAL_CURVES_CSV = Path(
-    "results/aunps/aunp_monomer_dimer_ripley_l12_individual_curves.csv"
-)
 POOLED_MAD_SUMMARY_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_mad_summary.csv")
 POOLED_PRISM_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_prism_pooled.csv")
 POOLED_PRISM_WIDE_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_prism_pooled_wide.csv")
@@ -652,13 +658,22 @@ def _segregation_band_columns(
     curves: np.ndarray,
     r_vals: np.ndarray,
     prefix: str,
+    *,
+    k_curves: np.ndarray | None = None,
+    average_on_k: bool = False,
 ) -> dict[str, np.ndarray]:
-    lo, mean, hi = _percentile_band(curves)
-    sd = _prism_sd_envelope_columns(curves, r_vals, prefix=prefix)
+    """Percentile lo/hi on the displayed scale; mean±SD/SEM via K→L when ``average_on_k``."""
+    lo, _band_mean, hi = _percentile_band(curves)
+    if average_on_k:
+        sd = prism_sd_envelope_columns_from_averaged_k12(
+            curves, r_vals, prefix=prefix, k12_curves=k_curves
+        )
+    else:
+        sd = _prism_sd_envelope_columns(curves, r_vals, prefix=prefix)
     n_r = len(r_vals)
     if len(lo) != n_r:
         nan = np.full(n_r, np.nan)
-        lo = mean = hi = nan
+        lo = hi = nan
     return {
         f"{prefix}_mean": sd[f"{prefix}_mean"],
         f"{prefix}_sd": sd[f"{prefix}_sd"],
@@ -669,61 +684,7 @@ def _segregation_band_columns(
         f"{prefix}_sem_envelope_hi": sd[f"{prefix}_sem_envelope_hi"],
         f"{prefix}_envelope_lo": lo,
         f"{prefix}_envelope_hi": hi,
-        f"{prefix}_band_mean": mean,
     }
-
-
-def build_monomer_dimer_individual_curves_table(
-    *,
-    zone_name: str,
-    r_vals: np.ndarray,
-    observed_by_family: dict[str, np.ndarray],
-    perm_curves_by_family: dict[str, np.ndarray],
-    seg_greedy_curves_by_family: dict[str, np.ndarray],
-    n_monomer: int,
-    n_dimer: int,
-    window_volume_nm3: float,
-) -> pd.DataFrame:
-    """Long table of every individual curve (observed + all control replicates), for every
-    family in ``ALL_FAMILIES`` (distinguished by a ``curve_family`` column)."""
-    extras = {
-        "cleft_name": zone_name,
-        "window_mode": WINDOW_MODE,
-        "n_monomer": int(n_monomer),
-        "n_dimer": int(n_dimer),
-        "window_volume_nm3": float(window_volume_nm3),
-    }
-    frames: list[pd.DataFrame] = []
-    for fam in observed_by_family:
-        fam_extras = {**extras, "curve_family": fam}
-        frames.append(
-            curves_matrix_to_long_dataframe(
-                np.atleast_2d(observed_by_family[fam]),
-                r_vals,
-                curve_type="observed",
-                extra_cols=fam_extras,
-            )
-        )
-        frames.append(
-            curves_matrix_to_long_dataframe(
-                perm_curves_by_family[fam],
-                r_vals,
-                curve_type="label_permutation",
-                extra_cols=fam_extras,
-            )
-        )
-        frames.append(
-            curves_matrix_to_long_dataframe(
-                seg_greedy_curves_by_family[fam],
-                r_vals,
-                curve_type="segregation_greedy",
-                extra_cols=fam_extras,
-            )
-        )
-    nonempty = [f for f in frames if not f.empty]
-    if not nonempty:
-        return pd.DataFrame()
-    return pd.concat(nonempty, ignore_index=True)
 
 
 def build_monomer_dimer_prism_table(
@@ -738,25 +699,46 @@ def build_monomer_dimer_prism_table(
     n_perm: int,
     n_segregation: int,
     window_volume_nm3: float,
+    perm_k_curves_by_family: dict[str, np.ndarray] | None = None,
+    seg_k_curves_by_family: dict[str, np.ndarray] | None = None,
 ) -> pd.DataFrame:
     """Per-zone Prism table: observed value plus label-permutation and segregation
-    controls, for every family in ``ALL_FAMILIES``. Column names for the ``l12`` family
-    (``observed_L12``, ``control_L12_*``, ``segregation_greedy_L12_*``) are unchanged from
-    before the six-family extension.
+    controls, for every family in ``ALL_FAMILIES``.
+
+    For L-families, mean±SD/SEM are K-averaged then mapped through ``ripley_l12``; percentile
+    envelopes remain on L of each replicate. G-families average on g. Column names for the
+    ``l12`` family (``observed_L12``, ``control_L12_*``, ``segregation_greedy_L12_*``) are
+    unchanged from before the six-family extension.
     """
     n_r = len(r_vals)
+    perm_k_curves_by_family = perm_k_curves_by_family or {}
+    seg_k_curves_by_family = seg_k_curves_by_family or {}
     per_family: dict[str, dict] = {}
     for fam in observed_by_family:
         tag = _family_tag(fam)
-        perm_lo, perm_mean, perm_hi = _percentile_band(perm_curves_by_family[fam])
-        perm_sd = _prism_sd_envelope_columns(
-            perm_curves_by_family[fam], r_vals, prefix=f"control_{tag}"
-        )
+        is_l_family = fam in L_FAMILIES
+        perm_curves = perm_curves_by_family[fam]
+        perm_lo, _, perm_hi = _percentile_band(perm_curves)
         if len(perm_lo) != n_r:
             nan = np.full(n_r, np.nan)
-            perm_lo = perm_mean = perm_hi = nan
+            perm_lo = perm_hi = nan
+        if is_l_family:
+            perm_sd = prism_sd_envelope_columns_from_averaged_k12(
+                perm_curves,
+                r_vals,
+                prefix=f"control_{tag}",
+                k12_curves=perm_k_curves_by_family.get(fam),
+            )
+        else:
+            perm_sd = _prism_sd_envelope_columns(
+                perm_curves, r_vals, prefix=f"control_{tag}"
+            )
         seg = _segregation_band_columns(
-            seg_greedy_curves_by_family[fam], r_vals, prefix=f"segregation_greedy_{tag}"
+            seg_greedy_curves_by_family[fam],
+            r_vals,
+            prefix=f"segregation_greedy_{tag}",
+            k_curves=seg_k_curves_by_family.get(fam),
+            average_on_k=is_l_family,
         )
         per_family[fam] = {"tag": tag, "perm_sd": perm_sd, "perm_lo": perm_lo, "perm_hi": perm_hi, "seg": seg}
 
@@ -825,13 +807,11 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
     """Pooled mean ± SD of observed/control/segregation curves across zones, per tomogram
     set, for every family in ``ALL_FAMILIES``.
 
-    For L-families (``l12``, ``l21``, ``l_combined``), reports both L-space mean±SD/SEM
-    (``*_mean``, ``*_sd_*``) and K-space mean±SD/SEM mapped to L (``*_mean_from_k``,
-    ``*_sd_*_from_k``, ``*_sem_*_from_k``) — the K-scale version is the statistically sound
-    one (see ``ripley_library``'s K→L pooling docs); the L-space version is kept as a
-    reference. G-families (``g12``, ``g21``, ``g_combined``) get only the direct treatment —
-    g is a linear ratio, not a nonlinear transform of K, so no K-scale detour is needed.
-    Column names for the ``l12`` family are unchanged from before the six-family extension.
+    For L-families (``l12``, ``l21``, ``l_combined``), mean±SD/SEM are computed on K then
+    mapped once through ``ripley_l12`` into the primary ``*_mean`` / ``*_sd_*`` columns
+    (preferring stored mean-K columns when present; otherwise invertible zone-level L
+    summaries). G-families average on g. Column names for the ``l12`` family are unchanged
+    from before the six-family extension.
     """
     if df.empty:
         return pd.DataFrame()
@@ -854,32 +834,41 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
             _, seg_curves = _extract_curves_matrix(sub, f"seg_greedy_{fam}_mean")
 
             is_l_family = fam in L_FAMILIES
-            obs_sd = _prism_sd_envelope_columns(obs_curves, r_vals, prefix=f"observed_{tag}")
-            ctrl_sd = _prism_sd_envelope_columns(ctrl_curves, r_vals, prefix=f"control_{tag}")
-            seg_sd = _prism_sd_envelope_columns(
-                seg_curves, r_vals, prefix=f"segregation_greedy_{tag}"
-            )
-            obs_from_k = ctrl_from_k = seg_from_k = None
             if is_l_family:
-                obs_from_k = prism_sd_envelope_columns_from_averaged_k12(
-                    obs_curves, r_vals, prefix=f"observed_{tag}"
+                k_fam = _k_family_key(fam)
+                _, obs_k = _extract_curves_matrix(sub, k_fam)
+                _, ctrl_k = _extract_curves_matrix(sub, f"perm_{k_fam}_mean")
+                _, seg_k = _extract_curves_matrix(sub, f"seg_greedy_{k_fam}_mean")
+                obs_sd = prism_sd_envelope_columns_from_averaged_k12(
+                    obs_curves,
+                    r_vals,
+                    prefix=f"observed_{tag}",
+                    k12_curves=obs_k if len(obs_k) else None,
                 )
-                ctrl_from_k = prism_sd_envelope_columns_from_averaged_k12(
-                    ctrl_curves, r_vals, prefix=f"control_{tag}"
+                ctrl_sd = prism_sd_envelope_columns_from_averaged_k12(
+                    ctrl_curves,
+                    r_vals,
+                    prefix=f"control_{tag}",
+                    k12_curves=ctrl_k if len(ctrl_k) else None,
                 )
-                seg_from_k = prism_sd_envelope_columns_from_averaged_k12(
+                seg_sd = prism_sd_envelope_columns_from_averaged_k12(
+                    seg_curves,
+                    r_vals,
+                    prefix=f"segregation_greedy_{tag}",
+                    k12_curves=seg_k if len(seg_k) else None,
+                )
+            else:
+                obs_sd = _prism_sd_envelope_columns(obs_curves, r_vals, prefix=f"observed_{tag}")
+                ctrl_sd = _prism_sd_envelope_columns(ctrl_curves, r_vals, prefix=f"control_{tag}")
+                seg_sd = _prism_sd_envelope_columns(
                     seg_curves, r_vals, prefix=f"segregation_greedy_{tag}"
                 )
 
             family_data[fam] = {
                 "tag": tag,
-                "is_l_family": is_l_family,
                 "obs_sd": obs_sd,
                 "ctrl_sd": ctrl_sd,
                 "seg_sd": seg_sd,
-                "obs_from_k": obs_from_k,
-                "ctrl_from_k": ctrl_from_k,
-                "seg_from_k": seg_from_k,
                 "n_zone_curves": len(obs_curves),
             }
             if anchor_r_vals is None:
@@ -919,28 +908,6 @@ def build_pooled_monomer_dimer_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                     row[f"{prefix}_sem"] = float(sd[f"{prefix}_sem"][i])
                     row[f"{prefix}_sem_envelope_lo"] = float(sd[f"{prefix}_sem_envelope_lo"][i])
                     row[f"{prefix}_sem_envelope_hi"] = float(sd[f"{prefix}_sem_envelope_hi"][i])
-                if data["is_l_family"]:
-                    for role, from_k in (
-                        ("observed", data["obs_from_k"]),
-                        ("control", data["ctrl_from_k"]),
-                        ("segregation_greedy", data["seg_from_k"]),
-                    ):
-                        prefix = f"{role}_{tag}"
-                        row[f"{prefix}_mean_from_k"] = float(from_k[f"{prefix}_mean_from_k"][i])
-                        row[f"{prefix}_sd_from_k"] = float(from_k[f"{prefix}_sd_from_k"][i])
-                        row[f"{prefix}_sd_envelope_lo_from_k"] = float(
-                            from_k[f"{prefix}_sd_envelope_lo_from_k"][i]
-                        )
-                        row[f"{prefix}_sd_envelope_hi_from_k"] = float(
-                            from_k[f"{prefix}_sd_envelope_hi_from_k"][i]
-                        )
-                        row[f"{prefix}_sem_from_k"] = float(from_k[f"{prefix}_sem_from_k"][i])
-                        row[f"{prefix}_sem_envelope_lo_from_k"] = float(
-                            from_k[f"{prefix}_sem_envelope_lo_from_k"][i]
-                        )
-                        row[f"{prefix}_sem_envelope_hi_from_k"] = float(
-                            from_k[f"{prefix}_sem_envelope_hi_from_k"][i]
-                        )
             rows.append(row)
     return pd.DataFrame(rows)
 
@@ -1028,11 +995,21 @@ def _plot_family_observed_vs_controls(
     n_segregation: int,
     r_max_nm: float,
     output_path: Path,
+    perm_mean: np.ndarray | None = None,
+    seg_mean: np.ndarray | None = None,
 ) -> None:
-    """Per-zone observed-vs-null figure for one family (a member of ``ALL_FAMILIES``)."""
+    """Per-zone observed-vs-null figure for one family (a member of ``ALL_FAMILIES``).
+
+    For L-families, pass ``perm_mean`` / ``seg_mean`` as K-averaged→L curves; percentile
+    envelopes remain on L of each replicate.
+    """
     label = _family_tag(fam)
     perm_lo, perm_band_mean, perm_hi = _percentile_band(perm_curves)
     seg_lo, seg_band_mean, seg_hi = _percentile_band(seg_greedy_curves)
+    if perm_mean is not None:
+        perm_band_mean = np.asarray(perm_mean, dtype=float)
+    if seg_mean is not None:
+        seg_band_mean = np.asarray(seg_mean, dtype=float)
     fig, ax = plt.subplots(figsize=(6.5, 4.5))
     ax.plot(r_vals, observed, color="C0", lw=2, label=f"Observed monomer→dimer {label}")
     if len(perm_band_mean) == len(r_vals):
@@ -1280,10 +1257,27 @@ def run_monomer_dimer_ripley_for_zone(
     perm_mean_by_family: dict[str, np.ndarray] = {}
     seg_mean_by_family: dict[str, np.ndarray] = {}
     for fam in ALL_FAMILIES:
-        _, m, _ = _percentile_band(perm_all[fam])
-        perm_mean_by_family[fam] = m if len(m) == len(r_vals) else np.full(len(r_vals), np.nan)
-        _, m, _ = _percentile_band(seg_all[fam])
-        seg_mean_by_family[fam] = m if len(m) == len(r_vals) else np.full(len(r_vals), np.nan)
+        if fam in L_FAMILIES:
+            k_fam = _k_family_key(fam)
+            perm_mean_by_family[fam] = mean_l_from_k_curves(perm_all[k_fam], r_vals)
+            seg_mean_by_family[fam] = mean_l_from_k_curves(seg_all[k_fam], r_vals)
+        else:
+            _, m, _ = _percentile_band(perm_all[fam])
+            perm_mean_by_family[fam] = m if len(m) == len(r_vals) else np.full(len(r_vals), np.nan)
+            _, m, _ = _percentile_band(seg_all[fam])
+            seg_mean_by_family[fam] = m if len(m) == len(r_vals) else np.full(len(r_vals), np.nan)
+
+    perm_k_mean_by_family: dict[str, np.ndarray] = {}
+    seg_k_mean_by_family: dict[str, np.ndarray] = {}
+    for k_fam in K_FAMILIES:
+        perm_k = np.atleast_2d(perm_all[k_fam])
+        seg_k = np.atleast_2d(seg_all[k_fam])
+        perm_k_mean_by_family[k_fam] = (
+            np.nanmean(perm_k, axis=0) if perm_k.shape[0] else np.full(len(r_vals), np.nan)
+        )
+        seg_k_mean_by_family[k_fam] = (
+            np.nanmean(seg_k, axis=0) if seg_k.shape[0] else np.full(len(r_vals), np.nan)
+        )
 
     tomogram_name = tomogram_path.name
     out_dir = (
@@ -1357,6 +1351,10 @@ def run_monomer_dimer_ripley_for_zone(
         curves_data[fam] = observed[fam]
         curves_data[f"perm_{fam}_mean"] = perm_mean_by_family[fam]
         curves_data[f"seg_greedy_{fam}_mean"] = seg_mean_by_family[fam]
+    for k_fam in K_FAMILIES:
+        curves_data[k_fam] = observed[k_fam]
+        curves_data[f"perm_{k_fam}_mean"] = perm_k_mean_by_family[k_fam]
+        curves_data[f"seg_greedy_{k_fam}_mean"] = seg_k_mean_by_family[k_fam]
     curves_data.update(
         {
             "n_monomer": n_monomer,
@@ -1370,18 +1368,6 @@ def run_monomer_dimer_ripley_for_zone(
     curves_path = out_dir / "ripley_l12_curves.csv"
     curves_df.to_csv(curves_path, index=False)
 
-    individual_df = build_monomer_dimer_individual_curves_table(
-        zone_name=zone_name,
-        r_vals=r_vals,
-        observed_by_family={fam: observed[fam] for fam in ALL_FAMILIES},
-        perm_curves_by_family={fam: perm_all[fam] for fam in ALL_FAMILIES},
-        seg_greedy_curves_by_family={fam: seg_all[fam] for fam in ALL_FAMILIES},
-        n_monomer=n_monomer,
-        n_dimer=n_dimer,
-        window_volume_nm3=float(window.volume_nm3),
-    )
-    individual_path = out_dir / "ripley_l12_individual_curves.csv"
-    individual_df.to_csv(individual_path, index=False)
     # Prism-friendly wide tables (one file per curve family × role).
     for fam in ALL_FAMILIES:
         curves_matrix_to_wide_dataframe(
@@ -1400,6 +1386,8 @@ def run_monomer_dimer_ripley_for_zone(
         observed_by_family={fam: observed[fam] for fam in ALL_FAMILIES},
         perm_curves_by_family={fam: perm_all[fam] for fam in ALL_FAMILIES},
         seg_greedy_curves_by_family={fam: seg_all[fam] for fam in ALL_FAMILIES},
+        perm_k_curves_by_family={fam: perm_all[_k_family_key(fam)] for fam in L_FAMILIES},
+        seg_k_curves_by_family={fam: seg_all[_k_family_key(fam)] for fam in L_FAMILIES},
         n_monomer=n_monomer,
         n_dimer=n_dimer,
         n_perm=n_perm_int,
@@ -1428,6 +1416,8 @@ def run_monomer_dimer_ripley_for_zone(
                 n_segregation=n_segregation_int,
                 r_max_nm=r_max_nm,
                 output_path=figures_dir / f"ripley_{fam}_observed_vs_controls.png",
+                perm_mean=perm_mean_by_family[fam],
+                seg_mean=seg_mean_by_family[fam],
             )
 
     mad_summary_path, mad_curves_path = _write_mad_outputs(
@@ -1497,7 +1487,6 @@ def run_monomer_dimer_ripley_for_zone(
     )
     result = {
         "curves_path": curves_path,
-        "individual_curves_path": individual_path,
         "prism_path": prism_path,
         "mad_summary_path": mad_summary_path,
         "mad_curves_path": mad_curves_path,
@@ -1520,10 +1509,10 @@ def run_monomer_dimer_ripley_for_tomogram(
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
     seed: int = DEFAULT_ANALYSIS_SEED,
     write_figures: bool = True,
-) -> tuple[list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame]]:
+) -> tuple[list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame]]:
     """Run monomer vs dimer Ripley for all mapped synaptic clefts in one tomogram.
 
-    Returns ``(curve_frames, prism_frames, individual_frames, mad_summary_frames)``.
+    Returns ``(curve_frames, prism_frames, mad_summary_frames)``.
     Segregation replicate count always matches ``n_perm``.
     """
     from .cleft import load_cleft_mapping
@@ -1535,13 +1524,12 @@ def run_monomer_dimer_ripley_for_tomogram(
     az_mapping = load_cleft_mapping(tomogram_path, alignment_dir) or {}
     if not az_mapping:
         print("No synaptic cleft mapping; skipping monomer/dimer Ripley analyses")
-        return [], [], [], []
+        return [], [], []
 
     az_mapping = {int(k): v for k, v in az_mapping.items()}
     indices = list(cleft_indices) if cleft_indices is not None else sorted(az_mapping)
 
     curve_frames: list[pd.DataFrame] = []
-    individual_frames: list[pd.DataFrame] = []
     prism_frames: list[pd.DataFrame] = []
     mad_summary_frames: list[pd.DataFrame] = []
 
@@ -1577,13 +1565,10 @@ def run_monomer_dimer_ripley_for_tomogram(
         if result is None:
             continue
         curves_path = result["curves_path"]
-        individual_path = result["individual_curves_path"]
         prism_path = result["prism_path"]
         mad_summary_path = result["mad_summary_path"]
         if curves_path.is_file():
             curve_frames.append(pd.read_csv(curves_path))
-        if individual_path.is_file():
-            individual_frames.append(pd.read_csv(individual_path))
         if prism_path.is_file():
             prism_frames.append(pd.read_csv(prism_path))
         if mad_summary_path.is_file():
@@ -1599,7 +1584,7 @@ def run_monomer_dimer_ripley_for_tomogram(
             mad_df["window_mode"] = WINDOW_MODE
             mad_summary_frames.append(mad_df)
 
-    return curve_frames, prism_frames, individual_frames, mad_summary_frames
+    return curve_frames, prism_frames, mad_summary_frames
 
 
 def _plot_pooled_family_figure(
@@ -1631,65 +1616,20 @@ def _plot_pooled_family_figure(
     seg_lo = grp.get(f"segregation_greedy_{tag}_sd_envelope_lo", nan_series).to_numpy(dtype=float)
     seg_hi = grp.get(f"segregation_greedy_{tag}_sd_envelope_hi", nan_series).to_numpy(dtype=float)
     meta = grp.iloc[0]
-    is_l_family = fam in L_FAMILIES
-    direct_suffix = " (of L)" if is_l_family else ""
-    from_k_suffix = " (K→L)" if is_l_family else ""
 
     set_tag = _safe_name(str(set_name)) or "unspecified"
     fig, ax = plt.subplots(figsize=(6.5, 4.5))
 
-    ax.plot(r_vals, obs_mean, color="C0", lw=2, label=f"Observed mean{direct_suffix}")
-    from_k_col = f"observed_{tag}_mean_from_k"
-    if from_k_col in grp.columns:
-        ax.plot(
-            r_vals, grp[from_k_col].to_numpy(dtype=float), color="C0", lw=1.5, ls="--",
-            label=f"Observed mean{from_k_suffix}",
-        )
-    ax.fill_between(r_vals, obs_lo, obs_hi, color="C0", alpha=0.25, label=f"Observed ±SD{direct_suffix}")
-    from_k_lo_col = f"observed_{tag}_sd_envelope_lo_from_k"
-    if from_k_lo_col in grp.columns:
-        ax.fill_between(
-            r_vals,
-            grp[from_k_lo_col].to_numpy(dtype=float),
-            grp[f"observed_{tag}_sd_envelope_hi_from_k"].to_numpy(dtype=float),
-            color="C0", alpha=0.12, hatch="///", label=f"Observed ±SD{from_k_suffix}",
-        )
+    ax.plot(r_vals, obs_mean, color="C0", lw=2, label="Observed mean")
+    ax.fill_between(r_vals, obs_lo, obs_hi, color="C0", alpha=0.25, label="Observed ±SD")
 
     if np.isfinite(ctrl_mean).any():
-        ax.plot(r_vals, ctrl_mean, color="0.45", lw=1.5, label=f"Label-perm mean{direct_suffix}")
-        from_k_col = f"control_{tag}_mean_from_k"
-        if from_k_col in grp.columns:
-            ax.plot(
-                r_vals, grp[from_k_col].to_numpy(dtype=float), color="0.45", lw=1.3, ls="--",
-                label=f"Label-perm mean{from_k_suffix}",
-            )
-        ax.fill_between(r_vals, ctrl_lo, ctrl_hi, color="0.7", alpha=0.4, label=f"Label-perm ±SD{direct_suffix}")
-        from_k_lo_col = f"control_{tag}_sd_envelope_lo_from_k"
-        if from_k_lo_col in grp.columns:
-            ax.fill_between(
-                r_vals,
-                grp[from_k_lo_col].to_numpy(dtype=float),
-                grp[f"control_{tag}_sd_envelope_hi_from_k"].to_numpy(dtype=float),
-                color="0.45", alpha=0.12, hatch="///", label=f"Label-perm ±SD{from_k_suffix}",
-            )
+        ax.plot(r_vals, ctrl_mean, color="0.45", lw=1.5, label="Label-perm mean")
+        ax.fill_between(r_vals, ctrl_lo, ctrl_hi, color="0.7", alpha=0.4, label="Label-perm ±SD")
 
     if np.isfinite(seg_mean).any():
-        ax.plot(r_vals, seg_mean, color="C3", lw=1.5, label=f"Greedy seg mean{direct_suffix}")
-        from_k_col = f"segregation_greedy_{tag}_mean_from_k"
-        if from_k_col in grp.columns:
-            ax.plot(
-                r_vals, grp[from_k_col].to_numpy(dtype=float), color="C3", lw=1.3, ls="--",
-                label=f"Greedy seg mean{from_k_suffix}",
-            )
-        ax.fill_between(r_vals, seg_lo, seg_hi, color="C3", alpha=0.2, label=f"Greedy seg ±SD{direct_suffix}")
-        from_k_lo_col = f"segregation_greedy_{tag}_sd_envelope_lo_from_k"
-        if from_k_lo_col in grp.columns:
-            ax.fill_between(
-                r_vals,
-                grp[from_k_lo_col].to_numpy(dtype=float),
-                grp[f"segregation_greedy_{tag}_sd_envelope_hi_from_k"].to_numpy(dtype=float),
-                color="C3", alpha=0.1, hatch="///", label=f"Greedy seg ±SD{from_k_suffix}",
-            )
+        ax.plot(r_vals, seg_mean, color="C3", lw=1.5, label="Greedy seg mean")
+        ax.fill_between(r_vals, seg_lo, seg_hi, color="C3", alpha=0.2, label="Greedy seg ±SD")
 
     ax.axhline(1.0 if fam in G_FAMILIES else 0.0, color="0.5", ls="--", lw=0.8)
     ax.set_xlabel("r (nm)")

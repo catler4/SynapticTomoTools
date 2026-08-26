@@ -15,7 +15,8 @@ throughout, never Monte Carlo.
 
 Distance and Ripley partner sets are reported separately for monomer-only, dimer-only,
 and combined monomer+dimer picks when both STAR files are present. If only one STAR
-file exists, analyses run for that kind only.
+file exists, analyses run for that kind only. When a single general AuNP pick STAR
+pool is used (``use_single_pick_pool``), analyses run for the ``all`` subset.
 
 Vesicle–AuNP distance tables are also written in a Prism-friendly form with one column
 per vesicle (or vesicle×simulation), distances listed down the column, for fusing,
@@ -75,6 +76,8 @@ from .ripley_library import (
     load_synaptic_cleft_cleft_points,
     mad_result_to_curves_dataframe,
     mad_result_to_summary_row,
+    mean_l12_from_averaged_k12,
+    mean_l_from_k_curves,
     pair_correlation_from_k_diff,
     plot_ripley_window_geometry_diagnostic,
     prism_sd_envelope_columns_from_averaged_k12,
@@ -421,10 +424,13 @@ def _distance_csv_name(stem: str, subset: AunpSubset) -> str:
     return f"{stem}__{subset}.csv"
 
 
-def _fusing_mean_curve(obs_curves: np.ndarray, r_vals: np.ndarray) -> np.ndarray:
+def _fusing_mean_curve(obs_curves: np.ndarray, r_vals: np.ndarray, *, k_curves: np.ndarray | None = None) -> np.ndarray:
+    """Mean L₁₂ via average-on-K then ``ripley_l12`` (inverts L if ``k_curves`` omitted)."""
+    if k_curves is not None and len(k_curves):
+        return mean_l_from_k_curves(k_curves, r_vals)
     if len(obs_curves) == 0:
         return np.full(len(r_vals), np.nan)
-    return np.nanmean(obs_curves, axis=0)
+    return mean_l12_from_averaged_k12(obs_curves, r_vals)
 
 
 def build_ripley_l12_prism_envelope_table(
@@ -436,34 +442,35 @@ def build_ripley_l12_prism_envelope_table(
     obs_curves: np.ndarray,
     control_curves_by_comparison: dict[str, np.ndarray],
     n_aunp_partners: int,
+    obs_k_curves: np.ndarray | None = None,
+    control_k_curves_by_comparison: dict[str, np.ndarray] | None = None,
 ) -> pd.DataFrame:
     """
     Pre-aggregated mean curves and control envelopes for graphing (e.g. Prism).
 
-    Percentile envelopes use 2.5–97.5% across replicate curves. SD envelopes use
-    mean ± 1 sample SD; SEM envelopes use mean ± SEM (SD / sqrt(n)).
+    Percentile envelopes use 2.5–97.5% across replicate L₁₂ curves. Mean ± SD/SEM use
+    average-on-K then ``ripley_l12`` once (primary columns only).
 
     One row per (control_comparison, r_nm). ``fusing_L12_mean`` is identical within
-    each comparison group (mean across fusing-vesicle curves).
+    each comparison group (K-averaged→L across fusing-vesicle curves).
     """
-    fusing_sd = _prism_sd_envelope_columns(obs_curves, r_vals, prefix="fusing_L12")
-    fusing_from_k = prism_sd_envelope_columns_from_averaged_k12(
-        obs_curves, r_vals, prefix="fusing_L12"
+    control_k_curves_by_comparison = control_k_curves_by_comparison or {}
+    fusing_sd = prism_sd_envelope_columns_from_averaged_k12(
+        obs_curves, r_vals, prefix="fusing_L12", k12_curves=obs_k_curves
     )
     rows: list[dict] = []
     for comparison, control_curves in control_curves_by_comparison.items():
+        ctrl_k = control_k_curves_by_comparison.get(comparison)
         if len(control_curves):
-            ctrl_lo, ctrl_mean, ctrl_hi = _percentile_band(control_curves)
-            ctrl_sd = _prism_sd_envelope_columns(control_curves, r_vals, prefix="control_L12")
-            ctrl_from_k = prism_sd_envelope_columns_from_averaged_k12(
-                control_curves, r_vals, prefix="control_L12"
+            ctrl_lo, _, ctrl_hi = _percentile_band(control_curves)
+            ctrl_sd = prism_sd_envelope_columns_from_averaged_k12(
+                control_curves, r_vals, prefix="control_L12", k12_curves=ctrl_k
             )
             n_control = int(len(control_curves))
         else:
-            ctrl_lo = ctrl_mean = ctrl_hi = np.full(len(r_vals), np.nan)
-            ctrl_sd = _prism_sd_envelope_columns(np.empty((0, len(r_vals))), r_vals, prefix="control_L12")
-            ctrl_from_k = prism_sd_envelope_columns_from_averaged_k12(
-                np.empty((0, len(r_vals))), r_vals, prefix="control_L12"
+            ctrl_lo = ctrl_hi = np.full(len(r_vals), np.nan)
+            ctrl_sd = prism_sd_envelope_columns_from_averaged_k12(
+                np.empty((0, len(r_vals))), r_vals, prefix="control_L12", k12_curves=ctrl_k
             )
             n_control = 0
         for i, r_nm in enumerate(r_vals):
@@ -475,51 +482,21 @@ def build_ripley_l12_prism_envelope_table(
                     "control_comparison": comparison,
                     "r_nm": float(r_nm),
                     "fusing_L12_mean": float(fusing_sd["fusing_L12_mean"][i]),
-                    "fusing_L12_mean_from_k": float(fusing_from_k["fusing_L12_mean_from_k"][i]),
                     "fusing_L12_sd": float(fusing_sd["fusing_L12_sd"][i]),
                     "fusing_L12_sd_envelope_lo": float(fusing_sd["fusing_L12_sd_envelope_lo"][i]),
                     "fusing_L12_sd_envelope_hi": float(fusing_sd["fusing_L12_sd_envelope_hi"][i]),
-                    "fusing_L12_sd_from_k": float(fusing_from_k["fusing_L12_sd_from_k"][i]),
-                    "fusing_L12_sd_envelope_lo_from_k": float(
-                        fusing_from_k["fusing_L12_sd_envelope_lo_from_k"][i]
-                    ),
-                    "fusing_L12_sd_envelope_hi_from_k": float(
-                        fusing_from_k["fusing_L12_sd_envelope_hi_from_k"][i]
-                    ),
                     "fusing_L12_sem": float(fusing_sd["fusing_L12_sem"][i]),
                     "fusing_L12_sem_envelope_lo": float(fusing_sd["fusing_L12_sem_envelope_lo"][i]),
                     "fusing_L12_sem_envelope_hi": float(fusing_sd["fusing_L12_sem_envelope_hi"][i]),
-                    "fusing_L12_sem_from_k": float(fusing_from_k["fusing_L12_sem_from_k"][i]),
-                    "fusing_L12_sem_envelope_lo_from_k": float(
-                        fusing_from_k["fusing_L12_sem_envelope_lo_from_k"][i]
-                    ),
-                    "fusing_L12_sem_envelope_hi_from_k": float(
-                        fusing_from_k["fusing_L12_sem_envelope_hi_from_k"][i]
-                    ),
-                    "control_L12_mean": float(ctrl_mean[i]),
-                    "control_L12_mean_from_k": float(ctrl_from_k["control_L12_mean_from_k"][i]),
+                    "control_L12_mean": float(ctrl_sd["control_L12_mean"][i]),
                     "control_L12_sd": float(ctrl_sd["control_L12_sd"][i]),
                     "control_L12_envelope_lo": float(ctrl_lo[i]),
                     "control_L12_envelope_hi": float(ctrl_hi[i]),
                     "control_L12_sd_envelope_lo": float(ctrl_sd["control_L12_sd_envelope_lo"][i]),
                     "control_L12_sd_envelope_hi": float(ctrl_sd["control_L12_sd_envelope_hi"][i]),
-                    "control_L12_sd_from_k": float(ctrl_from_k["control_L12_sd_from_k"][i]),
-                    "control_L12_sd_envelope_lo_from_k": float(
-                        ctrl_from_k["control_L12_sd_envelope_lo_from_k"][i]
-                    ),
-                    "control_L12_sd_envelope_hi_from_k": float(
-                        ctrl_from_k["control_L12_sd_envelope_hi_from_k"][i]
-                    ),
                     "control_L12_sem": float(ctrl_sd["control_L12_sem"][i]),
                     "control_L12_sem_envelope_lo": float(ctrl_sd["control_L12_sem_envelope_lo"][i]),
                     "control_L12_sem_envelope_hi": float(ctrl_sd["control_L12_sem_envelope_hi"][i]),
-                    "control_L12_sem_from_k": float(ctrl_from_k["control_L12_sem_from_k"][i]),
-                    "control_L12_sem_envelope_lo_from_k": float(
-                        ctrl_from_k["control_L12_sem_envelope_lo_from_k"][i]
-                    ),
-                    "control_L12_sem_envelope_hi_from_k": float(
-                        ctrl_from_k["control_L12_sem_envelope_hi_from_k"][i]
-                    ),
                     "n_fusing_curves": int(len(obs_curves)),
                     "n_control_curves": n_control,
                     "n_aunp_partners": int(n_aunp_partners),
@@ -549,23 +526,15 @@ def build_ripley_l12_prism_wide_table(
         col
         for col in (
             "fusing_L12_mean",
-            "fusing_L12_mean_from_k",
             "fusing_L12_sd",
             "fusing_L12_sd_envelope_lo",
             "fusing_L12_sd_envelope_hi",
-            "fusing_L12_sd_from_k",
-            "fusing_L12_sd_envelope_lo_from_k",
-            "fusing_L12_sd_envelope_hi_from_k",
             "control_L12_mean",
-            "control_L12_mean_from_k",
             "control_L12_sd",
             "control_L12_envelope_lo",
             "control_L12_envelope_hi",
             "control_L12_sd_envelope_lo",
             "control_L12_sd_envelope_hi",
-            "control_L12_sd_from_k",
-            "control_L12_sd_envelope_lo_from_k",
-            "control_L12_sd_envelope_hi_from_k",
             "n_fusing_curves",
             "n_control_curves",
             "n_aunp_partners",
@@ -593,7 +562,7 @@ def build_ripley_g12_prism_envelope_table(
 
     Unlike L₁₂, g₁₂ is a linear function of K₁₂ (a finite difference — see
     ``pair_correlation_from_k_diff``), so averaging g curves directly is unbiased; no
-    K-space ("from_k") pooling variant is needed the way it is for L₁₂.
+    K-space detour is needed.
     """
     fusing_sd = _prism_sd_envelope_columns(obs_curves, r_vals, prefix="fusing_G12")
     rows: list[dict] = []
@@ -712,36 +681,35 @@ def _plot_ripley_control_comparison(
     output_path: Path,
     title: str,
     ylabel: str = "Ripley L₁₂(r) = (3K₁₂/4π)^(1/3) − r",
+    obs_k_curves: np.ndarray | None = None,
+    control_k_curves: np.ndarray | None = None,
 ) -> None:
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    obs_from_k = prism_sd_envelope_columns_from_averaged_k12(
-        obs_curves, r_vals, prefix="fusing_L12"
+    obs_sd = prism_sd_envelope_columns_from_averaged_k12(
+        obs_curves, r_vals, prefix="fusing_L12", k12_curves=obs_k_curves
     )
-    obs_mean = np.nanmean(obs_curves, axis=0) if len(obs_curves) else np.full(len(r_vals), np.nan)
-    ax.plot(r_vals, obs_mean, color="C3", lw=2.2, label="Fusing mean (of L)", zorder=5)
     ax.plot(
         r_vals,
-        obs_from_k["fusing_L12_mean_from_k"],
+        obs_sd["fusing_L12_mean"],
         color="C3",
-        lw=1.6,
-        ls="--",
-        label="Fusing mean (K→L)",
+        lw=2.2,
+        label="Fusing mean",
         zorder=5,
     )
     if len(obs_curves) > 1:
         ax.plot(
             r_vals,
-            obs_from_k["fusing_L12_sd_envelope_lo_from_k"],
+            obs_sd["fusing_L12_sd_envelope_lo"],
             color="C3",
             lw=0.9,
             ls=":",
             alpha=0.8,
-            label="Fusing ±SD (K→L)",
+            label="Fusing ±SD",
             zorder=4,
         )
         ax.plot(
             r_vals,
-            obs_from_k["fusing_L12_sd_envelope_hi_from_k"],
+            obs_sd["fusing_L12_sd_envelope_hi"],
             color="C3",
             lw=0.9,
             ls=":",
@@ -750,34 +718,32 @@ def _plot_ripley_control_comparison(
         )
 
     if len(control_curves):
-        lo, ctrl_mean, hi = _percentile_band(control_curves)
-        ctrl_from_k = prism_sd_envelope_columns_from_averaged_k12(
-            control_curves, r_vals, prefix="control_L12"
+        lo, _, hi = _percentile_band(control_curves)
+        ctrl_sd = prism_sd_envelope_columns_from_averaged_k12(
+            control_curves, r_vals, prefix="control_L12", k12_curves=control_k_curves
         )
         ax.fill_between(r_vals, lo, hi, color="0.75", alpha=0.55, label="Control 95% envelope", zorder=2)
-        ax.plot(r_vals, ctrl_mean, color="0.45", lw=2.0, label="Control mean (of L)", zorder=3)
         ax.plot(
             r_vals,
-            ctrl_from_k["control_L12_mean_from_k"],
+            ctrl_sd["control_L12_mean"],
             color="0.45",
-            lw=1.5,
-            ls="--",
-            label="Control mean (K→L)",
+            lw=2.0,
+            label="Control mean",
             zorder=3,
         )
         ax.plot(
             r_vals,
-            ctrl_from_k["control_L12_sd_envelope_lo_from_k"],
+            ctrl_sd["control_L12_sd_envelope_lo"],
             color="0.45",
             lw=0.9,
             ls=":",
             alpha=0.8,
-            label="Control ±SD (K→L)",
+            label="Control ±SD",
             zorder=3,
         )
         ax.plot(
             r_vals,
-            ctrl_from_k["control_L12_sd_envelope_hi_from_k"],
+            ctrl_sd["control_L12_sd_envelope_hi"],
             color="0.45",
             lw=0.9,
             ls=":",
@@ -943,6 +909,8 @@ def run_ripley_for_zone_window(
                 f"{zone_name} | window={mode_tag} | AuNPs={subset_tag}\n"
                 "Fusing vs close-vesicle fusion sites"
             ),
+            obs_k_curves=obs_k,
+            control_k_curves=close_k,
         )
         _plot_ripley_control_comparison(
             r_vals,
@@ -951,8 +919,10 @@ def run_ripley_for_zone_window(
             output_path=figures_dir / f"ripley_l12_{mode_tag}_{subset_tag}_vs_40nm_shift.png",
             title=(
                 f"{zone_name} | window={mode_tag} | AuNPs={subset_tag}\n"
-                "Fusing vs 40 nm tangential shifts (100 replicates)"
+                "Fusing vs 40 nm tangential shifts"
             ),
+            obs_k_curves=obs_k,
+            control_k_curves=shift_k,
         )
         _plot_ripley_control_comparison(
             r_vals,
@@ -961,8 +931,10 @@ def run_ripley_for_zone_window(
             output_path=figures_dir / f"ripley_l12_{mode_tag}_{subset_tag}_vs_label_permutation.png",
             title=(
                 f"{zone_name} | window={mode_tag} | AuNPs={subset_tag}\n"
-                "Fusing vs label-permutation null (100 replicates)"
+                "Fusing vs label-permutation null"
             ),
+            obs_k_curves=obs_k,
+            control_k_curves=perm_k,
         )
         _plot_g_control_comparison(
             r_g_vals,
@@ -1102,6 +1074,12 @@ def run_ripley_for_zone_window(
             "label_permutation": perm_curves,
         },
         n_aunp_partners=len(aunp_coords),
+        obs_k_curves=obs_k,
+        control_k_curves_by_comparison={
+            "close": close_k,
+            "shift_40nm": shift_k,
+            "label_permutation": perm_k,
+        },
     )
     g_prism_df = build_ripley_g12_prism_envelope_table(
         zone_name=zone_name,
@@ -1359,10 +1337,9 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
     """
     Pooled mean curves and control envelopes across all tomograms/zones.
 
-    ``*_mean`` / ``*_sd_*`` are mean ± SD/SEM of L₁₂ curves.
-    ``*_mean_from_k`` / ``*_sd_*_from_k`` / ``*_sem_*_from_k`` are mean ± SD/SEM of K₁₂,
-    then mapped back to L₁₂ (differs from L-space SD/SEM because L is nonlinear).
-    Percentile envelopes (``control_L12_envelope_*``) are unchanged — identical under K→L.
+    ``*_mean`` / ``*_sd_*`` / ``*_sem_*`` are mean ± SD/SEM of K₁₂ then mapped once through
+    ``ripley_l12``. Percentile envelopes (``control_L12_envelope_*``) remain on L of each
+    replicate curve (identical under the monotone K→L transform).
     """
     if df.empty or "tomogram_name" not in df.columns:
         return pd.DataFrame()
@@ -1380,8 +1357,7 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
             if len(obs_curves) == 0:
                 continue
 
-            fusing_sd = _prism_sd_envelope_columns(obs_curves, r_vals, prefix="fusing_L12")
-            fusing_from_k = prism_sd_envelope_columns_from_averaged_k12(
+            fusing_sd = prism_sd_envelope_columns_from_averaged_k12(
                 obs_curves, r_vals, prefix="fusing_L12"
             )
             n_tomograms = int(sub_df["tomogram_name"].nunique())
@@ -1396,20 +1372,14 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
                     sub_df, CONTROL_CURVE_TYPE[comparison]
                 )
                 if len(control_curves):
-                    ctrl_lo, ctrl_mean, ctrl_hi = _percentile_band(control_curves)
-                    ctrl_sd = _prism_sd_envelope_columns(
-                        control_curves, r_vals, prefix="control_L12"
-                    )
-                    ctrl_from_k = prism_sd_envelope_columns_from_averaged_k12(
+                    ctrl_lo, _, ctrl_hi = _percentile_band(control_curves)
+                    ctrl_sd = prism_sd_envelope_columns_from_averaged_k12(
                         control_curves, r_vals, prefix="control_L12"
                     )
                     n_control = int(len(control_curves))
                 else:
-                    ctrl_lo = ctrl_mean = ctrl_hi = np.full(len(r_vals), np.nan)
-                    ctrl_sd = _prism_sd_envelope_columns(
-                        np.empty((0, len(r_vals))), r_vals, prefix="control_L12"
-                    )
-                    ctrl_from_k = prism_sd_envelope_columns_from_averaged_k12(
+                    ctrl_lo = ctrl_hi = np.full(len(r_vals), np.nan)
+                    ctrl_sd = prism_sd_envelope_columns_from_averaged_k12(
                         np.empty((0, len(r_vals))), r_vals, prefix="control_L12"
                     )
                     n_control = 0
@@ -1422,24 +1392,12 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
                             "control_comparison": comparison,
                             "r_nm": float(r_nm),
                             "fusing_L12_mean": float(fusing_sd["fusing_L12_mean"][i]),
-                            "fusing_L12_mean_from_k": float(
-                                fusing_from_k["fusing_L12_mean_from_k"][i]
-                            ),
                             "fusing_L12_sd": float(fusing_sd["fusing_L12_sd"][i]),
                             "fusing_L12_sd_envelope_lo": float(
                                 fusing_sd["fusing_L12_sd_envelope_lo"][i]
                             ),
                             "fusing_L12_sd_envelope_hi": float(
                                 fusing_sd["fusing_L12_sd_envelope_hi"][i]
-                            ),
-                            "fusing_L12_sd_from_k": float(
-                                fusing_from_k["fusing_L12_sd_from_k"][i]
-                            ),
-                            "fusing_L12_sd_envelope_lo_from_k": float(
-                                fusing_from_k["fusing_L12_sd_envelope_lo_from_k"][i]
-                            ),
-                            "fusing_L12_sd_envelope_hi_from_k": float(
-                                fusing_from_k["fusing_L12_sd_envelope_hi_from_k"][i]
                             ),
                             "fusing_L12_sem": float(fusing_sd["fusing_L12_sem"][i]),
                             "fusing_L12_sem_envelope_lo": float(
@@ -1448,19 +1406,7 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
                             "fusing_L12_sem_envelope_hi": float(
                                 fusing_sd["fusing_L12_sem_envelope_hi"][i]
                             ),
-                            "fusing_L12_sem_from_k": float(
-                                fusing_from_k["fusing_L12_sem_from_k"][i]
-                            ),
-                            "fusing_L12_sem_envelope_lo_from_k": float(
-                                fusing_from_k["fusing_L12_sem_envelope_lo_from_k"][i]
-                            ),
-                            "fusing_L12_sem_envelope_hi_from_k": float(
-                                fusing_from_k["fusing_L12_sem_envelope_hi_from_k"][i]
-                            ),
-                            "control_L12_mean": float(ctrl_mean[i]),
-                            "control_L12_mean_from_k": float(
-                                ctrl_from_k["control_L12_mean_from_k"][i]
-                            ),
+                            "control_L12_mean": float(ctrl_sd["control_L12_mean"][i]),
                             "control_L12_sd": float(ctrl_sd["control_L12_sd"][i]),
                             "control_L12_envelope_lo": float(ctrl_lo[i]),
                             "control_L12_envelope_hi": float(ctrl_hi[i]),
@@ -1470,30 +1416,12 @@ def build_pooled_ripley_l12_prism_envelope_table(df: pd.DataFrame) -> pd.DataFra
                             "control_L12_sd_envelope_hi": float(
                                 ctrl_sd["control_L12_sd_envelope_hi"][i]
                             ),
-                            "control_L12_sd_from_k": float(
-                                ctrl_from_k["control_L12_sd_from_k"][i]
-                            ),
-                            "control_L12_sd_envelope_lo_from_k": float(
-                                ctrl_from_k["control_L12_sd_envelope_lo_from_k"][i]
-                            ),
-                            "control_L12_sd_envelope_hi_from_k": float(
-                                ctrl_from_k["control_L12_sd_envelope_hi_from_k"][i]
-                            ),
                             "control_L12_sem": float(ctrl_sd["control_L12_sem"][i]),
                             "control_L12_sem_envelope_lo": float(
                                 ctrl_sd["control_L12_sem_envelope_lo"][i]
                             ),
                             "control_L12_sem_envelope_hi": float(
                                 ctrl_sd["control_L12_sem_envelope_hi"][i]
-                            ),
-                            "control_L12_sem_from_k": float(
-                                ctrl_from_k["control_L12_sem_from_k"][i]
-                            ),
-                            "control_L12_sem_envelope_lo_from_k": float(
-                                ctrl_from_k["control_L12_sem_envelope_lo_from_k"][i]
-                            ),
-                            "control_L12_sem_envelope_hi_from_k": float(
-                                ctrl_from_k["control_L12_sem_envelope_hi_from_k"][i]
                             ),
                             "n_fusing_curves": int(len(obs_curves)),
                             "n_control_curves": n_control,
@@ -1935,6 +1863,8 @@ def run_fusion_point_aunp_analyses_for_zone(
     r_step_nm: float = DEFAULT_RIPLEY_R_STEP_NM,
     monomer_star_pattern: Optional[str] = None,
     dimer_star_pattern: Optional[str] = None,
+    single_pick_star_pattern: Optional[str] = None,
+    use_single_pick_pool: bool = False,
 ) -> dict[str, Path] | None:
     tomogram_path = Path(tomogram_path)
     alignment_dir = require_alignment_dir(alignment_dir)
@@ -1979,6 +1909,8 @@ def run_fusion_point_aunp_analyses_for_zone(
             cleft_index,
             monomer_star_pattern=monomer_star_pattern,
             dimer_star_pattern=dimer_star_pattern,
+            single_pick_star_pattern=single_pick_star_pattern,
+            use_single_pick_pool=use_single_pick_pool,
         )
     except (FileNotFoundError, ValueError) as exc:
         print(
@@ -1989,7 +1921,12 @@ def run_fusion_point_aunp_analyses_for_zone(
     aunp_coords_all = loaded.coords
     aunp_meta = loaded.meta
     subsets_to_run = available_aunp_subsets(loaded.kinds_loaded)
-    if len(loaded.kinds_loaded) == 1:
+    if use_single_pick_pool or loaded.kinds_loaded == ("all",):
+        print(
+            f"  Single AuNP pick STAR pool for {zone_name}; "
+            f"running {', '.join(subsets_to_run)} analyses."
+        )
+    elif len(loaded.kinds_loaded) == 1:
         print(
             f"  Only {loaded.kinds_loaded[0]} STAR found for {zone_name}; "
             f"running {', '.join(subsets_to_run)} analyses."
@@ -2060,37 +1997,82 @@ def run_fusion_point_aunp_analyses_for_zone(
         window_grid_points[mode] = grid_points
 
     if write_figures and az_segmentation is not None:
-        monomer_coords_all, _ = subset_aunps(aunp_meta, subset="monomer")
-        dimer_coords_all, _ = subset_aunps(aunp_meta, subset="dimer")
         for mode, window in ripley_windows.items():
             if window is None:
                 continue
             try:
-                monomer_inside = _points_inside_hull(monomer_coords_all, window.hull)
-                dimer_inside = _points_inside_hull(dimer_coords_all, window.hull)
-                dropped_coords = np.vstack(
-                    [monomer_coords_all[~monomer_inside], dimer_coords_all[~dimer_inside]]
+                point_groups = [
+                    {"coords": fusing_xyz, "label": "fusing sites", "color": "tab:red", "marker": "*", "size": 60},
+                    {"coords": close_xyz, "label": "close sites", "color": "tab:orange", "marker": "s", "size": 22},
+                ]
+                dropped_parts: list[np.ndarray] = []
+                title_bits: list[str] = [
+                    f"{len(fusing_xyz)} fusing, {len(close_xyz)} close sites"
+                ]
+                if "all" in loaded.kinds_loaded:
+                    all_coords, _ = subset_aunps(aunp_meta, subset="all")
+                    all_inside = _points_inside_hull(all_coords, window.hull)
+                    dropped_parts.append(all_coords[~all_inside])
+                    point_groups.append(
+                        {
+                            "coords": all_coords[all_inside],
+                            "label": "AuNPs",
+                            "color": "tab:purple",
+                            "marker": "o",
+                            "size": 18,
+                        }
+                    )
+                    title_bits.append(f"{int(all_inside.sum())} AuNPs")
+                else:
+                    monomer_coords_all, _ = subset_aunps(aunp_meta, subset="monomer")
+                    dimer_coords_all, _ = subset_aunps(aunp_meta, subset="dimer")
+                    monomer_inside = _points_inside_hull(monomer_coords_all, window.hull)
+                    dimer_inside = _points_inside_hull(dimer_coords_all, window.hull)
+                    dropped_parts.extend(
+                        [
+                            monomer_coords_all[~monomer_inside],
+                            dimer_coords_all[~dimer_inside],
+                        ]
+                    )
+                    point_groups.extend(
+                        [
+                            {
+                                "coords": monomer_coords_all[monomer_inside],
+                                "label": "monomer AuNPs",
+                                "color": "tab:purple",
+                                "marker": "o",
+                                "size": 18,
+                            },
+                            {
+                                "coords": dimer_coords_all[dimer_inside],
+                                "label": "dimer AuNPs",
+                                "color": "tab:green",
+                                "marker": "^",
+                                "size": 28,
+                            },
+                        ]
+                    )
+                    title_bits.append(
+                        f"{int(monomer_inside.sum())} monomer + "
+                        f"{int(dimer_inside.sum())} dimer AuNPs"
+                    )
+                dropped_coords = (
+                    np.vstack(dropped_parts)
+                    if any(len(p) for p in dropped_parts)
+                    else np.zeros((0, 3))
                 )
                 plot_ripley_window_geometry_diagnostic(
                     tomogram_path,
                     alignment_dir,
                     zone_name,
-                    point_groups=[
-                        {"coords": fusing_xyz, "label": "fusing sites", "color": "tab:red", "marker": "*", "size": 60},
-                        {"coords": close_xyz, "label": "close sites", "color": "tab:orange", "marker": "s", "size": 22},
-                        {"coords": monomer_coords_all[monomer_inside], "label": "monomer AuNPs", "color": "tab:purple", "marker": "o", "size": 18},
-                        {"coords": dimer_coords_all[dimer_inside], "label": "dimer AuNPs", "color": "tab:green", "marker": "^", "size": 28},
-                    ],
+                    point_groups=point_groups,
                     az_segmentation=az_segmentation,
                     window=window,
                     grid_points=window_grid_points[mode],
                     grid_spacing_nm=FUSION_POINT_EDGE_GRID_SPACING_NM,
                     output_path=figures_dir / "geometry_diagnostic.png",
                     dropped_coords=dropped_coords,
-                    title_lines=[
-                        f"{len(fusing_xyz)} fusing, {len(close_xyz)} close sites, "
-                        f"{int(monomer_inside.sum())} monomer + {int(dimer_inside.sum())} dimer AuNPs"
-                    ],
+                    title_lines=[", ".join(title_bits)],
                     print_prefix="Fusion-point geometry diagnostic",
                 )
             except Exception as diag_exc:
@@ -2396,6 +2378,7 @@ def run_fusion_point_aunp_analyses_for_zone(
 
     n_monomer = int((aunp_meta["aunp_kind"] == "monomer").sum())
     n_dimer = int((aunp_meta["aunp_kind"] == "dimer").sum())
+    n_all = int((aunp_meta["aunp_kind"] == "all").sum())
     meta = {
         "tomogram_name": tomogram_name,
         "alignment_dir": alignment_dir,
@@ -2405,7 +2388,9 @@ def run_fusion_point_aunp_analyses_for_zone(
         "n_close_vesicles": len(close_rows),
         "n_aunp_monomer": n_monomer,
         "n_aunp_dimer": n_dimer,
+        "n_aunp_all": n_all,
         "n_aunp_monomer_dimer": len(aunp_coords_all),
+        "use_single_pick_pool": bool(use_single_pick_pool),
         "aunp_kinds_loaded": list(loaded.kinds_loaded),
         "aunp_subsets_analyzed": list(subsets_to_run),
         "ripley_window_modes": list(RIPLEY_WINDOW_MODES),
@@ -2440,9 +2425,13 @@ def run_fusion_point_aunp_analyses_for_zone(
     with open(out_dir / "run_metadata.json", "w") as f:
         json.dump(meta, f, indent=2)
 
+    if n_all:
+        aunp_count_msg = f"{n_all} AuNPs (single pick pool)"
+    else:
+        aunp_count_msg = f"{n_monomer} monomer + {n_dimer} dimer AuNPs"
     print(
         f"  Fusion-point/AuNP 3D analyses ({zone_name}): "
-        f"{len(fusing_rows)} fusing, {n_monomer} monomer + {n_dimer} dimer AuNPs -> {out_dir}"
+        f"{len(fusing_rows)} fusing, {aunp_count_msg} -> {out_dir}"
     )
     return {
         "distance_paths": distance_paths,
@@ -2462,11 +2451,13 @@ def build_fusion_null_query_point_dataframes_for_zonograms(
     seed: int = DEFAULT_ANALYSIS_SEED,
     monomer_star_pattern: Optional[str] = None,
     dimer_star_pattern: Optional[str] = None,
+    single_pick_star_pattern: Optional[str] = None,
+    use_single_pick_pool: bool = False,
 ) -> dict[str, pd.DataFrame]:
     """
     Long-form 40 nm shift and label-permutation query sites for zonogram overlays.
 
-    Uses the same 3D geometry, monomer+dimer AuNP pool, replicate count, and seed as
+    Uses the same 3D geometry, AuNP pool, replicate count, and seed as
   ``run_fusion_point_aunp_analyses_for_zone``.
     """
     tomogram_path = Path(tomogram_path)
@@ -2504,6 +2495,8 @@ def build_fusion_null_query_point_dataframes_for_zonograms(
                 az_idx,
                 monomer_star_pattern=monomer_star_pattern,
                 dimer_star_pattern=dimer_star_pattern,
+                single_pick_star_pattern=single_pick_star_pattern,
+                use_single_pick_pool=use_single_pick_pool,
             )
         except (FileNotFoundError, ValueError) as exc:
             print(
@@ -2588,6 +2581,8 @@ def run_fusion_point_aunp_analyses_for_tomogram(
     write_figures: bool = True,
     monomer_star_pattern: Optional[str] = None,
     dimer_star_pattern: Optional[str] = None,
+    single_pick_star_pattern: Optional[str] = None,
+    use_single_pick_pool: bool = False,
 ) -> tuple[list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame], list[pd.DataFrame]]:
     """Returns ``(ripley_l12_frames, l12_prism_frames, g12_frames, g12_prism_frames, bidirectional_frames)``."""
     from .cleft import load_cleft_mapping
@@ -2624,6 +2619,8 @@ def run_fusion_point_aunp_analyses_for_tomogram(
             write_figures=write_figures,
             monomer_star_pattern=monomer_star_pattern,
             dimer_star_pattern=dimer_star_pattern,
+            single_pick_star_pattern=single_pick_star_pattern,
+            use_single_pick_pool=use_single_pick_pool,
         )
         if result is None:
             continue

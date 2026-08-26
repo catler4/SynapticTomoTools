@@ -231,25 +231,25 @@ def _pooled_l_family_columns(
     prefix: str,
     l_col: str,
     k_col: str,
-) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray], dict[str, np.ndarray]]:
-    """Pooled K-scale and L-scale envelope columns for one L-family curve (a row of
-    ``L_CURVE_FAMILIES``). Returns ``(r_vals, n_valid_per_r, from_k, from_l)``; ``from_k``/
-    ``from_l`` are empty dicts if ``l_col`` isn't present in ``sub`` (e.g. older per-zone
-    output written before that family existed)."""
+) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
+    """Pooled K→L envelope columns for one L-family curve (a row of ``L_CURVE_FAMILIES``).
+
+    Returns ``(r_vals, n_valid_per_r, from_k)``; ``from_k`` is empty if ``l_col`` isn't
+    present in ``sub`` (e.g. older per-zone output written before that family existed).
+    """
     r_vals, l_curves = _extract_zone_curves_matrix(sub, value_col=l_col)
     if len(l_curves) == 0:
-        return r_vals, np.array([]), {}, {}
+        return r_vals, np.array([]), {}
     k_curves = None
     if k_col in sub.columns:
         _, k_curves_candidate = _extract_zone_curves_matrix(sub, value_col=k_col)
         if len(k_curves_candidate) == len(l_curves):
             k_curves = k_curves_candidate
-    from_l = _prism_sd_envelope_columns(l_curves, r_vals, prefix=prefix)
     from_k = prism_sd_envelope_columns_from_averaged_k12(
         l_curves, r_vals, prefix=prefix, k12_curves=k_curves
     )
     n_valid_per_r = np.sum(~np.isnan(l_curves), axis=0)
-    return r_vals, n_valid_per_r, from_k, from_l
+    return r_vals, n_valid_per_r, from_k
 
 
 def build_pooled_aunp_vs_az_center_prism_table(df: pd.DataFrame) -> pd.DataFrame:
@@ -259,14 +259,11 @@ def build_pooled_aunp_vs_az_center_prism_table(df: pd.DataFrame) -> pd.DataFrame
     (``center_L21_*``, AuNPs-as-foci), and their intensity-weighted combination
     (``center_L_combined_*``, see ``cross_k_bivariate_symmetric_3d_isotropic``).
 
-    For each family, averaging is done on the K scale first, then the mean (and mean ± SD/
-    SEM) is mapped through the H = (3K/4π)^(1/3) - r transform (``*_mean``/``*_sd``/``*_sem``;
-    uses the family's stored K column when present) — correct because H is a nonlinear
-    function of K, so pooling must happen on the additive K scale, not after the transform.
-    The mean ± SD/SEM computed directly on the per-curve H values is also reported
-    (``*_mean_from_l`` etc.) for reference. A family missing from ``df`` (e.g. pooling older
-    per-zone output written before it existed) is simply omitted from the row rather than
-    filled with NaN placeholders.
+    Averaging is done on the K scale first, then the mean (and mean ± SD/SEM) is mapped
+    through the H = (3K/4π)^(1/3) - r transform into the primary ``*_mean``/``*_sd``/``*_sem``
+    columns (uses the family's stored K column when present). A family missing from ``df``
+    (e.g. pooling older per-zone output written before it existed) is simply omitted from
+    the row rather than filled with NaN placeholders.
     """
     if df.empty:
         return pd.DataFrame()
@@ -280,15 +277,15 @@ def build_pooled_aunp_vs_az_center_prism_table(df: pd.DataFrame) -> pd.DataFrame
     for set_name, sub in df.groupby("set_name", sort=False):
         anchor_r_vals: np.ndarray | None = None
         anchor_n_valid: np.ndarray | None = None
-        family_envelopes: dict[str, tuple[dict[str, np.ndarray], dict[str, np.ndarray]]] = {}
+        family_envelopes: dict[str, dict[str, np.ndarray]] = {}
 
         for prefix, l_col, k_col in L_CURVE_FAMILIES:
-            r_vals, n_valid_per_r, from_k, from_l = _pooled_l_family_columns(
+            r_vals, n_valid_per_r, from_k = _pooled_l_family_columns(
                 sub, prefix=prefix, l_col=l_col, k_col=k_col
             )
             if not from_k:
                 continue
-            family_envelopes[prefix] = (from_k, from_l)
+            family_envelopes[prefix] = from_k
             if anchor_r_vals is None:
                 anchor_r_vals = r_vals
                 anchor_n_valid = n_valid_per_r
@@ -310,23 +307,16 @@ def build_pooled_aunp_vs_az_center_prism_table(df: pd.DataFrame) -> pd.DataFrame
                 "n_tomograms": n_tomograms,
                 "n_clefts": n_zones,
             }
-            for prefix, (from_k, from_l) in family_envelopes.items():
+            for prefix, from_k in family_envelopes.items():
                 row.update(
                     {
-                        f"{prefix}_mean": float(from_k[f"{prefix}_mean_from_k"][i]),
-                        f"{prefix}_sd": float(from_k[f"{prefix}_sd_from_k"][i]),
-                        f"{prefix}_sd_envelope_lo": float(from_k[f"{prefix}_sd_envelope_lo_from_k"][i]),
-                        f"{prefix}_sd_envelope_hi": float(from_k[f"{prefix}_sd_envelope_hi_from_k"][i]),
-                        f"{prefix}_sem": float(from_k[f"{prefix}_sem_from_k"][i]),
-                        f"{prefix}_sem_envelope_lo": float(from_k[f"{prefix}_sem_envelope_lo_from_k"][i]),
-                        f"{prefix}_sem_envelope_hi": float(from_k[f"{prefix}_sem_envelope_hi_from_k"][i]),
-                        f"{prefix}_mean_from_l": float(from_l[f"{prefix}_mean"][i]),
-                        f"{prefix}_sd_from_l": float(from_l[f"{prefix}_sd"][i]),
-                        f"{prefix}_sd_envelope_lo_from_l": float(from_l[f"{prefix}_sd_envelope_lo"][i]),
-                        f"{prefix}_sd_envelope_hi_from_l": float(from_l[f"{prefix}_sd_envelope_hi"][i]),
-                        f"{prefix}_sem_from_l": float(from_l[f"{prefix}_sem"][i]),
-                        f"{prefix}_sem_envelope_lo_from_l": float(from_l[f"{prefix}_sem_envelope_lo"][i]),
-                        f"{prefix}_sem_envelope_hi_from_l": float(from_l[f"{prefix}_sem_envelope_hi"][i]),
+                        f"{prefix}_mean": float(from_k[f"{prefix}_mean"][i]),
+                        f"{prefix}_sd": float(from_k[f"{prefix}_sd"][i]),
+                        f"{prefix}_sd_envelope_lo": float(from_k[f"{prefix}_sd_envelope_lo"][i]),
+                        f"{prefix}_sd_envelope_hi": float(from_k[f"{prefix}_sd_envelope_hi"][i]),
+                        f"{prefix}_sem": float(from_k[f"{prefix}_sem"][i]),
+                        f"{prefix}_sem_envelope_lo": float(from_k[f"{prefix}_sem_envelope_lo"][i]),
+                        f"{prefix}_sem_envelope_hi": float(from_k[f"{prefix}_sem_envelope_hi"][i]),
                     }
                 )
             rows.append(row)
@@ -957,30 +947,8 @@ def _plot_pooled_l_family_figure(
     label = L_FAMILY_DISPLAY_LABEL.get(prefix, prefix)
 
     fig, ax = plt.subplots(figsize=(6.5, 4.5))
-    ax.plot(r_vals, mean, color="C0", lw=2, label=f"Mean {label} (K→L)")
-    from_l_col = f"{prefix}_mean_from_l"
-    if from_l_col in grp.columns:
-        ax.plot(
-            r_vals,
-            grp[from_l_col].to_numpy(dtype=float),
-            color="C0",
-            lw=1.5,
-            ls="--",
-            label=f"Mean {label} (of L)",
-        )
-    ax.fill_between(r_vals, lo, hi, color="C0", alpha=0.25, label="±SEM (K→L)")
-    from_l_lo_col = f"{prefix}_sem_envelope_lo_from_l"
-    from_l_hi_col = f"{prefix}_sem_envelope_hi_from_l"
-    if from_l_lo_col in grp.columns:
-        ax.fill_between(
-            r_vals,
-            grp[from_l_lo_col].to_numpy(dtype=float),
-            grp[from_l_hi_col].to_numpy(dtype=float),
-            color="C0",
-            alpha=0.12,
-            hatch="///",
-            label="±SEM (of L)",
-        )
+    ax.plot(r_vals, mean, color="C0", lw=2, label=f"Mean {label}")
+    ax.fill_between(r_vals, lo, hi, color="C0", alpha=0.25, label="±SEM")
     ax.axhline(0.0, color="0.5", ls="--", lw=0.8)
     ax.set_xlabel("r (nm)")
     ax.set_ylabel(f"Ripley {label}(r)")

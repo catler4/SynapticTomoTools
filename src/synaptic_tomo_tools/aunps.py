@@ -723,23 +723,29 @@ def _append_tomogram_results_csv(
     tomogram_name: str,
     alignment_dir: str,
     set_name: str,
+    aunp_pick_label: Optional[str] = None,
 ) -> None:
-    """Append/replace rows for one tomogram+alignment in a combined results CSV."""
+    """Append/replace rows for one tomogram+alignment (and optional pick label) in a combined results CSV."""
     if df.empty:
         return
     d = df.copy()
     d["set_name"] = set_name
     d["alignment_dir"] = alignment_dir
+    label = (aunp_pick_label or "").strip()
+    d["aunp_pick_label"] = label
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         if csv_path.exists():
             df_existing = pd.read_csv(csv_path)
             if "alignment_dir" not in df_existing.columns:
                 df_existing["alignment_dir"] = ""
+            if "aunp_pick_label" not in df_existing.columns:
+                df_existing["aunp_pick_label"] = ""
             df_existing = df_existing[
                 ~(
                     (df_existing["tomogram_name"] == tomogram_name)
                     & (df_existing["alignment_dir"] == alignment_dir)
+                    & (df_existing["aunp_pick_label"].fillna("").astype(str) == label)
                 )
             ]
             pd.concat([df_existing, d], ignore_index=True).to_csv(csv_path, index=False)
@@ -748,6 +754,14 @@ def _append_tomogram_results_csv(
     except Exception as exc:
         print(f"Error updating {csv_path.name}: {exc}")
         d.to_csv(csv_path, index=False)
+
+
+def _tagged_aunp_output_name(stem: str, aunp_pick_label: Optional[str], suffix: str = ".csv") -> str:
+    """Local STT_results filename; appends ``_<label>`` when running a labeled pick set."""
+    label = (aunp_pick_label or "").strip()
+    if label:
+        return f"{stem}_{label}{suffix}"
+    return f"{stem}{suffix}"
 
 
 def build_packing_density_at_fusion_points_dataframe(
@@ -1046,12 +1060,14 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
                   min_cluster_size=4, fusion_point_threshold=20.0,
                   fusing_perimeter_threshold=1.0,
                   aunp_pick_star_pattern=None,
+                  use_monomer_dimer_aunp_labeling=False,
                   run_fusion_point_aunp_analyses=False,
                   run_aunp_vs_az_center_ripley=False,
                   run_aunp_monomer_dimer_ripley=False,
                   monomer_star_pattern=None,
                   dimer_star_pattern=None,
-                  monomer_dimer_ripley_n_perm=None):
+                  monomer_dimer_ripley_n_perm=None,
+                  aunp_pick_label=None):
     """
     Performs analysis of gold nanoparticles (AuNPs) in the tomogram.
 
@@ -1059,7 +1075,11 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
         tomogram_path (str or Path): Path to the tomogram file.
         cleft_indices (list of int or None): Which synaptic cleft .star files to read. If None, read all.
         aunp_pick_star_pattern (str or None): Per-AZ pick STAR filename pattern with ``*`` for the active
-            zone index (default: ``aunp_tm_BP_active_zone_*_manual_refined.star``).
+            zone index (default: ``aunp_tm_BP_active_zone_*_manual_refined.star``). Ignored when
+            ``use_monomer_dimer_aunp_labeling`` is True (unless this is a labeled sub-run).
+        use_monomer_dimer_aunp_labeling (bool): When True, main AuNP analysis runs twice using the
+            monomer and dimer STAR patterns (tagged outputs). Fusion-point analyses use those
+            patterns; when False, fusion-point analyses use the general pick STAR as a single pool.
         set_name (str, optional): Name of the experimental set.
         vesicle_distance_threshold (float): Distance threshold for "close" vesicles (nm). Default: 20.0.
         dbscan_eps (float): DBSCAN eps parameter for clustering (nm). Default: 16.0.
@@ -1073,8 +1093,8 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
         min_cluster_size (int): Minimum cluster size to keep after DBSCAN (smaller clusters -> noise). Default: 4.
         fusion_point_threshold (float): Radius (nm) for AZ points contributing to fusion point. Default: 20.0.
         fusing_perimeter_threshold (float): Max perimeter-to-AZ distance (nm) for fusing vesicles. Default: 1.0.
-        run_fusion_point_aunp_analyses (bool): Run 3D fusion-point vs monomer/dimer AuNP distance and
-            Ripley L₁₂ analyses when monomer/dimer STAR files are available. Default: False.
+        run_fusion_point_aunp_analyses (bool): Run 3D fusion-point vs AuNP distance and
+            Ripley L₁₂ analyses. Default: False.
         run_aunp_vs_az_center_ripley (bool): Run 3D Ripley L₁₂ of AuNP positions relative to the
             per-zone synaptic cleft center. Default: False.
         run_aunp_monomer_dimer_ripley (bool): Run 3D bivariate Ripley L₁₂ of monomer vs dimer AuNP
@@ -1085,6 +1105,8 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
             zone index (default: ``aunp_tm_BP_active_zone_*_manual_refined_dimer.star``).
         monomer_dimer_ripley_n_perm (int or None): Null replicate count for monomer vs dimer
             Ripley L₁₂ label permutation **and** greedy segregation (default: 1000).
+        aunp_pick_label (str or None): Internal tag for labeled sub-runs (``monomer`` / ``dimer``);
+            suffixes local outputs and tags pooled CSV rows.
 
     Note: the fusion-point and monomer-vs-dimer Ripley analyses always restrict their window
     to the region of the synaptic-cleft hull that also sits "between" the pre- and
@@ -1094,193 +1116,239 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
     """
     alignment_dir = require_alignment_dir(alignment_dir)
     tomogram_name = Path(tomogram_path).name
-    print(f"Analyzing AuNPs in {tomogram_name}")
+    is_labeled_subrun = bool(aunp_pick_label)
+    if not is_labeled_subrun:
+        print(f"Analyzing AuNPs in {tomogram_name}")
 
-    # Independent of the "main" combined-pick-star analysis below (each loads its own
-    # monomer/dimer AuNPs directly) -- run first so a tomogram/set with only split
-    # monomer/dimer STAR files (no combined "*_manual_refined.star") still gets these,
-    # instead of being silently skipped by that analysis's early-return-if-missing.
-    if run_fusion_point_aunp_analyses:
-        print("Running 3D fusion-point vs AuNP distance and Ripley L12 analyses...")
-        try:
-            from .cleft import load_cleft_mapping
-            from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
-                plot_pooled_fusion_point_aunp_ripley_bidirectional_visualizations,
-                plot_pooled_fusion_point_aunp_ripley_g12_visualizations,
-                plot_pooled_fusion_point_aunp_ripley_l12_visualizations,
-                run_fusion_point_aunp_analyses_for_tomogram,
-            )
+    # Optional analyses run once on the outer call (not on monomer/dimer sub-runs).
+    if not is_labeled_subrun:
+        # Independent of the "main" combined-pick-star analysis below (each loads its own
+        # AuNPs directly) -- run first so a tomogram/set with only split monomer/dimer STAR
+        # files (no combined "*_manual_refined.star") still gets these, instead of being
+        # silently skipped by that analysis's early-return-if-missing.
+        if run_fusion_point_aunp_analyses:
+            print("Running 3D fusion-point vs AuNP distance and Ripley L12 analyses...")
+            try:
+                from .cleft import load_cleft_mapping
+                from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
+                    plot_pooled_fusion_point_aunp_ripley_bidirectional_visualizations,
+                    plot_pooled_fusion_point_aunp_ripley_g12_visualizations,
+                    plot_pooled_fusion_point_aunp_ripley_l12_visualizations,
+                    run_fusion_point_aunp_analyses_for_tomogram,
+                )
 
-            az_indices_for_analysis = cleft_indices
-            if az_indices_for_analysis is None:
-                az_mapping_for_analysis = load_cleft_mapping(tomogram_path, alignment_dir) or {}
-                az_indices_for_analysis = sorted(int(k) for k in az_mapping_for_analysis)
-            (
-                ripley_frames,
-                prism_frames,
-                g_ripley_frames,
-                g_prism_frames,
-                bidir_frames,
-            ) = run_fusion_point_aunp_analyses_for_tomogram(
-                Path(tomogram_path),
-                alignment_dir,
-                cleft_indices=az_indices_for_analysis,
-        vesicle_distance_threshold=vesicle_distance_threshold,
-                fusion_point_threshold=fusion_point_threshold,
-                write_figures=True,
-                monomer_star_pattern=monomer_star_pattern,
-                dimer_star_pattern=dimer_star_pattern,
-            )
-            if ripley_frames:
-                df_ripley = pd.concat(ripley_frames, ignore_index=True)
-                if "tomogram_name" not in df_ripley.columns:
-                    df_ripley.insert(0, "tomogram_name", tomogram_name)
-                _append_tomogram_results_csv(
-                    df_ripley,
-                    Path("results/aunps/fusion_point_aunp_ripley_l12_curves.csv"),
-                    tomogram_name=tomogram_name,
-                    alignment_dir=alignment_dir,
-                    set_name=set_name,
-                )
-            if prism_frames:
-                df_prism = pd.concat(prism_frames, ignore_index=True)
-                _append_tomogram_results_csv(
-                    df_prism,
-                    Path("results/aunps/fusion_point_aunp_ripley_l12_prism_envelopes.csv"),
-                    tomogram_name=tomogram_name,
-                    alignment_dir=alignment_dir,
-                    set_name=set_name,
-                )
-            if g_ripley_frames:
-                df_g_ripley = pd.concat(g_ripley_frames, ignore_index=True)
-                if "tomogram_name" not in df_g_ripley.columns:
-                    df_g_ripley.insert(0, "tomogram_name", tomogram_name)
-                _append_tomogram_results_csv(
-                    df_g_ripley,
-                    Path("results/aunps/fusion_point_aunp_ripley_g12_curves.csv"),
-                    tomogram_name=tomogram_name,
-                    alignment_dir=alignment_dir,
-                    set_name=set_name,
-                )
-            if g_prism_frames:
-                df_g_prism = pd.concat(g_prism_frames, ignore_index=True)
-                _append_tomogram_results_csv(
-                    df_g_prism,
-                    Path("results/aunps/fusion_point_aunp_ripley_g12_prism_envelopes.csv"),
-                    tomogram_name=tomogram_name,
-                    alignment_dir=alignment_dir,
-                    set_name=set_name,
-                )
-            if bidir_frames:
-                df_bidir = pd.concat(bidir_frames, ignore_index=True)
-                if "tomogram_name" not in df_bidir.columns:
-                    df_bidir.insert(0, "tomogram_name", tomogram_name)
-                _append_tomogram_results_csv(
-                    df_bidir,
-                    Path("results/aunps/fusion_point_aunp_ripley_bidirectional_curves.csv"),
-                    tomogram_name=tomogram_name,
-                    alignment_dir=alignment_dir,
-                    set_name=set_name,
-                )
-            if ripley_frames or prism_frames:
-                plot_pooled_fusion_point_aunp_ripley_l12_visualizations()
-            if g_ripley_frames or g_prism_frames:
-                plot_pooled_fusion_point_aunp_ripley_g12_visualizations()
-            if bidir_frames:
-                plot_pooled_fusion_point_aunp_ripley_bidirectional_visualizations()
-        except Exception as fusion_3d_exc:
-            print(f"Error in 3D fusion-point/AuNP Ripley analyses: {fusion_3d_exc}")
-            import traceback
-            traceback.print_exc()
-    else:
-        print(
-            "Skipping 3D fusion-point vs monomer/dimer AuNP analyses "
-            "(disabled by run_fusion_point_aunp_analyses=False)."
-        )
-
-    if run_aunp_monomer_dimer_ripley:
-        print("Running monomer vs dimer AuNP Ripley L₁₂ analyses...")
-        try:
-            from .cleft import load_cleft_mapping
-            from .aunp_monomer_dimer_ripley import (
-                POOLED_CURVES_CSV as MONOMER_DIMER_POOLED_CURVES_CSV,
-                POOLED_INDIVIDUAL_CURVES_CSV as MONOMER_DIMER_POOLED_INDIVIDUAL_CURVES_CSV,
-                POOLED_MAD_SUMMARY_CSV as MONOMER_DIMER_POOLED_MAD_SUMMARY_CSV,
-                plot_pooled_monomer_dimer_ripley_visualizations,
-                run_monomer_dimer_ripley_for_tomogram,
-            )
-
-            az_indices_for_md = cleft_indices
-            if az_indices_for_md is None:
-                az_mapping_for_md = load_cleft_mapping(
-                    tomogram_path, alignment_dir
-                ) or {}
-                az_indices_for_md = sorted(int(k) for k in az_mapping_for_md)
-
-            (
-                md_ripley_frames,
-                md_prism_frames,
-                md_individual_frames,
-                md_mad_summary_frames,
-            ) = run_monomer_dimer_ripley_for_tomogram(
+                az_indices_for_analysis = cleft_indices
+                if az_indices_for_analysis is None:
+                    az_mapping_for_analysis = load_cleft_mapping(tomogram_path, alignment_dir) or {}
+                    az_indices_for_analysis = sorted(int(k) for k in az_mapping_for_analysis)
+                use_single_pick_pool = not use_monomer_dimer_aunp_labeling
+                (
+                    ripley_frames,
+                    prism_frames,
+                    g_ripley_frames,
+                    g_prism_frames,
+                    bidir_frames,
+                ) = run_fusion_point_aunp_analyses_for_tomogram(
                     Path(tomogram_path),
                     alignment_dir,
-                    cleft_indices=az_indices_for_md,
+                    cleft_indices=az_indices_for_analysis,
+                    vesicle_distance_threshold=vesicle_distance_threshold,
+                    fusion_point_threshold=fusion_point_threshold,
+                    write_figures=True,
+                    monomer_star_pattern=monomer_star_pattern if not use_single_pick_pool else None,
+                    dimer_star_pattern=dimer_star_pattern if not use_single_pick_pool else None,
+                    single_pick_star_pattern=aunp_pick_star_pattern if use_single_pick_pool else None,
+                    use_single_pick_pool=use_single_pick_pool,
+                )
+                if ripley_frames:
+                    df_ripley = pd.concat(ripley_frames, ignore_index=True)
+                    if "tomogram_name" not in df_ripley.columns:
+                        df_ripley.insert(0, "tomogram_name", tomogram_name)
+                    _append_tomogram_results_csv(
+                        df_ripley,
+                        Path("results/aunps/fusion_point_aunp_ripley_l12_curves.csv"),
+                        tomogram_name=tomogram_name,
+                        alignment_dir=alignment_dir,
+                        set_name=set_name,
+                    )
+                if prism_frames:
+                    df_prism = pd.concat(prism_frames, ignore_index=True)
+                    _append_tomogram_results_csv(
+                        df_prism,
+                        Path("results/aunps/fusion_point_aunp_ripley_l12_prism_envelopes.csv"),
+                        tomogram_name=tomogram_name,
+                        alignment_dir=alignment_dir,
+                        set_name=set_name,
+                    )
+                if g_ripley_frames:
+                    df_g_ripley = pd.concat(g_ripley_frames, ignore_index=True)
+                    if "tomogram_name" not in df_g_ripley.columns:
+                        df_g_ripley.insert(0, "tomogram_name", tomogram_name)
+                    _append_tomogram_results_csv(
+                        df_g_ripley,
+                        Path("results/aunps/fusion_point_aunp_ripley_g12_curves.csv"),
+                        tomogram_name=tomogram_name,
+                        alignment_dir=alignment_dir,
+                        set_name=set_name,
+                    )
+                if g_prism_frames:
+                    df_g_prism = pd.concat(g_prism_frames, ignore_index=True)
+                    _append_tomogram_results_csv(
+                        df_g_prism,
+                        Path("results/aunps/fusion_point_aunp_ripley_g12_prism_envelopes.csv"),
+                        tomogram_name=tomogram_name,
+                        alignment_dir=alignment_dir,
+                        set_name=set_name,
+                    )
+                if bidir_frames:
+                    df_bidir = pd.concat(bidir_frames, ignore_index=True)
+                    if "tomogram_name" not in df_bidir.columns:
+                        df_bidir.insert(0, "tomogram_name", tomogram_name)
+                    _append_tomogram_results_csv(
+                        df_bidir,
+                        Path("results/aunps/fusion_point_aunp_ripley_bidirectional_curves.csv"),
+                        tomogram_name=tomogram_name,
+                        alignment_dir=alignment_dir,
+                        set_name=set_name,
+                    )
+                if ripley_frames or prism_frames:
+                    plot_pooled_fusion_point_aunp_ripley_l12_visualizations()
+                if g_ripley_frames or g_prism_frames:
+                    plot_pooled_fusion_point_aunp_ripley_g12_visualizations()
+                if bidir_frames:
+                    plot_pooled_fusion_point_aunp_ripley_bidirectional_visualizations()
+            except Exception as fusion_3d_exc:
+                print(f"Error in 3D fusion-point/AuNP Ripley analyses: {fusion_3d_exc}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(
+                "Skipping 3D fusion-point vs AuNP analyses "
+                "(disabled by run_fusion_point_aunp_analyses=False)."
+            )
+
+        if run_aunp_monomer_dimer_ripley:
+            if not use_monomer_dimer_aunp_labeling:
+                print(
+                    "Skipping monomer vs dimer AuNP Ripley L₁₂ analyses "
+                    "(requires use_monomer_dimer_aunp_labeling=True)."
+                )
+            else:
+                print("Running monomer vs dimer AuNP Ripley L₁₂ analyses...")
+                try:
+                    from .cleft import load_cleft_mapping
+                    from .aunp_monomer_dimer_ripley import (
+                        POOLED_CURVES_CSV as MONOMER_DIMER_POOLED_CURVES_CSV,
+                        POOLED_MAD_SUMMARY_CSV as MONOMER_DIMER_POOLED_MAD_SUMMARY_CSV,
+                        plot_pooled_monomer_dimer_ripley_visualizations,
+                        run_monomer_dimer_ripley_for_tomogram,
+                    )
+
+                    az_indices_for_md = cleft_indices
+                    if az_indices_for_md is None:
+                        az_mapping_for_md = load_cleft_mapping(
+                            tomogram_path, alignment_dir
+                        ) or {}
+                        az_indices_for_md = sorted(int(k) for k in az_mapping_for_md)
+
+                    (
+                        md_ripley_frames,
+                        md_prism_frames,
+                        md_mad_summary_frames,
+                    ) = run_monomer_dimer_ripley_for_tomogram(
+                            Path(tomogram_path),
+                            alignment_dir,
+                            cleft_indices=az_indices_for_md,
+                            monomer_star_pattern=monomer_star_pattern,
+                            dimer_star_pattern=dimer_star_pattern,
+                            n_perm=monomer_dimer_ripley_n_perm,
+                            write_figures=True,
+                        )
+                    if md_ripley_frames:
+                        df_md_ripley = pd.concat(md_ripley_frames, ignore_index=True)
+                        if "tomogram_name" not in df_md_ripley.columns:
+                            df_md_ripley.insert(0, "tomogram_name", tomogram_name)
+                        _append_tomogram_results_csv(
+                            df_md_ripley,
+                            MONOMER_DIMER_POOLED_CURVES_CSV,
+                            tomogram_name=tomogram_name,
+                            alignment_dir=alignment_dir,
+                            set_name=set_name,
+                        )
+                    if md_mad_summary_frames:
+                        df_md_mad = pd.concat(md_mad_summary_frames, ignore_index=True)
+                        if "tomogram_name" not in df_md_mad.columns:
+                            df_md_mad.insert(0, "tomogram_name", tomogram_name)
+                        _append_tomogram_results_csv(
+                            df_md_mad,
+                            MONOMER_DIMER_POOLED_MAD_SUMMARY_CSV,
+                            tomogram_name=tomogram_name,
+                            alignment_dir=alignment_dir,
+                            set_name=set_name,
+                        )
+                        print(
+                            f"Appended monomer/dimer MAD summary "
+                            f"({len(df_md_mad)} rows) -> {MONOMER_DIMER_POOLED_MAD_SUMMARY_CSV}"
+                        )
+                    if md_ripley_frames or md_prism_frames:
+                        plot_pooled_monomer_dimer_ripley_visualizations()
+                except Exception as monomer_dimer_ripley_exc:
+                    print(f"Error in monomer/dimer AuNP Ripley analyses: {monomer_dimer_ripley_exc}")
+                    import traceback
+                    traceback.print_exc()
+        else:
+            print(
+                "Skipping monomer vs dimer AuNP Ripley L₁₂ analyses "
+                "(disabled by run_aunp_monomer_dimer_ripley=False)."
+            )
+
+        if use_monomer_dimer_aunp_labeling:
+            from .ripley_library import (
+                DEFAULT_DIMER_STAR_PATTERN,
+                DEFAULT_MONOMER_STAR_PATTERN,
+            )
+
+            mon_pat = monomer_star_pattern or DEFAULT_MONOMER_STAR_PATTERN
+            dim_pat = dimer_star_pattern or DEFAULT_DIMER_STAR_PATTERN
+            labeled_results = {}
+            for label, pat in (("monomer", mon_pat), ("dimer", dim_pat)):
+                print(f"Running main AuNP analysis for {label} picks ({pat})...")
+                labeled_results[label] = analyze_aunps(
+                    tomogram_path,
+                    cleft_indices=cleft_indices,
+                    set_name=set_name,
+                    alignment_dir=alignment_dir,
+                    vesicle_distance_threshold=vesicle_distance_threshold,
+                    dbscan_eps=dbscan_eps,
+                    dbscan_min_samples=dbscan_min_samples,
+                    cylinder_radius=cylinder_radius,
+                    receptor_crosssection=receptor_crosssection,
+                    aunps_per_receptor=aunps_per_receptor,
+                    vertex_sampling_step=vertex_sampling_step,
+                    synaptic_designation_cutoff=synaptic_designation_cutoff,
+                    min_cluster_size=min_cluster_size,
+                    fusion_point_threshold=fusion_point_threshold,
+                    fusing_perimeter_threshold=fusing_perimeter_threshold,
+                    aunp_pick_star_pattern=pat,
+                    use_monomer_dimer_aunp_labeling=False,
+                    run_fusion_point_aunp_analyses=False,
+                    run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
+                    run_aunp_monomer_dimer_ripley=False,
                     monomer_star_pattern=monomer_star_pattern,
                     dimer_star_pattern=dimer_star_pattern,
-                    n_perm=monomer_dimer_ripley_n_perm,
-                    write_figures=True,
+                    monomer_dimer_ripley_n_perm=monomer_dimer_ripley_n_perm,
+                    aunp_pick_label=label,
                 )
-            if md_ripley_frames:
-                df_md_ripley = pd.concat(md_ripley_frames, ignore_index=True)
-                if "tomogram_name" not in df_md_ripley.columns:
-                    df_md_ripley.insert(0, "tomogram_name", tomogram_name)
-                _append_tomogram_results_csv(
-                    df_md_ripley,
-                    MONOMER_DIMER_POOLED_CURVES_CSV,
-                    tomogram_name=tomogram_name,
-                    alignment_dir=alignment_dir,
-                    set_name=set_name,
-                )
-            if md_individual_frames:
-                df_md_individual = pd.concat(md_individual_frames, ignore_index=True)
-                if "tomogram_name" not in df_md_individual.columns:
-                    df_md_individual.insert(0, "tomogram_name", tomogram_name)
-                _append_tomogram_results_csv(
-                    df_md_individual,
-                    MONOMER_DIMER_POOLED_INDIVIDUAL_CURVES_CSV,
-                    tomogram_name=tomogram_name,
-                    alignment_dir=alignment_dir,
-                    set_name=set_name,
-                )
-            if md_mad_summary_frames:
-                df_md_mad = pd.concat(md_mad_summary_frames, ignore_index=True)
-                if "tomogram_name" not in df_md_mad.columns:
-                    df_md_mad.insert(0, "tomogram_name", tomogram_name)
-                _append_tomogram_results_csv(
-                    df_md_mad,
-                    MONOMER_DIMER_POOLED_MAD_SUMMARY_CSV,
-                    tomogram_name=tomogram_name,
-                    alignment_dir=alignment_dir,
-                    set_name=set_name,
-                )
-                print(
-                    f"Appended monomer/dimer MAD summary "
-                    f"({len(df_md_mad)} rows) -> {MONOMER_DIMER_POOLED_MAD_SUMMARY_CSV}"
-                )
-            if md_ripley_frames or md_prism_frames:
-                plot_pooled_monomer_dimer_ripley_visualizations()
-        except Exception as monomer_dimer_ripley_exc:
-            print(f"Error in monomer/dimer AuNP Ripley analyses: {monomer_dimer_ripley_exc}")
-            import traceback
-            traceback.print_exc()
-    else:
-        print(
-            "Skipping monomer vs dimer AuNP Ripley L₁₂ analyses "
-            "(disabled by run_aunp_monomer_dimer_ripley=False)."
-        )
-
-
+            return {
+                "status": "completed",
+                "use_monomer_dimer_aunp_labeling": True,
+                "monomer": labeled_results.get("monomer"),
+                "dimer": labeled_results.get("dimer"),
+                "aunp_count": int(
+                    (labeled_results.get("monomer") or {}).get("aunp_count", 0)
+                    + (labeled_results.get("dimer") or {}).get("aunp_count", 0)
+                ),
+            }
 
     try:
         aunps_dir = Path(tomogram_path) / alignment_dir / "aunps"
@@ -1333,7 +1401,9 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
 
         aunps_results_dir = Path(tomogram_path) / alignment_dir / "STT_results" / "aunps"
         aunps_results_dir.mkdir(parents=True, exist_ok=True)
-        output_file = aunps_results_dir / "aunp_nearest_neighbor_distances.csv"
+        output_file = aunps_results_dir / _tagged_aunp_output_name(
+            "aunp_nearest_neighbor_distances", aunp_pick_label
+        )
 
         # --- Calculate distance to closest pre/post membrane segmentation (before filtering to determine filter) ---
         membranes = import_membrane_segmentations(tomogram_path, alignment_dir=alignment_dir)
@@ -1568,7 +1638,9 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
                     'cluster_density_concave_hull_2d_aunps_per_nm2': density_concave,
                 })
             cluster_df = pd.DataFrame(cluster_rows)
-            cluster_csv = aunps_results_dir / "aunp_clusters.csv"
+            cluster_csv = aunps_results_dir / _tagged_aunp_output_name(
+                "aunp_clusters", aunp_pick_label
+            )
             cluster_df.to_csv(cluster_csv, index=False)
             print(f"Saved AuNP cluster summary to {cluster_csv}")
             # --- Append to global results/aunps/aunp_cluster_results.csv ---
@@ -1580,9 +1652,11 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
                     if part.endswith("_tomograms") and i > 0:
                         set_name = part.replace("_tomograms", "")
                         break
+            pick_label = (aunp_pick_label or "").strip()
             cluster_df['tomogram_name'] = tomogram_name
             cluster_df['set_name'] = set_name
             cluster_df['alignment_dir'] = alignment_dir
+            cluster_df['aunp_pick_label'] = pick_label
             global_csv = Path("results/aunps/aunp_cluster_results.csv")
             global_csv.parent.mkdir(parents=True, exist_ok=True)
             if global_csv.exists():
@@ -1590,10 +1664,13 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
                     df_existing = pd.read_csv(global_csv)
                     if 'alignment_dir' not in df_existing.columns:
                         df_existing['alignment_dir'] = ''
+                    if 'aunp_pick_label' not in df_existing.columns:
+                        df_existing['aunp_pick_label'] = ''
                     df_existing = df_existing[
                         ~(
                             (df_existing['tomogram_name'] == tomogram_name) &
-                            (df_existing['alignment_dir'] == alignment_dir)
+                            (df_existing['alignment_dir'] == alignment_dir) &
+                            (df_existing['aunp_pick_label'].fillna('').astype(str) == pick_label)
                         )
                     ]
                     df_combined = pd.concat([df_existing, cluster_df], ignore_index=True)
@@ -1625,7 +1702,9 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
             star_df = df_valid[star_cols].copy()
             if not isinstance(star_df, pd.DataFrame):
                 star_df = pd.DataFrame(star_df)
-            star_outfile = aunps_results_dir / "aunp_clusters.star"
+            star_outfile = aunps_results_dir / _tagged_aunp_output_name(
+                "aunp_clusters", aunp_pick_label, suffix=".star"
+            )
             starfile.write(star_df, star_outfile, overwrite=True)
             print(f"Saved AuNP cluster assignments (filtered) to {star_outfile}")
         except Exception as e:
@@ -1686,6 +1765,8 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
         df_valid['tomogram_name'] = tomogram_name
         df_valid['set_name'] = set_name
         df_valid['alignment_dir'] = alignment_dir
+        pick_label = (aunp_pick_label or "").strip()
+        df_valid['aunp_pick_label'] = pick_label
         
         # Create a copy with renamed columns for global CSV (add units to distance/coordinate columns)
         df_global = df_valid.copy()
@@ -1717,11 +1798,14 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
                 df_existing = pd.read_csv(global_csv)
                 if 'alignment_dir' not in df_existing.columns:
                     df_existing['alignment_dir'] = ''
-                # Remove existing data for this tomogram+alignment pair
+                if 'aunp_pick_label' not in df_existing.columns:
+                    df_existing['aunp_pick_label'] = ''
+                # Remove existing data for this tomogram+alignment+label
                 df_existing = df_existing[
                     ~(
                         (df_existing['tomogram_name'] == tomogram_name) &
-                        (df_existing['alignment_dir'] == alignment_dir)
+                        (df_existing['alignment_dir'] == alignment_dir) &
+                        (df_existing['aunp_pick_label'].fillna('').astype(str) == pick_label)
                     )
                 ]
                 df_combined = pd.concat([df_existing, df_global], ignore_index=True)
@@ -1736,23 +1820,27 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
         
         # Helper to append per-(vesicle, AuNP) fusion-point distance tables
         def save_fusion_point_aunp_pairwise_csv(df_long: pd.DataFrame, csv_path: Path, vesicle_set_label: str):
-            """Append per-(vesicle, AuNP) fusion distances for this tomogram+alignment."""
+            """Append per-(vesicle, AuNP) fusion distances for this tomogram+alignment+label."""
             if df_long.empty:
                 print(f"No per-AuNP fusion-point distances for {vesicle_set_label} vesicles ({csv_path.name}).")
                 return
             d = df_long.copy()
             d['set_name'] = set_name
             d['alignment_dir'] = alignment_dir
+            d['aunp_pick_label'] = pick_label
             csv_path.parent.mkdir(parents=True, exist_ok=True)
             try:
                 if csv_path.exists():
                     df_existing = pd.read_csv(csv_path)
                     if 'alignment_dir' not in df_existing.columns:
                         df_existing['alignment_dir'] = ''
+                    if 'aunp_pick_label' not in df_existing.columns:
+                        df_existing['aunp_pick_label'] = ''
                     df_existing = df_existing[
                         ~(
                             (df_existing['tomogram_name'] == tomogram_name)
                             & (df_existing['alignment_dir'] == alignment_dir)
+                            & (df_existing['aunp_pick_label'].fillna('').astype(str) == pick_label)
                         )
                     ]
                     pd.concat([df_existing, d], ignore_index=True).to_csv(csv_path, index=False)
@@ -1837,6 +1925,7 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
                         tomogram_name=tomogram_name,
                         alignment_dir=alignment_dir,
                         set_name=set_name,
+                        aunp_pick_label=aunp_pick_label,
                     )
                 if g12_frames:
                     df_g12 = pd.concat(g12_frames, ignore_index=True)
@@ -1848,6 +1937,7 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
                         tomogram_name=tomogram_name,
                         alignment_dir=alignment_dir,
                         set_name=set_name,
+                        aunp_pick_label=aunp_pick_label,
                     )
                 if ripley_frames or prism_frames or g12_frames:
                     plot_pooled_aunp_vs_az_center_ripley_visualizations()
@@ -1973,14 +2063,18 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
                             continue
                     
                     if packing_density_results:
-                        packing_density_file = aunps_results_dir / "packing_density_results.json"
+                        packing_density_file = aunps_results_dir / _tagged_aunp_output_name(
+                            "packing_density_results", aunp_pick_label, suffix=".json"
+                        )
                         with open(packing_density_file, 'w') as f:
                             json.dump(packing_density_results, f, indent=2)
                         print(f"Saved packing density results to {packing_density_file}")
 
                     df_packing_scan = pd.DataFrame(packing_scan_rows)
                     if not df_packing_scan.empty:
-                        scan_local_csv = aunps_results_dir / "packing_density_scan_vertices.csv"
+                        scan_local_csv = aunps_results_dir / _tagged_aunp_output_name(
+                            "packing_density_scan_vertices", aunp_pick_label
+                        )
                         df_packing_scan.to_csv(scan_local_csv, index=False)
                         print(f"Saved {len(df_packing_scan)} scan vertices to {scan_local_csv}")
                         _append_tomogram_results_csv(
@@ -1989,6 +2083,7 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
                             tomogram_name=tomogram_name,
                             alignment_dir=alignment_dir,
                             set_name=set_name,
+                            aunp_pick_label=aunp_pick_label,
                         )
 
                         df_packing_at_fusion = build_packing_density_at_fusion_points_dataframe(
@@ -2003,7 +2098,10 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
                             print("No fusing vesicle fusion points with valid packing lookup")
                         else:
                             fusion_local_csv = (
-                                aunps_results_dir / "packing_density_at_vesicle_fusion_points.csv"
+                                aunps_results_dir / _tagged_aunp_output_name(
+                                    "packing_density_at_vesicle_fusion_points",
+                                    aunp_pick_label,
+                                )
                             )
                             df_packing_at_fusion.to_csv(fusion_local_csv, index=False)
                             print(
@@ -2015,6 +2113,7 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
                                 tomogram_name=tomogram_name,
                                 alignment_dir=alignment_dir,
                                 set_name=set_name,
+                                aunp_pick_label=aunp_pick_label,
                             )
 
                     # --- End packing density at fusion points ---
@@ -2122,6 +2221,9 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
         
         # Add completion status
         summary_stats["status"] = "completed"
+        if aunp_pick_label:
+            summary_stats["aunp_pick_label"] = aunp_pick_label
+            summary_stats["aunp_pick_star_pattern"] = pick_pattern
 
         per_zone_rows = build_aunps_per_zone_rows(
             tomogram_name=tomogram_name,

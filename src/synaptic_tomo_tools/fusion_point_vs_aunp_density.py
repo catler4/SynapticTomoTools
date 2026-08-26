@@ -957,6 +957,43 @@ def ripley_h12(k12: np.ndarray, r_vals: np.ndarray) -> np.ndarray:
     return np.sqrt(k12 / np.pi) - r_vals
 
 
+def ripley_k12_from_h12(h12: np.ndarray, r_vals: np.ndarray) -> np.ndarray:
+    """Invert H₁₂ → K₁₂: K = π·(H+r)² (non-negative radius argument)."""
+    h12 = np.asarray(h12, dtype=float)
+    r_vals = np.asarray(r_vals, dtype=float)
+    return np.pi * np.maximum(h12 + r_vals, 0.0) ** 2
+
+
+def mean_h12_from_h_curves(h_curves: np.ndarray, r_vals: np.ndarray) -> np.ndarray:
+    """Average replicate H₁₂ on the K scale (via H→K invert), then convert once with ``ripley_h12``."""
+    r_vals = np.asarray(r_vals, dtype=float)
+    h_mat = np.atleast_2d(np.asarray(h_curves, dtype=float))
+    if h_mat.size == 0 or h_mat.shape[0] == 0:
+        return np.full(len(r_vals), np.nan)
+    k_mat = ripley_k12_from_h12(h_mat, r_vals[None, :])
+    return ripley_h12(np.nanmean(k_mat, axis=0), r_vals)
+
+
+def _h12_mean_sd_band(h_curves: np.ndarray, r_vals: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Mean ± SD on K (from inverted H), mapped once through ``ripley_h12``."""
+    r_vals = np.asarray(r_vals, dtype=float)
+    h_mat = np.atleast_2d(np.asarray(h_curves, dtype=float))
+    if h_mat.size == 0 or h_mat.shape[0] == 0:
+        nan = np.full(len(r_vals), np.nan)
+        return nan, nan, nan
+    k_mat = ripley_k12_from_h12(h_mat, r_vals[None, :])
+    mean_k = np.nanmean(k_mat, axis=0)
+    n_valid = np.sum(~np.isnan(k_mat), axis=0)
+    with np.errstate(invalid="ignore"):
+        sd_k = np.nanstd(k_mat, axis=0, ddof=1)
+    sd_k = np.where(n_valid > 1, sd_k, 0.0)
+    return (
+        ripley_h12(mean_k - sd_k, r_vals),
+        ripley_h12(mean_k, r_vals),
+        ripley_h12(mean_k + sd_k, r_vals),
+    )
+
+
 def ripley_h12_from_points(
     x: np.ndarray,
     y: np.ndarray,
@@ -1469,8 +1506,20 @@ def _replicate_envelope_band(
     curves: np.ndarray,
     *,
     method: str = "percentile",
+    r_vals: np.ndarray | None = None,
+    average_h12_on_k: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Envelope band across replicates.
+
+    For H₁₂ with ``average_h12_on_k=True`` and ``method='mean_sd'``, mean±SD are computed
+    on K (inverting H) then mapped through ``ripley_h12``. Percentile bands always stay on
+    the input curve scale (H of each replicate).
+    """
     if method == "mean_sd":
+        if average_h12_on_k:
+            if r_vals is None:
+                raise ValueError("r_vals required when average_h12_on_k=True")
+            return _h12_mean_sd_band(curves, r_vals)
         return _replicate_mean_sd_band(curves)
     return _replicate_percentile_band(curves)
 
@@ -1540,10 +1589,15 @@ def _save_label_perm_ripley_figures(
     refline: float | None = None,
     refline_label: str | None = None,
     sample_note: str | None = None,
+    average_h12_on_k: bool = False,
 ) -> None:
     for method, suffix, band_note in _ripley_envelope_style_specs():
-        null_lo, null_c, null_hi = _replicate_envelope_band(null_curves, method=method)
-        obs_lo, obs_c, obs_hi = _replicate_envelope_band(obs_curves, method=method)
+        null_lo, null_c, null_hi = _replicate_envelope_band(
+            null_curves, method=method, r_vals=r_vals, average_h12_on_k=average_h12_on_k
+        )
+        obs_lo, obs_c, obs_hi = _replicate_envelope_band(
+            obs_curves, method=method, r_vals=r_vals, average_h12_on_k=average_h12_on_k
+        )
         labels = _label_perm_envelope_labels(
             method=method,
             n_perm=n_perm,
@@ -1589,6 +1643,7 @@ def _save_fusion_vs_control_by_d_figures(
     refline: float | None = None,
     refline_label: str | None = None,
     sample_note: str | None = None,
+    average_h12_on_k: bool = False,
 ) -> None:
     n_panels = len(panel_specs)
     if n_panels == 0:
@@ -1598,7 +1653,10 @@ def _save_fusion_vs_control_by_d_figures(
 
     for method, suffix, band_note in _ripley_envelope_style_specs():
         fusion_lo, fusion_c, fusion_hi = _replicate_envelope_band(
-            fusion_vesicle_curves, method=method
+            fusion_vesicle_curves,
+            method=method,
+            r_vals=r_vals,
+            average_h12_on_k=average_h12_on_k,
         )
         fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 4 * nrows), squeeze=False)
         axes_flat = axes.flatten()
@@ -1608,7 +1666,12 @@ def _save_fusion_vs_control_by_d_figures(
             if ctrl_curves is None:
                 ax.set_title(f"d={int(offset_nm)} nm (no controls)")
                 continue
-            ctrl_lo, ctrl_c, ctrl_hi = _replicate_envelope_band(ctrl_curves, method=method)
+            ctrl_lo, ctrl_c, ctrl_hi = _replicate_envelope_band(
+                ctrl_curves,
+                method=method,
+                r_vals=r_vals,
+                average_h12_on_k=average_h12_on_k,
+            )
             labels = _fusion_vs_control_envelope_labels(
                 method=method,
                 offset_nm=offset_nm,
@@ -1646,7 +1709,7 @@ def _save_fusion_vs_control_by_d_figures(
             dpi=150,
             bbox_inches="tight",
         )
-    plt.close(fig)
+        plt.close(fig)
 
 
 def _replicate_mean(curves: np.ndarray) -> np.ndarray:
@@ -2132,7 +2195,7 @@ def run_ripley_postsynaptic_analysis(
             fusion_by_vesicle, aunp_post, r_vals, window_area
         )
         h12_fusion_lo, h12_fusion_med, h12_fusion_hi = _replicate_percentile_band(fusion_vesicle_curves)
-        h12_fusion_mean = _replicate_mean(fusion_vesicle_curves)
+        h12_fusion_mean = mean_h12_from_h_curves(fusion_vesicle_curves, r_vals)
 
         # --- #2 Label permutation (fusion vs AuNP) ---
         pool = np.vstack([fusion_post, aunp_post])
@@ -2161,6 +2224,7 @@ def run_ripley_postsynaptic_analysis(
             ),
             refline=0.0,
             refline_label="H₁₂ = 0",
+            average_h12_on_k=True,
         )
 
         _plot_significance_single(
@@ -2291,6 +2355,7 @@ def run_ripley_postsynaptic_analysis(
                 window_area,
             )
             h12_ctrl_lo, h12_ctrl_med, h12_ctrl_hi = _replicate_percentile_band(ctrl_curves)
+            h12_ctrl_mean = mean_h12_from_h_curves(ctrl_curves, r_vals)
             p_fusion_vs_ctrl = _vesicle_paired_pvalues(fusion_curves, ctrl_curves)
             fvc_by_offset[float(offset_nm)] = (fusion_curves, ctrl_curves)
             fvc_panel_specs.append(
@@ -2314,7 +2379,7 @@ def run_ripley_postsynaptic_analysis(
                 )
             )
 
-            for r, f_lo, f_med, f_hi, f_mean, c_lo, c_med, c_hi, p_val in zip(
+            for r, f_lo, f_med, f_hi, f_mean, c_lo, c_med, c_hi, c_mean, p_val in zip(
                 r_vals,
                 h12_fusion_lo,
                 h12_fusion_med,
@@ -2323,6 +2388,7 @@ def run_ripley_postsynaptic_analysis(
                 h12_ctrl_lo,
                 h12_ctrl_med,
                 h12_ctrl_hi,
+                h12_ctrl_mean,
                 p_fusion_vs_ctrl,
             ):
                 all_result_rows.append(
@@ -2341,7 +2407,7 @@ def run_ripley_postsynaptic_analysis(
                         "h12_control_hi": float(c_hi),
                         "h12_fusion_mean": float(f_mean),
                         "h12_fusion_sem": np.nan,
-                        "h12_control_mean": float(c_med),
+                        "h12_control_mean": float(c_mean),
                         "h12_control_sem": np.nan,
                         "p_value_two_sided": float(p_val),
                         "n_fusion": len(fusion_post),
@@ -2367,6 +2433,7 @@ def run_ripley_postsynaptic_analysis(
             ),
             refline=0.0,
             refline_label="H₁₂ = 0",
+            average_h12_on_k=True,
         )
 
         if p_by_d:
@@ -3578,6 +3645,7 @@ def plot_pooled_ripley_h12_from_vesicle_artifacts(
         refline=0.0,
         refline_label="H₁₂ = 0",
         sample_note=pool_note,
+        average_h12_on_k=True,
     )
 
     _plot_significance_single(
@@ -3714,6 +3782,7 @@ def plot_pooled_ripley_h12_from_vesicle_artifacts(
         refline=0.0,
         refline_label="H₁₂ = 0",
         sample_note=pool_note,
+        average_h12_on_k=True,
     )
 
     if p_by_d:

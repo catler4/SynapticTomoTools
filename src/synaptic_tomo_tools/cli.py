@@ -466,6 +466,7 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
                      min_cluster_size=None, fusion_point_threshold=None,
                      fusing_perimeter_threshold=None,
                      aunp_pick_star_pattern=None,
+                     use_monomer_dimer_aunp_labeling=False,
                      run_fusion_point_aunp_analyses=False,
                      run_aunp_vs_az_center_ripley=False,
                      run_aunp_monomer_dimer_ripley=False,
@@ -529,6 +530,7 @@ def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None,
                   min_cluster_size=min_cluster_size, fusion_point_threshold=fusion_point_threshold,
                   fusing_perimeter_threshold=fusing_perimeter_threshold,
                   aunp_pick_star_pattern=aunp_pick_star_pattern,
+                  use_monomer_dimer_aunp_labeling=use_monomer_dimer_aunp_labeling,
                   run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
                   run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
                   run_aunp_monomer_dimer_ripley=run_aunp_monomer_dimer_ripley,
@@ -560,6 +562,7 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
               min_cluster_size=None, fusion_point_threshold=None,
               fusing_perimeter_threshold=None,
               aunp_pick_star_pattern=None,
+              use_monomer_dimer_aunp_labeling=False,
               run_fusion_point_aunp_analyses=False,
               run_aunp_vs_az_center_ripley=False,
               run_aunp_monomer_dimer_ripley=False,
@@ -620,6 +623,7 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
                                          fusion_point_threshold=fusion_thresh,
                                          fusing_perimeter_threshold=fusing_thresh,
                                          aunp_pick_star_pattern=aunp_pick_star_pattern,
+                                         use_monomer_dimer_aunp_labeling=use_monomer_dimer_aunp_labeling,
                                          run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
                                          run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
                                          run_aunp_monomer_dimer_ripley=run_aunp_monomer_dimer_ripley,
@@ -955,7 +959,19 @@ def main():
         "--aunp-pick-star-pattern", type=str, default=None,
         help=(
             "Per-synaptic-cleft AuNP pick STAR filename pattern; use '*' for the synaptic cleft index "
-            "(default: aunp_tm_BP_active_zone_*_manual_refined.star)"
+            "(default: aunp_tm_BP_active_zone_*_manual_refined.star). Ignored when "
+            "--use-monomer-dimer-aunp-labeling is set."
+        ),
+    )
+    parser.add_argument(
+        "--use-monomer-dimer-aunp-labeling",
+        dest="use_monomer_dimer_aunp_labeling",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Use separate monomer/dimer AuNP pick STAR files: main AuNP analysis runs twice "
+            "(tagged monomer/dimer outputs), and monomer/dimer Ripley options apply. "
+            "When off, fusion-point vs AuNP analyses use the general pick STAR as a single pool."
         ),
     )
     parser.add_argument(
@@ -964,8 +980,10 @@ def main():
         action=argparse.BooleanOptionalAction,
         default=False,
         help=(
-            "Run 3D fusion-point vs monomer/dimer AuNP distance and Ripley L₁₂ analyses "
-            "(default: disabled). Use --fusion-point-aunp-analyses to enable."
+            "Run 3D fusion-point vs AuNP distance and Ripley L₁₂ analyses "
+            "(default: disabled). Use --fusion-point-aunp-analyses to enable. "
+            "With --use-monomer-dimer-aunp-labeling, uses monomer/dimer STAR patterns; "
+            "otherwise uses --aunp-pick-star-pattern as a single AuNP pool."
         ),
     )
     parser.add_argument(
@@ -999,8 +1017,9 @@ def main():
         default=False,
         help=(
             "Run 3D bivariate Ripley L₁₂ of monomer vs dimer AuNP positions with a "
-            "label-permutation control (default: disabled). Uses the monomer/dimer STAR "
-            "patterns. Use --aunp-monomer-dimer-ripley to enable."
+            "label-permutation control (default: disabled). Requires "
+            "--use-monomer-dimer-aunp-labeling (uses the monomer/dimer STAR patterns). "
+            "Use --aunp-monomer-dimer-ripley to enable."
         ),
     )
     parser.add_argument(
@@ -1136,6 +1155,7 @@ def main():
     fusion_point_threshold = args.fusion_point_threshold
     fusing_perimeter_threshold = args.fusing_perimeter_threshold
     aunp_pick_star_pattern = args.aunp_pick_star_pattern
+    use_monomer_dimer_aunp_labeling = args.use_monomer_dimer_aunp_labeling
     run_fusion_point_aunp_analyses = args.run_fusion_point_aunp_analyses
     run_aunp_vs_az_center_ripley = args.run_aunp_vs_az_center_ripley
     run_aunp_monomer_dimer_ripley = args.run_aunp_monomer_dimer_ripley
@@ -1166,6 +1186,7 @@ def main():
                   min_cluster_size=min_cluster_size, fusion_point_threshold=fusion_point_threshold,
                   fusing_perimeter_threshold=fusing_perimeter_threshold,
                   aunp_pick_star_pattern=aunp_pick_star_pattern,
+                  use_monomer_dimer_aunp_labeling=use_monomer_dimer_aunp_labeling,
                   run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
                   run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
                   run_aunp_monomer_dimer_ripley=run_aunp_monomer_dimer_ripley,
@@ -1205,6 +1226,7 @@ def main():
                          min_cluster_size=min_cluster_size, fusion_point_threshold=fusion_point_threshold,
                          fusing_perimeter_threshold=fusing_perimeter_threshold,
                          aunp_pick_star_pattern=aunp_pick_star_pattern,
+                         use_monomer_dimer_aunp_labeling=use_monomer_dimer_aunp_labeling,
                          run_fusion_point_aunp_analyses=run_fusion_point_aunp_analyses,
                          run_aunp_vs_az_center_ripley=run_aunp_vs_az_center_ripley,
                          run_aunp_monomer_dimer_ripley=run_aunp_monomer_dimer_ripley,

@@ -92,6 +92,7 @@ class AnalysisPipelineGUI(tk.Tk):
         self.fusion_point_threshold = tk.StringVar(value="20.0")
         self.fusing_perimeter_threshold = tk.StringVar(value="1.0")
         self.aunp_pick_star_pattern = tk.StringVar(value="")
+        self.use_monomer_dimer_aunp_labeling = tk.BooleanVar(value=False)
         self.run_fusion_point_aunp_analyses = tk.BooleanVar(value=False)
         self.run_aunp_vs_az_center_ripley = tk.BooleanVar(value=False)
         self.run_aunp_monomer_dimer_ripley = tk.BooleanVar(value=False)
@@ -299,66 +300,74 @@ class AnalysisPipelineGUI(tk.Tk):
         fusion_point_threshold_entry.grid(row=4, column=1, padx=5)
         ttk.Label(aunp_frame, text="(default: 20.0)").grid(row=4, column=2, padx=5, sticky=tk.W)
         ttk.Label(aunp_frame, text="AuNP pick STAR filename pattern:").grid(row=5, column=0, sticky=tk.W, padx=5)
-        aunp_pick_star_pattern_entry = ttk.Entry(
+        self._aunp_pick_star_pattern_entry = ttk.Entry(
             aunp_frame, textvariable=self.aunp_pick_star_pattern, width=42
         )
-        aunp_pick_star_pattern_entry.grid(row=5, column=1, columnspan=2, padx=5, sticky=tk.W)
-        ttk.Label(
+        self._aunp_pick_star_pattern_entry.grid(row=5, column=1, columnspan=2, padx=5, sticky=tk.W)
+        self._aunp_pick_star_hint = ttk.Label(
             aunp_frame,
             text="(default: aunp_tm_BP_active_zone_*_manual_refined.star; * = AZ index)",
-        ).grid(row=6, column=0, columnspan=3, padx=5, sticky=tk.W)
-        fusion_aunp_cb = ttk.Checkbutton(
+        )
+        self._aunp_pick_star_hint.grid(row=6, column=0, columnspan=3, padx=5, sticky=tk.W)
+        labeling_cb = ttk.Checkbutton(
             aunp_frame,
-            text="Run fusion-point vs monomer/dimer AuNP analyses (biv Ripley K + distances)",
-            variable=self.run_fusion_point_aunp_analyses,
-            command=self._toggle_monomer_dimer_star_entries,
+            text="Use monomer/dimer AuNP pick STAR labeling",
+            variable=self.use_monomer_dimer_aunp_labeling,
+            command=self._toggle_monomer_dimer_labeling_ui,
         )
-        fusion_aunp_cb.grid(row=7, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(4, 0))
-        ttk.Label(aunp_frame, text="Monomer STAR filename pattern:").grid(
-            row=8, column=0, sticky=tk.W, padx=5
-        )
+        labeling_cb.grid(row=7, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(4, 0))
+        self._monomer_star_label = ttk.Label(aunp_frame, text="Monomer STAR filename pattern:")
+        self._monomer_star_label.grid(row=8, column=0, sticky=tk.W, padx=5)
         self._monomer_star_entry = ttk.Entry(
             aunp_frame, textvariable=self.monomer_star_pattern, width=42
         )
         self._monomer_star_entry.grid(row=8, column=1, columnspan=2, padx=5, sticky=tk.W)
-        ttk.Label(aunp_frame, text="Dimer STAR filename pattern:").grid(
-            row=9, column=0, sticky=tk.W, padx=5
-        )
+        self._dimer_star_label = ttk.Label(aunp_frame, text="Dimer STAR filename pattern:")
+        self._dimer_star_label.grid(row=9, column=0, sticky=tk.W, padx=5)
         self._dimer_star_entry = ttk.Entry(
             aunp_frame, textvariable=self.dimer_star_pattern, width=42
         )
         self._dimer_star_entry.grid(row=9, column=1, columnspan=2, padx=5, sticky=tk.W)
-        ttk.Label(
+        self._monomer_dimer_star_hint = ttk.Label(
             aunp_frame,
             text=(
                 "(defaults: *_manual_refined_monomer.star / *_manual_refined_dimer.star; "
                 "files in {alignment}/aunps/)"
             ),
-        ).grid(row=10, column=0, columnspan=3, padx=5, sticky=tk.W)
+        )
+        self._monomer_dimer_star_hint.grid(row=10, column=0, columnspan=3, padx=5, sticky=tk.W)
+        fusion_aunp_cb = ttk.Checkbutton(
+            aunp_frame,
+            text="Run fusion-point vs AuNP analyses",
+            variable=self.run_fusion_point_aunp_analyses,
+        )
+        fusion_aunp_cb.grid(row=11, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(4, 0))
         aunp_az_center_cb = ttk.Checkbutton(
             aunp_frame,
             text="Run AuNP vs synaptic cleft center biv Ripley K",
             variable=self.run_aunp_vs_az_center_ripley,
         )
-        aunp_az_center_cb.grid(row=11, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(4, 0))
-        monomer_dimer_cb = ttk.Checkbutton(
+        aunp_az_center_cb.grid(row=12, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(4, 0))
+        self._monomer_dimer_ripley_cb = ttk.Checkbutton(
             aunp_frame,
             text="Run monomer vs dimer AuNP biv Ripley K (label-perm + greedy segregation)",
             variable=self.run_aunp_monomer_dimer_ripley,
-            command=self._toggle_monomer_dimer_star_entries,
+            command=self._toggle_monomer_dimer_labeling_ui,
         )
-        monomer_dimer_cb.grid(row=12, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(4, 0))
-        ttk.Label(aunp_frame, text="Monomer/dimer Ripley null replicate count:").grid(
-            row=13, column=0, sticky=tk.W, padx=5
+        self._monomer_dimer_ripley_cb.grid(row=13, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(4, 0))
+        self._monomer_dimer_ripley_n_perm_label = ttk.Label(
+            aunp_frame, text="Monomer/dimer Ripley null replicate count:"
         )
+        self._monomer_dimer_ripley_n_perm_label.grid(row=14, column=0, sticky=tk.W, padx=5)
         self._monomer_dimer_ripley_n_perm_entry = ttk.Entry(
             aunp_frame, textvariable=self.monomer_dimer_ripley_n_perm, width=8
         )
-        self._monomer_dimer_ripley_n_perm_entry.grid(row=13, column=1, padx=5, sticky=tk.W)
-        ttk.Label(aunp_frame, text="(default: 1000; applies to perm + segregation)").grid(
-            row=13, column=2, padx=5, sticky=tk.W
+        self._monomer_dimer_ripley_n_perm_entry.grid(row=14, column=1, padx=5, sticky=tk.W)
+        self._monomer_dimer_ripley_n_perm_hint = ttk.Label(
+            aunp_frame, text="(default: 1000; applies to perm + segregation)"
         )
-        self._toggle_monomer_dimer_star_entries()
+        self._monomer_dimer_ripley_n_perm_hint.grid(row=14, column=2, padx=5, sticky=tk.W)
+        self._toggle_monomer_dimer_labeling_ui()
         
         # Visualization parameters
         viz_frame = ttk.LabelFrame(self.custom_params_frame, text="Visualization Parameters", padding=5)
@@ -433,15 +442,24 @@ class AnalysisPipelineGUI(tk.Tk):
         ToolTip(fusion_point_threshold_entry, "Radius in nm for synaptic-cleft points contributing to per-vesicle fusion point estimation (default 20.0).")
         ToolTip(fusing_perimeter_threshold_entry, "Vesicle is fusing if minimum distance from original vesicle segmentation points to presynaptic synaptic-cleft points is <= this threshold (default 1.0 nm).")
         ToolTip(
-            aunp_pick_star_pattern_entry,
+            self._aunp_pick_star_pattern_entry,
             "Filename pattern for per-synaptic-cleft AuNP pick STAR files under {alignment}/aunps/. "
             "Use exactly one * for the synaptic cleft number (e.g. aunps_other_name_*_etc.star). "
-            "Leave empty for the default aunp_tm_BP_active_zone_*_manual_refined.star.",
+            "Leave empty for the default aunp_tm_BP_active_zone_*_manual_refined.star. "
+            "Disabled when monomer/dimer labeling is enabled.",
+        )
+        ToolTip(
+            labeling_cb,
+            "When checked: main AuNP analysis runs twice (monomer then dimer STAR picks) with "
+            "tagged outputs; monomer/dimer STAR patterns and monomer-vs-dimer Ripley options "
+            "appear. When unchecked: main analysis uses the general pick STAR pattern, and "
+            "fusion-point vs AuNP uses that same single pool.",
         )
         ToolTip(
             fusion_aunp_cb,
-            "3D fusion-site vs monomer/dimer AuNP distance tables and bivariate Ripley K. "
-            "Disable for datasets without separate monomer/dimer STAR picks.",
+            "3D fusion-site vs AuNP distance tables and bivariate Ripley K. "
+            "With monomer/dimer labeling: uses monomer/dimer STAR patterns. "
+            "Without: uses the general AuNP pick STAR pattern as a single pool.",
         )
         ToolTip(
             self._monomer_star_entry,
@@ -461,7 +479,7 @@ class AnalysisPipelineGUI(tk.Tk):
             "(uses existing pick STAR files; no null model).",
         )
         ToolTip(
-            monomer_dimer_cb,
+            self._monomer_dimer_ripley_cb,
             "3D bivariate Ripley K of monomer vs dimer AuNP positions with label-permutation "
             "and greedy-segregation controls (same replicate count). Uses the monomer/dimer "
             "STAR patterns above. MAD summaries are pooled into results/aunps/.",
@@ -1200,24 +1218,37 @@ Do you want to continue?"""
     
     def _cli_aunp_pick_star_pattern_args(self):
         """CLI flags for custom AuNP pick STAR naming (Home → Custom Parameters)."""
+        if self.use_monomer_dimer_aunp_labeling.get():
+            return []
         pat = self.aunp_pick_star_pattern.get().strip()
         if pat:
             return ["--aunp-pick-star-pattern", pat]
         return []
 
-    def _cli_fusion_point_aunp_analyses_args(self):
-        """CLI flags for optional fusion-point vs monomer/dimer AuNP analyses."""
+    def _cli_monomer_dimer_labeling_args(self):
+        """CLI flags for monomer/dimer AuNP pick STAR labeling mode."""
         if not self.use_custom_params.get():
             return []
-        args = []
-        if self.run_fusion_point_aunp_analyses.get():
-            args += ["--fusion-point-aunp-analyses"]
+        if not self.use_monomer_dimer_aunp_labeling.get():
+            return []
+        args = ["--use-monomer-dimer-aunp-labeling"]
         mon = self.monomer_star_pattern.get().strip()
         dim = self.dimer_star_pattern.get().strip()
         if mon:
             args += ["--monomer-star-pattern", mon]
         if dim:
             args += ["--dimer-star-pattern", dim]
+        return args
+
+    def _cli_fusion_point_aunp_analyses_args(self):
+        """CLI flags for optional fusion-point vs AuNP analyses."""
+        if not self.use_custom_params.get():
+            return []
+        args = []
+        if self.run_fusion_point_aunp_analyses.get():
+            args += ["--fusion-point-aunp-analyses"]
+        # Monomer/dimer patterns are emitted by labeling args when labeling is on.
+        # When labeling is off, fusion-point uses --aunp-pick-star-pattern (single pool).
         return args
 
     def _cli_aunp_vs_az_center_ripley_args(self):
@@ -1232,6 +1263,8 @@ Do you want to continue?"""
         """CLI flags for optional monomer vs dimer AuNP biv Ripley K."""
         if not self.use_custom_params.get():
             return []
+        if not self.use_monomer_dimer_aunp_labeling.get():
+            return []
         if not self.run_aunp_monomer_dimer_ripley.get():
             return []
         args = ["--aunp-monomer-dimer-ripley"]
@@ -1244,17 +1277,36 @@ Do you want to continue?"""
                 pass
         return args
 
-    def _toggle_monomer_dimer_star_entries(self):
-        """Enable monomer/dimer STAR fields when any analysis using them is enabled."""
-        uses_star = (
-            self.run_fusion_point_aunp_analyses.get()
-            or self.run_aunp_monomer_dimer_ripley.get()
-        )
-        state = "normal" if uses_star else "disabled"
-        if hasattr(self, "_monomer_star_entry"):
-            self._monomer_star_entry.configure(state=state)
-            self._dimer_star_entry.configure(state=state)
-        if hasattr(self, "_monomer_dimer_ripley_n_perm_entry"):
+    def _toggle_monomer_dimer_labeling_ui(self):
+        """Show monomer/dimer STAR + Ripley controls only when labeling is enabled."""
+        labeling = bool(self.use_monomer_dimer_aunp_labeling.get())
+        pick_state = "disabled" if labeling else "normal"
+        if hasattr(self, "_aunp_pick_star_pattern_entry"):
+            self._aunp_pick_star_pattern_entry.configure(state=pick_state)
+
+        labeling_widgets = [
+            getattr(self, "_monomer_star_label", None),
+            getattr(self, "_monomer_star_entry", None),
+            getattr(self, "_dimer_star_label", None),
+            getattr(self, "_dimer_star_entry", None),
+            getattr(self, "_monomer_dimer_star_hint", None),
+            getattr(self, "_monomer_dimer_ripley_cb", None),
+            getattr(self, "_monomer_dimer_ripley_n_perm_label", None),
+            getattr(self, "_monomer_dimer_ripley_n_perm_entry", None),
+            getattr(self, "_monomer_dimer_ripley_n_perm_hint", None),
+        ]
+        for w in labeling_widgets:
+            if w is None:
+                continue
+            if labeling:
+                w.grid()
+            else:
+                w.grid_remove()
+
+        if not labeling:
+            self.run_aunp_monomer_dimer_ripley.set(False)
+
+        if hasattr(self, "_monomer_dimer_ripley_n_perm_entry") and labeling:
             perm_state = "normal" if self.run_aunp_monomer_dimer_ripley.get() else "disabled"
             self._monomer_dimer_ripley_n_perm_entry.configure(state=perm_state)
 
@@ -1538,6 +1590,7 @@ Do you want to continue?"""
                 except ValueError:
                     pass
             cli += self._cli_aunp_pick_star_pattern_args()
+            cli += self._cli_monomer_dimer_labeling_args()
             cli += self._cli_fusion_point_aunp_analyses_args()
             cli += self._cli_aunp_vs_az_center_ripley_args()
             cli += self._cli_aunp_monomer_dimer_ripley_args()
@@ -1714,6 +1767,7 @@ Do you want to continue?"""
                 except ValueError:
                     pass
             cli += self._cli_aunp_pick_star_pattern_args()
+            cli += self._cli_monomer_dimer_labeling_args()
             cli += self._cli_fusion_point_aunp_analyses_args()
             cli += self._cli_aunp_vs_az_center_ripley_args()
             cli += self._cli_aunp_monomer_dimer_ripley_args()
