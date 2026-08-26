@@ -56,6 +56,7 @@ from .ripley_library import (
 
 WINDOW_MODE = "synaptic_cleft_az_hull"
 MIN_AUNP_PARTNERS = 3
+# Keep aligned with ``ripley_library.DEFAULT_RIPLEY_R_MAX_NM`` (curves saved to this r_max).
 AZ_CENTER_RIPLEY_R_MAX_NM = 500.0
 AZ_CENTER_EDGE_GRID_SPACING_NM = 2.0
 # Stored/pooled g bin width: fine enough (1nm, matching the L12 r-step) that pooling across

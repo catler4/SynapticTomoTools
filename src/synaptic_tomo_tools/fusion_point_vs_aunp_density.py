@@ -854,7 +854,7 @@ def _add_figure_sample_note(fig, note: str, *, y: float = 0.01) -> None:
     )
 
 
-DEFAULT_RIPLEY_R_MAX_NM = 100.0
+DEFAULT_RIPLEY_R_MAX_NM = 500.0
 DEFAULT_RIPLEY_R_STEP_NM = 5.0
 DEFAULT_RIPLEY_N_PERM = 499
 RIPLEY_PLOT_X_MAX_NM = 100.0

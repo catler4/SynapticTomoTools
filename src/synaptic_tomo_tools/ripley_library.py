@@ -38,7 +38,7 @@ from .fusion_point_vs_aunp_density import load_presynaptic_az_points_for_zone
 # ============================================================================
 
 DEFAULT_ANALYSIS_SEED = 42
-DEFAULT_RIPLEY_R_MAX_NM = 100.0
+DEFAULT_RIPLEY_R_MAX_NM = 500.0
 DEFAULT_RIPLEY_R_STEP_NM = 1.0
 RIPLEY_PERCENTILE_LO = 2.5
 RIPLEY_PERCENTILE_HI = 97.5
