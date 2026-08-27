@@ -454,6 +454,8 @@ def generate_visualizations(tomo_paths, results_manager, rerun=False, print_asci
 
 # Canonical order of pipeline steps for `--analysis all`.
 PIPELINE_STEPS = ("cleft", "vesicles", "aunps", "visualizations")
+# Steps that can be cleared for CSV tomograms (pipeline + pose prediction).
+CLEARABLE_ANALYSIS_STEPS = PIPELINE_STEPS + ("poses",)
 
 
 def run_all_analyses(tomo_paths, results_manager, rerun=False, csv_path=None, 
@@ -666,82 +668,207 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
         except Exception as e:
             print(f"Warning: Could not write pooled fusion-point/AuNP Ripley L₁₂ figures: {e}")
 
-def delete_csv_tomogram_results(csv_path, results_dir="results", data_dir="data"):
-    """Delete results only for tomograms specified in the CSV file."""
-    print(f"Deleting results for tomograms specified in {csv_path}")
-    
-    # Load CSV to get list of tomograms
+def _filter_pooled_results_csvs_for_tomograms(
+    step_dir: Path,
+    tomogram_alignment_pairs: set[tuple[str, str]],
+    tomogram_names: set[str],
+) -> int:
+    """Remove rows matching CSV tomograms from pooled CSVs under ``results/{step}/``.
+
+    Returns the number of CSV files modified.
+    """
+    if not step_dir.is_dir():
+        return 0
+    modified = 0
+    for csv_path in sorted(step_dir.rglob("*.csv")):
+        try:
+            df = pd.read_csv(csv_path)
+        except Exception as exc:
+            print(f"  Skipping pooled CSV {csv_path}: {exc}")
+            continue
+        if df.empty:
+            continue
+        before = len(df)
+        if "tomogram_name" in df.columns and "alignment_dir" in df.columns:
+            pair_mask = df.apply(
+                lambda r: (
+                    str(r["tomogram_name"]).strip(),
+                    str(r["alignment_dir"]).strip(),
+                )
+                in tomogram_alignment_pairs,
+                axis=1,
+            )
+            df = df.loc[~pair_mask].copy()
+        elif "tomogram_name" in df.columns:
+            df = df.loc[
+                ~df["tomogram_name"].astype(str).str.strip().isin(tomogram_names)
+            ].copy()
+        else:
+            continue
+        if len(df) == before:
+            continue
+        df.to_csv(csv_path, index=False)
+        modified += 1
+        print(
+            f"  Filtered {before - len(df)} row(s) from {csv_path.relative_to(step_dir.parent)}"
+        )
+    return modified
+
+
+def delete_csv_tomogram_results(
+    csv_path,
+    results_dir="results",
+    data_dir="data",
+    analysis_type=None,
+):
+    """Delete results for tomograms specified in the CSV file.
+
+    If ``analysis_type`` is None, delete all analysis steps (JSON entries + whole
+    ``STT_results`` trees) for those tomograms.
+
+    If ``analysis_type`` is one of ``CLEARABLE_ANALYSIS_STEPS`` (e.g. ``aunps`` or
+    ``poses``), delete only that step: JSON step key when present,
+    ``STT_results/{analysis_type}/``, matching pooled CSV rows under
+    ``results/{analysis_type}/``, and for visualizations also
+    ``results/visualizations/{tomo}/{alignment}/``. For ``poses``, also removes
+    combined ``results/poses/all_ampa_poses*`` aggregate STAR files (rebuilt on
+    the next Pose Prediction run).
+    """
+    step = None if analysis_type is None else str(analysis_type).strip().lower()
+    if step is not None and step not in CLEARABLE_ANALYSIS_STEPS:
+        raise ValueError(
+            f"Unknown analysis step {analysis_type!r}; "
+            f"expected one of {', '.join(CLEARABLE_ANALYSIS_STEPS)}"
+        )
+
+    scope = f"step '{step}'" if step else "all steps"
+    print(f"Deleting {scope} results for tomograms specified in {csv_path}")
+
     try:
         df = pd.read_csv(csv_path)
-        if "alignment_dir" not in df.columns:
-            raise ValueError(
-                f"Column 'alignment_dir' not found in {csv_path}. "
-                "Cannot resolve results keys (tomogram__alignment_dir)."
-            )
+        for required in ("tomoname", "alignment_dir"):
+            if required not in df.columns:
+                raise ValueError(
+                    f"Column '{required}' not found in {csv_path}. "
+                    "Cannot resolve results keys (tomogram__alignment_dir)."
+                )
         csv_tomograms = set(df["tomoname"].astype(str).str.strip().tolist())
         print(f"Found {len(csv_tomograms)} distinct tomogram names in CSV")
     except Exception as e:
         print(f"Error reading CSV file {csv_path}: {e}")
         return
-    
-    # Delete specific tomogram results from the results directory
+
+    tomogram_alignment_pairs: set[tuple[str, str]] = set()
+    results_keys: set[str] = set()
+    for _, row in df.iterrows():
+        tomo = str(row["tomoname"]).strip()
+        alignment_dir = str(row["alignment_dir"]).strip()
+        if alignment_dir == "" or alignment_dir.lower() == "nan":
+            raise ValueError(
+                f"Missing alignment_dir for tomogram '{tomo}' in {csv_path}."
+            )
+        tomogram_alignment_pairs.add((tomo, alignment_dir))
+        results_keys.add(f"{tomo}__{alignment_dir}")
+        results_keys.add(tomo)  # legacy bare keys
+
     results_path = Path(results_dir)
-    if results_path.exists():
-        # Load existing results
+    deleted_json_count = 0
+    # Pose prediction is not stored in analysis_results.json today; skip JSON for poses.
+    if step != "poses" and results_path.exists():
         results_manager = ResultsManager(results_dir)
-        existing_results = results_manager.get_all_results()
-        
-        # Keys in analysis_results.json are tomogram__alignment_dir (see run_* in this module).
-        # Also remove legacy bare tomogram_name keys when that tomogram appears in the CSV.
-        keys_to_remove = set()
+        for key in sorted(results_keys):
+            if results_manager.delete_tomogram_results(
+                key, analysis_type=step, save=False
+            ):
+                deleted_json_count += 1
+                print(f"  Deleted {scope} JSON results for {key}")
+        if deleted_json_count:
+            results_manager._save_results()
+        print(f"Deleted {deleted_json_count} JSON result entr{'y' if deleted_json_count == 1 else 'ies'}")
+    elif step == "poses":
+        print("Skipping analysis_results.json (poses are not tracked there)")
+
+    # Prefer CSV set/tomoname/alignment paths when available; fall back to walk.
+    deleted_stt_count = 0
+    data_path = Path(data_dir)
+    has_set = "set" in df.columns
+
+    if has_set:
         for _, row in df.iterrows():
             tomo = str(row["tomoname"]).strip()
             alignment_dir = str(row["alignment_dir"]).strip()
-            if alignment_dir == "" or alignment_dir.lower() == "nan":
-                raise ValueError(
-                    f"Missing alignment_dir for tomogram '{tomo}' in {csv_path}."
-                )
-            keys_to_remove.add(f"{tomo}__{alignment_dir}")
-            keys_to_remove.add(tomo)
-
-        deleted_count = 0
-        for key in keys_to_remove:
-            if key in existing_results:
-                del existing_results[key]
-                deleted_count += 1
-                print(f"  Deleted results for {key}")
-        
-        # Save updated results
-        results_manager.results = existing_results
-        results_manager._save_results()
-        print(f"Deleted {deleted_count} results entries from results directory")
-    
-    # Delete STT_results directories for CSV tomograms only
-    data_path = Path(data_dir)
-    deleted_stt_count = 0
-    
-    for root, dirs, files in os.walk(data_path):
-        for d in dirs:
-            if d == "STT_results":
+            row_set = str(row["set"]).strip()
+            base = Path(TOMO_ROOT_BASE) / row_set / "TOP_TOMOS" / tomo / alignment_dir / "STT_results"
+            target = base if step is None else base / step
+            if target.exists():
+                print(f"  Deleting {target}...")
+                shutil.rmtree(target)
+                deleted_stt_count += 1
+            # If step-only and STT_results is now empty, leave the empty parent
+            # (harmless; next run recreates subdirs).
+    else:
+        for root, dirs, _files in os.walk(data_path):
+            for d in dirs:
+                if d != "STT_results":
+                    continue
                 stt_path = Path(root) / d
-                # Check if this STT_results belongs to a CSV tomogram
-                # The path should be: data/set_name/TOP_TOMOS/tomogram_name/best_alignment/STT_results
                 path_parts = stt_path.parts
-                
-                # Find the tomogram name in the path
                 tomogram_name = None
                 for i, part in enumerate(path_parts):
                     if part == "TOP_TOMOS" and i + 1 < len(path_parts):
                         tomogram_name = path_parts[i + 1]
                         break
-                
-                if tomogram_name and tomogram_name in csv_tomograms:
-                    print(f"  Deleting {stt_path}...")
-                    shutil.rmtree(stt_path)
+                if not tomogram_name or tomogram_name not in csv_tomograms:
+                    continue
+                target = stt_path if step is None else stt_path / step
+                if target.exists():
+                    print(f"  Deleting {target}...")
+                    shutil.rmtree(target)
                     deleted_stt_count += 1
-    
-    print(f"Deleted STT_results directories for {deleted_stt_count} tomograms")
-    print(f"Total: Deleted results for {len(csv_tomograms)} tomograms specified in CSV")
+
+    print(
+        f"Deleted STT_results"
+        f"{'' if step is None else '/' + step} "
+        f"for {deleted_stt_count} path(s)"
+    )
+
+    if step is not None and results_path.exists():
+        step_dir = results_path / step
+        n_csv = _filter_pooled_results_csvs_for_tomograms(
+            step_dir, tomogram_alignment_pairs, csv_tomograms
+        )
+        print(f"Updated {n_csv} pooled CSV file(s) under results/{step}/")
+
+        if step == "visualizations":
+            viz_root = results_path / "visualizations"
+            deleted_viz = 0
+            if viz_root.is_dir():
+                for tomo, alignment_dir in tomogram_alignment_pairs:
+                    viz_dir = viz_root / tomo / alignment_dir
+                    if viz_dir.exists():
+                        shutil.rmtree(viz_dir)
+                        deleted_viz += 1
+                        print(f"  Deleted {viz_dir}")
+                    # Remove empty tomogram parent if nothing else remains
+                    tomo_parent = viz_root / tomo
+                    if tomo_parent.is_dir() and not any(tomo_parent.iterdir()):
+                        tomo_parent.rmdir()
+            print(f"Deleted {deleted_viz} visualization output dir(s)")
+
+        if step == "poses":
+            # Combined aggregate STARs are rebuilt by the next Pose Prediction run.
+            poses_dir = results_path / "poses"
+            removed_agg = 0
+            if poses_dir.is_dir():
+                for path in poses_dir.glob("all_ampa_poses*"):
+                    if path.is_file():
+                        path.unlink()
+                        removed_agg += 1
+                        print(f"  Deleted aggregate {path}")
+            print(f"Deleted {removed_agg} aggregate poses file(s) under results/poses/")
+
+    print(f"Total: cleared {scope} for {len(csv_tomograms)} tomogram name(s) from CSV")
+
 
 def check_analysis_status(results_manager, results_key, analysis_type):
     """Check if an analysis completed successfully, failed, or hasn't been run.
@@ -863,6 +990,16 @@ def main():
     parser.add_argument(
         "--delete-results", action="store_true",
         help="Delete analysis results for tomograms specified in the CSV file (not all results)."
+    )
+    parser.add_argument(
+        "--delete-analysis-step",
+        type=str,
+        default=None,
+        choices=list(CLEARABLE_ANALYSIS_STEPS),
+        help=(
+            "With --delete-results, delete only this analysis step "
+            f"({', '.join(CLEARABLE_ANALYSIS_STEPS)}) instead of all steps for the CSV tomograms."
+        ),
     )
     parser.add_argument(
         "--check-files", action="store_true",
@@ -1048,7 +1185,12 @@ def main():
             args.csv = "data/tomograms.csv"
     
     if args.delete_results:
-        delete_csv_tomogram_results(args.csv, args.results_dir, "data")
+        delete_csv_tomogram_results(
+            args.csv,
+            args.results_dir,
+            "data",
+            analysis_type=args.delete_analysis_step,
+        )
 
     if args.check_files:
         tomos = load_tomograms(args.csv, args.analysis, args.set)

@@ -73,7 +73,44 @@ class ResultsManager:
         self.results[tomogram_name][analysis_type] = results_with_metadata
         self._save_results()
         print(f"Stored results for {tomogram_name} - {analysis_type}")
-    
+
+    def delete_tomogram_results(
+        self,
+        tomogram_name: str,
+        analysis_type: Optional[str] = None,
+        *,
+        save: bool = True,
+    ) -> bool:
+        """
+        Delete stored results for a tomogram.
+
+        Args:
+            tomogram_name: Results key (typically ``tomogram__alignment_dir``).
+            analysis_type: If set, remove only that step (e.g. ``aunps``).
+                If None, remove the entire tomogram entry.
+            save: If True, write ``analysis_results.json`` immediately.
+
+        Returns:
+            True if anything was removed.
+        """
+        if tomogram_name not in self.results:
+            return False
+
+        if analysis_type is None:
+            del self.results[tomogram_name]
+            if save:
+                self._save_results()
+            return True
+
+        entry = self.results[tomogram_name]
+        if analysis_type not in entry:
+            return False
+        del entry[analysis_type]
+        if not entry:
+            del self.results[tomogram_name]
+        if save:
+            self._save_results()
+        return True 
     def get_tomogram_results(self, tomogram_name: str, analysis_type: Optional[str] = None) -> Dict[str, Any]:
         """
         Retrieve results for a tomogram.

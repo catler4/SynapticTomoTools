@@ -527,6 +527,34 @@ class AnalysisPipelineGUI(tk.Tk):
         delete_btn.grid(row=12, column=0, columnspan=3, sticky=tk.W, pady=5)
         ToolTip(delete_btn, "Delete results from individual tomogram STT_results directories (for tomograms in CSV) and the results directory. Does NOT delete archived results.")
 
+        # Clear one analysis step (so incomplete sets can resume without --rerun)
+        clear_step_frame = ttk.Frame(frame)
+        clear_step_frame.grid(row=13, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+        ttk.Label(clear_step_frame, text="Clear analysis step:").pack(side=tk.LEFT, padx=(0, 5))
+        self.clear_analysis_step = tk.StringVar(value="aunps")
+        clear_step_combo = ttk.Combobox(
+            clear_step_frame,
+            textvariable=self.clear_analysis_step,
+            values=["cleft", "vesicles", "aunps", "visualizations", "poses"],
+            width=14,
+            state="readonly",
+        )
+        clear_step_combo.pack(side=tk.LEFT, padx=(0, 5))
+        clear_step_btn = ttk.Button(
+            clear_step_frame,
+            text="Clear step results for CSV tomograms",
+            command=self._clear_analysis_step_results,
+        )
+        clear_step_btn.pack(side=tk.LEFT)
+        ToolTip(
+            clear_step_btn,
+            "Delete only the selected analysis step for tomograms in the CSV "
+            "(respects All / Single / Start-from mode). For cleft/vesicles/aunps/"
+            "visualizations: clears status in analysis_results.json and "
+            "STT_results/{step}/. For poses: clears STT_results/poses/ and aggregate "
+            "results/poses/all_ampa_poses* files (poses are not tracked in "
+            "analysis_results.json). Other steps are left intact.",
+        )
     def _load_and_display_image(self, path, parent, max_width=400, max_height=180):
         try:
             img = Image.open(path)
@@ -1377,39 +1405,12 @@ Do you want to continue?"""
     
     def _delete_previous_results(self):
         """Delete previous results from tomogram STT_results and results directory."""
-        csv_path = self.csv_path.get()
-        if not csv_path:
-            messagebox.showerror("Error", "Please select a CSV file first to identify which tomograms to process.")
-            return
-        
-        # Get selected tomograms based on processing mode (same logic as _run_analysis)
-        processing_mode = self.processing_mode.get()
-        selected_tomogram = self.start_tomogram.get() if hasattr(self, 'start_tomogram') else None
-        
-        # Determine which tomograms to delete based on processing mode
         try:
-            df = pd.read_csv(csv_path)
-            if 'tomoname' not in df.columns:
-                messagebox.showerror("Error", "CSV file must contain a 'tomoname' column.")
-                return
-            
-            tomogram_names = df['tomoname'].tolist()
-            
-            if processing_mode == "Single tomogram" and selected_tomogram:
-                tomograms_to_delete = [selected_tomogram]
-                mode_description = f"single tomogram: {selected_tomogram}"
-            elif processing_mode == "Start from" and selected_tomogram:
-                start_idx = tomogram_names.index(selected_tomogram) if selected_tomogram in tomogram_names else 0
-                tomograms_to_delete = tomogram_names[start_idx:]
-                mode_description = f"tomograms starting from: {selected_tomogram} ({len(tomograms_to_delete)} tomograms)"
-            else:
-                # "All tomograms" mode
-                tomograms_to_delete = tomogram_names
-                mode_description = f"all tomograms in CSV ({len(tomograms_to_delete)} tomograms)"
+            df, tomograms_to_delete, mode_description = self._csv_tomograms_for_processing_mode()
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to read CSV file: {e}")
+            messagebox.showerror("Error", str(e))
             return
-        
+
         # Confirm deletion with specific tomogram list
         if not messagebox.askyesno("Confirm Deletion", 
                                    f"This will delete results for {mode_description}:\n\n"
@@ -1424,7 +1425,7 @@ Do you want to continue?"""
             # Create a temporary CSV with only the selected tomograms
             import tempfile
             temp_csv = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
-            temp_df = df[df['tomoname'].isin(tomograms_to_delete)]
+            temp_df = df[df['tomoname'].astype(str).str.strip().isin(tomograms_to_delete)]
             temp_df.to_csv(temp_csv.name, index=False)
             temp_csv.close()
             
@@ -1457,6 +1458,117 @@ Do you want to continue?"""
         except Exception as e:
             messagebox.showerror("Error", f"Failed to delete previous results: {e}")
             self._log(f"Error deleting previous results: {e}\n")
+    def _csv_tomograms_for_processing_mode(self):
+        """Return (df, tomograms_to_process, mode_description) from Home CSV + processing mode."""
+        csv_path = self.csv_path.get()
+        if not csv_path:
+            raise ValueError("Please select a CSV file first to identify which tomograms to process.")
+
+        processing_mode = self.processing_mode.get()
+        selected_tomogram = self.start_tomogram.get() if hasattr(self, "start_tomogram") else None
+
+        df = pd.read_csv(csv_path)
+        if "tomoname" not in df.columns:
+            raise ValueError("CSV file must contain a 'tomoname' column.")
+
+        tomogram_names = df["tomoname"].astype(str).str.strip().tolist()
+
+        if processing_mode == "Single tomogram" and selected_tomogram:
+            tomograms = [selected_tomogram]
+            mode_description = f"single tomogram: {selected_tomogram}"
+        elif processing_mode == "Start from" and selected_tomogram:
+            start_idx = (
+                tomogram_names.index(selected_tomogram)
+                if selected_tomogram in tomogram_names
+                else 0
+            )
+            tomograms = tomogram_names[start_idx:]
+            mode_description = (
+                f"tomograms starting from: {selected_tomogram} "
+                f"({len(tomograms)} tomograms)"
+            )
+        else:
+            tomograms = tomogram_names
+            mode_description = f"all tomograms in CSV ({len(tomograms)} tomograms)"
+
+        return df, tomograms, mode_description
+
+    def _clear_analysis_step_results(self):
+        """Clear one pipeline step for CSV tomograms so that step can be resumed without --rerun."""
+        try:
+            df, tomograms_to_clear, mode_description = self._csv_tomograms_for_processing_mode()
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+            return
+
+        step = (self.clear_analysis_step.get() or "").strip().lower()
+        if step not in ("cleft", "vesicles", "aunps", "visualizations", "poses"):
+            messagebox.showerror("Error", f"Unknown analysis step: {step}")
+            return
+
+        if step == "poses":
+            confirm_body = (
+                f"This will clear ONLY pose prediction outputs for {mode_description}:\n\n"
+                "- Delete STT_results/poses/ for those tomograms\n"
+                "- Delete aggregate results/poses/all_ampa_poses* files\n\n"
+                "Other analysis steps are kept.\n"
+                "Re-run Pose Prediction afterward to regenerate poses.\n\n"
+                "Continue?"
+            )
+        else:
+            confirm_body = (
+                f"This will clear ONLY the '{step}' analysis step for {mode_description}:\n\n"
+                f"- Remove '{step}' entries from results/analysis_results.json\n"
+                f"- Delete STT_results/{step}/ for those tomograms\n"
+                f"- Filter matching rows from results/{step}/ pooled CSVs\n\n"
+                "Other analysis steps are kept.\n"
+                "After this, run that step again WITHOUT Rerun — completed tomograms "
+                "for other steps stay skipped; cleared ones for this step will re-run.\n\n"
+                "Continue?"
+            )
+
+        if not messagebox.askyesno("Confirm Clear Step", confirm_body):
+            return
+
+        try:
+            import tempfile
+            import sys
+
+            temp_csv = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False)
+            temp_df = df[df["tomoname"].astype(str).str.strip().isin(tomograms_to_clear)]
+            temp_df.to_csv(temp_csv.name, index=False)
+            temp_csv.close()
+
+            if str(REPO_ROOT) not in sys.path:
+                sys.path.insert(0, str(REPO_ROOT))
+            from src.synaptic_tomo_tools.cli import delete_csv_tomogram_results
+
+            self._log(
+                f"Clearing '{step}' results for {mode_description}...\n"
+            )
+            delete_csv_tomogram_results(
+                temp_csv.name,
+                results_dir="results",
+                data_dir="data",
+                analysis_type=step,
+            )
+            os.unlink(temp_csv.name)
+
+            if step == "poses":
+                done_msg = (
+                    f"Cleared pose outputs for {mode_description}.\n"
+                    "Re-run Pose Prediction to regenerate them."
+                )
+            else:
+                done_msg = (
+                    f"Cleared '{step}' results for {mode_description}.\n"
+                    f"You can now re-run the {step} step without enabling Rerun."
+                )
+            messagebox.showinfo("Success", done_msg)
+            self._log(f"Cleared '{step}' results completed.\n")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to clear '{step}' results: {e}")
+            self._log(f"Error clearing '{step}' results: {e}\n")
 
     def _run_analysis(self, step, tab, generate_pdf=False):
         if step == "Full Pipeline":
