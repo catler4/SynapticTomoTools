@@ -19,6 +19,7 @@ than ``synaptic_cleft_az_hull``, etc.) stays in the analysis modules that use it
 from __future__ import annotations
 
 import os
+import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,15 @@ from scipy.spatial import ConvexHull, cKDTree
 from .alignment_utils import require_alignment_dir
 from .aunps import _read_aunp_pick_star_dataframe
 from .fusion_point_vs_aunp_density import load_presynaptic_az_points_for_zone
+
+# NumPy RuntimeWarnings when every replicate at a radius is NaN (g-shell masking, sparse
+# nulls, skipped zones in pooled tables). NaN outputs there are intentional.
+for _ripley_warn_msg in (
+    "Mean of empty slice",
+    "Degrees of freedom <= 0 for slice",
+    "invalid value encountered in scalar divide",
+):
+    warnings.filterwarnings("ignore", message=_ripley_warn_msg, category=RuntimeWarning)
 
 # ============================================================================
 # Shared constants
@@ -1408,7 +1418,9 @@ def mean_l_from_k_curves(k_curves: np.ndarray, r_vals: np.ndarray) -> np.ndarray
     k_mat = np.atleast_2d(np.asarray(k_curves, dtype=float))
     if k_mat.size == 0 or k_mat.shape[0] == 0:
         return np.full(len(r_vals), np.nan)
-    return ripley_l12(np.nanmean(k_mat, axis=0), r_vals)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean_k = np.nanmean(k_mat, axis=0)
+    return ripley_l12(mean_k, r_vals)
 
 
 def mean_l12_from_averaged_k12(
@@ -1724,10 +1736,11 @@ def mad_test_from_curves(
 
     # Diggle pooled mean: μ(r) = (L_obs + Σ L_null) / (N + 1). Same μ for T_obs and all T_s.
     all_curves = np.vstack([observed_s[None, :], null_s])
-    pooled_mean = np.nanmean(all_curves, axis=0)
-    # Pointwise CE stays null-only (what the null band looks like).
-    ce_lo = np.nanpercentile(null_s, lo_pct, axis=0)
-    ce_hi = np.nanpercentile(null_s, hi_pct, axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        pooled_mean = np.nanmean(all_curves, axis=0)
+        # Pointwise CE stays null-only (what the null band looks like).
+        ce_lo = np.nanpercentile(null_s, lo_pct, axis=0)
+        ce_hi = np.nanpercentile(null_s, hi_pct, axis=0)
     abs_diff = np.abs(observed_s - pooled_mean)
     T_obs = float(np.nanmax(abs_diff))
     r_at_max_idx = int(np.nanargmax(abs_diff))
@@ -2093,19 +2106,19 @@ def _weighted_nanmean(curves: np.ndarray, weights: np.ndarray | None) -> np.ndar
     curves = np.asarray(curves, dtype=float)
     if curves.size == 0:
         return np.array([])
-    if weights is None:
-        return np.nanmean(curves, axis=0)
-    weights = np.asarray(weights, dtype=float).reshape(-1, 1)
-    valid = ~np.isnan(curves)
-    w = np.where(valid, weights, 0.0)
-    wsum = w.sum(axis=0)
     with np.errstate(invalid="ignore", divide="ignore"):
+        if weights is None:
+            return np.nanmean(curves, axis=0)
+        weights = np.asarray(weights, dtype=float).reshape(-1, 1)
+        valid = ~np.isnan(curves)
+        w = np.where(valid, weights, 0.0)
+        wsum = w.sum(axis=0)
         mean = np.nansum(curves * w, axis=0) / wsum
-    # Columns with zero total weight (all-NaN, or all zero-weight curves) fall back to an
-    # unweighted mean rather than silently returning NaN/0.
-    zero_weight = wsum <= 0
-    if np.any(zero_weight):
-        mean[zero_weight] = np.nanmean(curves[:, zero_weight], axis=0)
+        # Columns with zero total weight (all-NaN, or all zero-weight curves) fall back to an
+        # unweighted mean rather than silently returning NaN/0.
+        zero_weight = wsum <= 0
+        if np.any(zero_weight):
+            mean[zero_weight] = np.nanmean(curves[:, zero_weight], axis=0)
     return mean
 
 
@@ -2120,9 +2133,10 @@ def _percentile_band(
     """
     if curves.size == 0:
         return np.array([]), np.array([]), np.array([])
-    lo = np.nanpercentile(curves, RIPLEY_PERCENTILE_LO, axis=0)
-    hi = np.nanpercentile(curves, RIPLEY_PERCENTILE_HI, axis=0)
-    med = _weighted_nanmean(curves, weights)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        lo = np.nanpercentile(curves, RIPLEY_PERCENTILE_LO, axis=0)
+        hi = np.nanpercentile(curves, RIPLEY_PERCENTILE_HI, axis=0)
+        med = _weighted_nanmean(curves, weights)
     return lo, med, hi
 
 
@@ -2136,9 +2150,9 @@ def _mean_sd_band(curves: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarra
     if curves.size == 0:
         empty = np.array([])
         return empty, empty, empty, empty
-    mean = np.nanmean(curves, axis=0)
     n_valid = np.sum(~np.isnan(curves), axis=0)
-    with np.errstate(invalid="ignore"):
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = np.nanmean(curves, axis=0)
         sd = np.nanstd(curves, axis=0, ddof=1)
     sd = np.where(n_valid > 1, sd, 0.0)
     return mean - sd, mean, mean + sd, sd
@@ -2153,9 +2167,9 @@ def _mean_sem_band(curves: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarr
     if curves.size == 0:
         empty = np.array([])
         return empty, empty, empty, empty
-    mean = np.nanmean(curves, axis=0)
     n_valid = np.sum(~np.isnan(curves), axis=0)
-    with np.errstate(invalid="ignore"):
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = np.nanmean(curves, axis=0)
         sd = np.nanstd(curves, axis=0, ddof=1)
         sem = sd / np.sqrt(np.maximum(n_valid, 1))
     sem = np.where(n_valid > 1, sem, 0.0)
