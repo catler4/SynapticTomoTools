@@ -660,8 +660,6 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
         print("AGGREGATING FUSION-POINT/AUNP POOLED RESULTS")
         print("=" * 60)
         try:
-            from pathlib import Path
-
             from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
                 plot_pooled_fusion_point_aunp_ripley_bidirectional_visualizations,
                 plot_pooled_fusion_point_aunp_ripley_g12_visualizations,
