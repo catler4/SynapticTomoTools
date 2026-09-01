@@ -657,16 +657,25 @@ def run_aunps(tomo_paths, results_manager, rerun=False, print_ascii=True,
 
     print("\n" + "=" * 60)
     if run_fusion_point_aunp_analyses:
-        print("AGGREGATING FUSION-POINT/AUNP RIPLEY L₁₂ RESULTS (POOLED)")
+        print("AGGREGATING FUSION-POINT/AUNP POOLED RESULTS")
         print("=" * 60)
         try:
+            from pathlib import Path
+
             from .fusion_point_aunp_position_distance_and_Ripleys_analyses import (
+                plot_pooled_fusion_point_aunp_ripley_bidirectional_visualizations,
+                plot_pooled_fusion_point_aunp_ripley_g12_visualizations,
                 plot_pooled_fusion_point_aunp_ripley_l12_visualizations,
+                write_pooled_fusion_point_aunp_distance_column_csvs,
             )
 
+            roots = [Path(tomo) for tomo, _, _, _ in tomo_paths]
+            write_pooled_fusion_point_aunp_distance_column_csvs(roots)
             plot_pooled_fusion_point_aunp_ripley_l12_visualizations()
+            plot_pooled_fusion_point_aunp_ripley_g12_visualizations()
+            plot_pooled_fusion_point_aunp_ripley_bidirectional_visualizations()
         except Exception as e:
-            print(f"Warning: Could not write pooled fusion-point/AuNP Ripley L₁₂ figures: {e}")
+            print(f"Warning: Could not write pooled fusion-point/AuNP outputs: {e}")
 
 def _filter_pooled_results_csvs_for_tomograms(
     step_dir: Path,

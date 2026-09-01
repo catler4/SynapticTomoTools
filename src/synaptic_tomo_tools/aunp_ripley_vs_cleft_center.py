@@ -37,7 +37,6 @@ from .ripley_library import (
     _intensity_weighted_combination,
     _isotropic_edge_factors_grid,
     _points_inside_hull,
-    _prism_long_to_wide,
     _prism_sd_envelope_columns,
     _ripley_r_grid,
     _safe_name,
@@ -45,7 +44,6 @@ from .ripley_library import (
     build_window_grid_points,
     cross_k12_3d_isotropic,
     curves_matrix_to_long_dataframe,
-    curves_matrix_to_wide_dataframe,
     g_shell_reliability_mask,
     load_synaptic_cleft_cleft_points,
     pair_correlation_from_k_diff,
@@ -70,6 +68,8 @@ AZ_CENTER_G12_SHELL_WIDTH_NM = 1.0
 # (pair_correlation_from_k_diff again, just with a larger bin_width_nm) for display only;
 # stored/pooled data stays at 1nm.
 AZ_CENTER_G12_DISPLAY_BIN_WIDTH_NM = 10.0
+# Pooled Prism g exports rebinned to this width (finer 1 nm shells are hard to read in Prism).
+AZ_CENTER_G12_PRISM_BIN_WIDTH_NM = 5.0
 
 # (pooled-table column prefix, raw L-column name, raw K-column name) for each of the three
 # K/L families: the direct K12/L12 (center-as-focus), the reversed K21/L21 (AuNPs-as-foci),
@@ -80,12 +80,440 @@ L_CURVE_FAMILIES: tuple[tuple[str, str, str], ...] = (
     ("center_L_combined", "l_combined", "k_combined"),
 )
 
+G_CURVE_FAMILIES: tuple[str, ...] = ("g12", "g21", "g_combined")
+
 POOLED_CURVES_CSV = Path("results/aunps/aunp_vs_az_center_ripley_l12_curves.csv")
 POOLED_PRISM_CSV = Path("results/aunps/aunp_vs_az_center_ripley_l12_prism_pooled.csv")
-POOLED_PRISM_WIDE_CSV = Path("results/aunps/aunp_vs_az_center_ripley_l12_prism_pooled_wide.csv")
 POOLED_FIGURES_DIR = Path("results/aunps/figures/aunp_vs_az_center_ripley_l12_pooled")
 POOLED_G12_CSV = Path("results/aunps/aunp_vs_az_center_ripley_g12_shells_curves.csv")
 POOLED_G12_POOLED_CSV = Path("results/aunps/aunp_vs_az_center_ripley_g12_pooled.csv")
+
+
+def _normalize_pool_groups(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure ``set_name`` / ``aunp_pick_label`` exist for pooled exports."""
+    out = df.copy()
+    if "set_name" not in out.columns:
+        out["set_name"] = ""
+    out["set_name"] = out["set_name"].fillna("").astype(str)
+    if "aunp_pick_label" not in out.columns:
+        out["aunp_pick_label"] = ""
+    else:
+        out["aunp_pick_label"] = out["aunp_pick_label"].fillna("").astype(str).str.strip()
+    return out
+
+
+def _pool_group_columns(df: pd.DataFrame) -> list[str]:
+    """Group keys for pooled tables: ``set_name``, plus ``aunp_pick_label`` when labeled."""
+    df = _normalize_pool_groups(df)
+    cols = ["set_name"]
+    labels = set(df["aunp_pick_label"].astype(str).str.strip())
+    labels.discard("")
+    if labels:
+        cols.append("aunp_pick_label")
+    return cols
+
+
+def _pool_group_tags(set_name: str, pick_label: str) -> tuple[str, str]:
+    set_tag = _safe_name(str(set_name)) or "all_sets"
+    pick_tag = _safe_name(str(pick_label)) if str(pick_label).strip() else "all_picks"
+    return set_tag, pick_tag
+
+
+def _unpack_pool_group_key(key) -> tuple[str, str]:
+    if isinstance(key, tuple):
+        set_name = str(key[0])
+        pick_label = str(key[1]) if len(key) > 1 else ""
+    else:
+        set_name = str(key)
+        pick_label = ""
+    return set_name, pick_label
+
+
+def _curve_id_columns(df: pd.DataFrame) -> list[str]:
+    id_cols = ["tomogram_name", "alignment_dir", "cleft_name"]
+    df_norm = _normalize_pool_groups(df)
+    labels = set(df_norm["aunp_pick_label"].astype(str).str.strip())
+    labels.discard("")
+    if labels:
+        id_cols.append("aunp_pick_label")
+    return id_cols
+
+
+def _g_prism_bin_tag(bin_width_nm: float) -> str:
+    if bin_width_nm == int(bin_width_nm):
+        return _safe_name(f"{int(bin_width_nm)}nm")
+    return _safe_name(f"{bin_width_nm}nm")
+
+
+def _coarse_g_shell_edges(
+    r_lo_fine: np.ndarray,
+    r_hi_fine: np.ndarray,
+    coarse_bin_width_nm: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    r_lo_fine = np.asarray(r_lo_fine, dtype=float)
+    r_hi_fine = np.asarray(r_hi_fine, dtype=float)
+    if len(r_lo_fine) == 0:
+        empty = np.array([])
+        return empty, empty, empty
+
+    r_max = float(np.nanmax(r_hi_fine))
+    coarse = float(coarse_bin_width_nm)
+    if coarse <= 0 or r_max <= 0:
+        return np.array([]), np.array([]), np.array([])
+
+    n_bins = int(np.floor(r_max / coarse))
+    if n_bins < 1:
+        return np.array([]), np.array([]), np.array([])
+
+    coarse_lo = np.arange(n_bins, dtype=float) * coarse
+    coarse_hi = coarse_lo + coarse
+    coarse_mid = 0.5 * (coarse_lo + coarse_hi)
+    return coarse_lo, coarse_hi, coarse_mid
+
+
+def _rebin_g_shell_values(
+    r_lo_fine: np.ndarray,
+    r_hi_fine: np.ndarray,
+    g_fine: np.ndarray,
+    coarse_bin_width_nm: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    coarse_lo, coarse_hi, coarse_mid = _coarse_g_shell_edges(
+        r_lo_fine, r_hi_fine, coarse_bin_width_nm
+    )
+    if len(coarse_lo) == 0:
+        return coarse_mid, coarse_lo, coarse_hi, np.array([])
+
+    g_fine = np.asarray(g_fine, dtype=float)
+    rebinned = np.full(len(coarse_lo), np.nan, dtype=float)
+    for i, (clo, chi) in enumerate(zip(coarse_lo, coarse_hi)):
+        overlap = (r_lo_fine < chi) & (r_hi_fine > clo) & np.isfinite(g_fine)
+        if not np.any(overlap):
+            continue
+        with np.errstate(invalid="ignore"):
+            rebinned[i] = np.nanmean(g_fine[overlap])
+    return coarse_mid, coarse_lo, coarse_hi, rebinned
+
+
+def rebin_g_curves_table(
+    df: pd.DataFrame,
+    *,
+    coarse_bin_width_nm: float,
+) -> pd.DataFrame:
+    """Rebin each tomogram×zone g curve to wider shells (display-oriented nanmean)."""
+    if df.empty:
+        return df.copy()
+
+    id_cols = _curve_id_columns(df)
+    for col in id_cols:
+        if col not in df.columns:
+            df = df.copy()
+            df[col] = ""
+
+    meta_cols = [
+        c
+        for c in df.columns
+        if c not in id_cols + ["r_nm", "r_lo_nm", "r_hi_nm"] + list(G_CURVE_FAMILIES)
+    ]
+    rows: list[dict] = []
+
+    for keys, grp in df.groupby(id_cols, sort=False):
+        grp = grp.sort_values("r_nm")
+        r_lo = grp["r_lo_nm"].to_numpy(dtype=float)
+        r_hi = grp["r_hi_nm"].to_numpy(dtype=float)
+        meta = {c: grp[c].iloc[0] for c in meta_cols if c in grp.columns}
+
+        coarse_lo, coarse_hi, coarse_mid = _coarse_g_shell_edges(r_lo, r_hi, coarse_bin_width_nm)
+        if len(coarse_mid) == 0:
+            continue
+
+        rebinned_g: dict[str, np.ndarray] = {}
+        for stem in G_CURVE_FAMILIES:
+            if stem not in grp.columns:
+                continue
+            _, _, _, rebinned_g[stem] = _rebin_g_shell_values(
+                r_lo, r_hi, grp[stem].to_numpy(dtype=float), coarse_bin_width_nm
+            )
+
+        key_tuple = keys if isinstance(keys, tuple) else (keys,)
+        for i in range(len(coarse_mid)):
+            row = {**meta, "g_bin_width_nm": float(coarse_bin_width_nm)}
+            for col, val in zip(id_cols, key_tuple):
+                row[col] = val
+            row.update(
+                {
+                    "r_nm": float(coarse_mid[i]),
+                    "r_lo_nm": float(coarse_lo[i]),
+                    "r_hi_nm": float(coarse_hi[i]),
+                }
+            )
+            for stem, vals in rebinned_g.items():
+                row[stem] = float(vals[i]) if i < len(vals) else np.nan
+            rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
+PRISM_AGG_STAT_SUFFIXES: tuple[str, ...] = (
+    "_mean",
+    "_sd",
+    "_sd_envelope_lo",
+    "_sd_envelope_hi",
+    "_sem",
+    "_sem_envelope_lo",
+    "_sem_envelope_hi",
+)
+
+
+def _infer_r_shell_edges_from_r_nm(r_nm: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Infer 1 nm shell edges when only distance centers are stored (``r_nm``)."""
+    r_nm = np.asarray(r_nm, dtype=float)
+    half = 0.5 * DEFAULT_RIPLEY_R_STEP_NM
+    return r_nm - half, r_nm + half
+
+
+def _prism_aggregated_stat_columns(df: pd.DataFrame) -> list[str]:
+    stat_cols: list[str] = []
+    for col in df.columns:
+        if any(col.endswith(suffix) for suffix in PRISM_AGG_STAT_SUFFIXES):
+            stat_cols.append(col)
+    return stat_cols
+
+
+def rebin_pooled_prism_aggregated_table(
+    df: pd.DataFrame,
+    *,
+    coarse_bin_width_nm: float,
+) -> pd.DataFrame:
+    """
+    Rebin an already-pooled Prism table (mean ± SD/SEM per ``r_nm``) to wider distance bins.
+
+    Intended for converting combined multi-set exports such as
+    ``aunp_vs_az_center_ripley_l12_prism_pooled.csv`` into coarser bins for Prism plotting.
+    Stat columns are NaN-averaged within each coarse shell overlap region.
+    """
+    if df.empty or "r_nm" not in df.columns:
+        return df.copy()
+
+    r_lo, r_hi = _infer_r_shell_edges_from_r_nm(df["r_nm"].to_numpy(dtype=float))
+    coarse_lo, coarse_hi, coarse_mid = _coarse_g_shell_edges(
+        r_lo, r_hi, coarse_bin_width_nm
+    )
+    if len(coarse_mid) == 0:
+        return pd.DataFrame()
+
+    stat_cols = _prism_aggregated_stat_columns(df)
+    meta_cols = [
+        c
+        for c in df.columns
+        if c not in stat_cols + ["r_nm", "r_lo_nm", "r_hi_nm"]
+    ]
+    count_cols = [
+        c
+        for c in ("n_zone_curves", "n_zone_shells", "n_tomograms", "n_clefts")
+        if c in df.columns
+    ]
+
+    rows: list[dict] = []
+    for i, (clo, chi, cmid) in enumerate(zip(coarse_lo, coarse_hi, coarse_mid)):
+        overlap = (r_lo < chi) & (r_hi > clo)
+        if not np.any(overlap):
+            continue
+        chunk = df.loc[overlap]
+        row = {c: chunk[c].iloc[0] for c in meta_cols if c in chunk.columns}
+        row["r_nm"] = float(cmid)
+        if "r_lo_nm" in df.columns:
+            row["r_lo_nm"] = float(clo)
+        if "r_hi_nm" in df.columns:
+            row["r_hi_nm"] = float(chi)
+        for c in count_cols:
+            row[c] = float(np.nanmean(chunk[c].to_numpy(dtype=float)))
+        for c in stat_cols:
+            row[c] = float(np.nanmean(chunk[c].to_numpy(dtype=float)))
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
+def write_pooled_az_center_l_prism_exports(
+    prism_df: pd.DataFrame,
+    *,
+    out_dir: Path,
+    coarse_bin_width_nm: float = AZ_CENTER_G12_PRISM_BIN_WIDTH_NM,
+) -> list[Path]:
+    """
+    Write per-set (and per pick-label when present) L₁₂ Prism tables rebinned to
+    ``coarse_bin_width_nm`` from an aggregated pooled Prism table.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    bin_tag = _g_prism_bin_tag(coarse_bin_width_nm)
+    written: list[Path] = []
+
+    df = _normalize_pool_groups(prism_df)
+    for key, sub in df.groupby(_pool_group_columns(df), sort=False):
+        set_name, pick_label = _unpack_pool_group_key(key)
+        set_tag, pick_tag = _pool_group_tags(set_name, pick_label)
+
+        table = rebin_pooled_prism_aggregated_table(
+            sub, coarse_bin_width_nm=coarse_bin_width_nm
+        )
+        if table.empty:
+            continue
+
+        pooled_path = out_dir / (
+            f"aunp_vs_az_center_ripley_l12_prism_pooled_{set_tag}_{pick_tag}_{bin_tag}.csv"
+        )
+        table.to_csv(pooled_path, index=False)
+        written.append(pooled_path)
+
+    return written
+
+
+def write_pooled_az_center_g12_aggregated_exports(
+    pooled_df: pd.DataFrame,
+    *,
+    out_dir: Path,
+    coarse_bin_width_nm: float = AZ_CENTER_G12_PRISM_BIN_WIDTH_NM,
+) -> list[Path]:
+    """
+    Write per-set (and per pick-label when present) g₁₂ Prism tables rebinned to
+    ``coarse_bin_width_nm`` from an aggregated pooled table such as
+    ``aunp_vs_az_center_ripley_g12_pooled.csv``.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    bin_tag = _g_prism_bin_tag(coarse_bin_width_nm)
+    written: list[Path] = []
+
+    df = _normalize_pool_groups(pooled_df)
+    for key, sub in df.groupby(_pool_group_columns(df), sort=False):
+        set_name, pick_label = _unpack_pool_group_key(key)
+        set_tag, pick_tag = _pool_group_tags(set_name, pick_label)
+
+        table = rebin_pooled_prism_aggregated_table(
+            sub, coarse_bin_width_nm=coarse_bin_width_nm
+        )
+        if table.empty:
+            continue
+
+        pooled_path = out_dir / (
+            f"aunp_vs_az_center_ripley_g12_pooled_{set_tag}_{pick_tag}_{bin_tag}.csv"
+        )
+        table.to_csv(pooled_path, index=False)
+        written.append(pooled_path)
+
+    return written
+
+
+def write_pooled_az_center_g_prism_exports(
+    df: pd.DataFrame,
+    *,
+    out_dir: Path,
+    coarse_bin_width_nm: float = AZ_CENTER_G12_PRISM_BIN_WIDTH_NM,
+) -> list[Path]:
+    """
+    Write per-set (and per pick-label when present) Prism tables at ``coarse_bin_width_nm``.
+
+    Each pool group gets its own pooled mean ± SEM CSV plus optional individual-wide g tables.
+  """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    bin_tag = _g_prism_bin_tag(coarse_bin_width_nm)
+    written: list[Path] = []
+
+    df = _normalize_pool_groups(df)
+    for key, sub in df.groupby(_pool_group_columns(df), sort=False):
+        set_name, pick_label = _unpack_pool_group_key(key)
+        set_tag, pick_tag = _pool_group_tags(set_name, pick_label)
+
+        table = build_pooled_aunp_vs_az_center_g12_table(sub)
+        if table.empty:
+            continue
+
+        pooled_path = out_dir / (
+            f"aunp_vs_az_center_ripley_g12_prism_pooled_{set_tag}_{pick_tag}_{bin_tag}.csv"
+        )
+        table.to_csv(pooled_path, index=False)
+        written.append(pooled_path)
+
+        for file_stem, value_col in [
+            ("g12", "g12"),
+            ("g21", "g21"),
+            ("g_combined", "g_combined"),
+        ]:
+            if value_col not in sub.columns:
+                continue
+            wide = build_pooled_az_center_individual_wide_table(sub, value_col=value_col)
+            if wide.shape[1] <= 1:
+                continue
+            wide_path = out_dir / (
+                f"aunp_vs_az_center_ripley_{file_stem}_individual_wide_{set_tag}_{pick_tag}_{bin_tag}.csv"
+            )
+            wide.to_csv(wide_path, index=False)
+            written.append(wide_path)
+
+    return written
+
+
+def build_pooled_az_center_individual_wide_table(
+    sub: pd.DataFrame,
+    *,
+    value_col: str,
+) -> pd.DataFrame:
+    """Prism XY: one row per ``r_nm``, one column per tomogram+zone curve."""
+    if sub.empty or value_col not in sub.columns:
+        return pd.DataFrame()
+
+    sub = sub.copy()
+    r_vals = np.sort(sub["r_nm"].unique())
+    n_r = len(r_vals)
+    r_index = {round(float(r), 6): i for i, r in enumerate(r_vals)}
+    id_cols = ["tomogram_name", "alignment_dir", "cleft_name"]
+    for col in id_cols:
+        if col not in sub.columns:
+            sub[col] = ""
+
+    data: dict[str, np.ndarray] = {"r_nm": r_vals}
+    for keys, grp in sub.groupby(id_cols, sort=False):
+        tomogram_name = str(keys[0])
+        cleft_name = str(keys[2]) if len(keys) > 2 else str(keys[-1])
+        col = _safe_name(f"{tomogram_name}_{cleft_name}")
+        curve = np.full(n_r, np.nan)
+        for r_nm, value in zip(
+            grp["r_nm"].to_numpy(dtype=float), grp[value_col].to_numpy(dtype=float)
+        ):
+            idx = r_index.get(round(float(r_nm), 6))
+            if idx is not None:
+                curve[idx] = value
+        data[col] = curve
+    return pd.DataFrame(data)
+
+
+def _write_pooled_az_center_individual_wide_exports(
+    df: pd.DataFrame,
+    *,
+    out_dir: Path,
+) -> list[Path]:
+    """Write per-set/per-pick-label wide curve tables for Prism (l12, l21, l_combined)."""
+    df = _normalize_pool_groups(df)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    family_cols = [("l12", "l12"), ("l21", "l21"), ("l_combined", "l_combined")]
+    for key, sub in df.groupby(_pool_group_columns(df), sort=False):
+        set_name, pick_label = _unpack_pool_group_key(key)
+        set_tag, pick_tag = _pool_group_tags(set_name, pick_label)
+        for file_stem, value_col in family_cols:
+            if value_col not in sub.columns:
+                continue
+            wide = build_pooled_az_center_individual_wide_table(sub, value_col=value_col)
+            if wide.shape[1] <= 1:
+                continue
+            path = out_dir / (
+                f"aunp_vs_az_center_ripley_{file_stem}_individual_wide_{set_tag}_{pick_tag}.csv"
+            )
+            wide.to_csv(path, index=False)
+            written.append(path)
+    return written
 
 
 _AZ_CENTER_MAX_ITER = 5
@@ -269,13 +697,11 @@ def build_pooled_aunp_vs_az_center_prism_table(df: pd.DataFrame) -> pd.DataFrame
     if df.empty:
         return pd.DataFrame()
 
-    df = df.copy()
-    if "set_name" not in df.columns:
-        df["set_name"] = ""
-    df["set_name"] = df["set_name"].fillna("").astype(str)
+    df = _normalize_pool_groups(df)
 
     rows: list[dict] = []
-    for set_name, sub in df.groupby("set_name", sort=False):
+    for key, sub in df.groupby(_pool_group_columns(df), sort=False):
+        set_name, pick_label = _unpack_pool_group_key(key)
         anchor_r_vals: np.ndarray | None = None
         anchor_n_valid: np.ndarray | None = None
         family_envelopes: dict[str, dict[str, np.ndarray]] = {}
@@ -302,6 +728,7 @@ def build_pooled_aunp_vs_az_center_prism_table(df: pd.DataFrame) -> pd.DataFrame
         for i, r_nm in enumerate(anchor_r_vals):
             row = {
                 "set_name": set_name,
+                "aunp_pick_label": pick_label,
                 "window_mode": WINDOW_MODE,
                 "r_nm": float(r_nm),
                 "n_zone_curves": int(anchor_n_valid[i]),
@@ -324,9 +751,6 @@ def build_pooled_aunp_vs_az_center_prism_table(df: pd.DataFrame) -> pd.DataFrame
     return pd.DataFrame(rows)
 
 
-G_CURVE_FAMILIES: tuple[str, ...] = ("g12", "g21", "g_combined")
-
-
 def build_pooled_aunp_vs_az_center_g12_table(df: pd.DataFrame) -> pd.DataFrame:
     """Pooled mean ± SD/SEM of g (local shell density) across tomogram-zone shells, per set,
     for each of ``G_CURVE_FAMILIES``: direct g₁₂ (center-as-focus, the original statistic),
@@ -343,13 +767,11 @@ def build_pooled_aunp_vs_az_center_g12_table(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
 
-    df = df.copy()
-    if "set_name" not in df.columns:
-        df["set_name"] = ""
-    df["set_name"] = df["set_name"].fillna("").astype(str)
+    df = _normalize_pool_groups(df)
 
     rows: list[dict] = []
-    for set_name, sub in df.groupby("set_name", sort=False):
+    for key, sub in df.groupby(_pool_group_columns(df), sort=False):
+        set_name, pick_label = _unpack_pool_group_key(key)
         anchor_r_vals: np.ndarray | None = None
         anchor_n_valid: np.ndarray | None = None
         family_envelopes: dict[str, dict[str, np.ndarray]] = {}
@@ -378,6 +800,7 @@ def build_pooled_aunp_vs_az_center_g12_table(df: pd.DataFrame) -> pd.DataFrame:
         for i, r_nm in enumerate(anchor_r_vals):
             row = {
                 "set_name": set_name,
+                "aunp_pick_label": pick_label,
                 "window_mode": WINDOW_MODE,
                 "r_nm": float(r_nm),
                 "r_lo_nm": float(r_lo[i]),
@@ -731,9 +1154,6 @@ def run_aunp_vs_az_center_ripley_for_zone(
     )
     individual_path = out_dir / "ripley_l12_individual_curves.csv"
     individual_df.to_csv(individual_path, index=False)
-    curves_matrix_to_wide_dataframe(
-        np.atleast_2d(l12), r_vals, curve_type="observed"
-    ).to_csv(out_dir / "ripley_l12_individual_observed_wide.csv", index=False)
 
     prism_df = build_aunp_vs_az_center_prism_table(
         zone_name=zone_name,
@@ -749,9 +1169,6 @@ def run_aunp_vs_az_center_ripley_for_zone(
     )
     prism_path = out_dir / "ripley_l12_prism.csv"
     prism_df.to_csv(prism_path, index=False)
-    _prism_long_to_wide(prism_df, id_cols=["cleft_name", "window_mode"]).to_csv(
-        out_dir / "ripley_l12_prism_wide.csv", index=False
-    )
 
     if write_figures:
         fig, ax = plt.subplots(figsize=(6, 4))
@@ -929,6 +1346,7 @@ def _plot_pooled_l_family_figure(
     *,
     prefix: str,
     set_name: str,
+    pick_label: str = "",
     output_dir: Path,
 ) -> Path | None:
     """One pooled mean ± SEM figure for one L-family curve (a row of ``L_CURVE_FAMILIES``).
@@ -953,8 +1371,9 @@ def _plot_pooled_l_family_figure(
     ax.axhline(0.0, color="0.5", ls="--", lw=0.8)
     ax.set_xlabel("r (nm)")
     ax.set_ylabel(f"Ripley {label}(r)")
+    pick_title = f", pick: {pick_label}" if str(pick_label).strip() else ""
     ax.set_title(
-        f"Pooled AuNP vs synaptic cleft center ({label}) — set: {set_name}\n"
+        f"Pooled AuNP vs synaptic cleft center ({label}) — set: {set_name}{pick_title}\n"
         f"{int(meta['n_tomograms'])} tomogram(s), {int(meta['n_clefts'])} zone(s), "
         f"{int(meta['n_zone_curves'])} curves"
     )
@@ -963,8 +1382,10 @@ def _plot_pooled_l_family_figure(
     fig.tight_layout()
 
     set_tag = _safe_name(str(set_name)) or "unspecified"
+    pick_tag = _safe_name(str(pick_label)) if str(pick_label).strip() else ""
     stem = prefix.replace("center_", "").lower()
-    out_path = output_dir / f"ripley_{stem}_pooled_mean_sd_{set_tag}.png"
+    pick_suffix = f"_{pick_tag}" if pick_tag else ""
+    out_path = output_dir / f"ripley_{stem}_pooled_mean_sd_{set_tag}{pick_suffix}.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Pooled AuNP vs AZ-center Ripley {label} figure (set {set_name}) -> {out_path}")
@@ -976,6 +1397,7 @@ def _plot_pooled_g_family_figure(
     *,
     stem: str,
     set_name: str,
+    pick_label: str = "",
     output_dir: Path,
 ) -> Path | None:
     """One pooled mean ± SEM figure for one g-family curve (a member of ``G_CURVE_FAMILIES``).
@@ -1000,8 +1422,9 @@ def _plot_pooled_g_family_figure(
     ax.axhline(1.0, color="0.5", ls="--", lw=0.8, label="CSR (g=1)")
     ax.set_xlabel("r (nm)")
     ax.set_ylabel(f"{label}(r) = observed / expected AuNP shell density")
+    pick_title = f", pick: {pick_label}" if str(pick_label).strip() else ""
     ax.set_title(
-        f"Pooled AuNP vs synaptic cleft center {label} — set: {set_name}\n"
+        f"Pooled AuNP vs synaptic cleft center {label} — set: {set_name}{pick_title}\n"
         f"{int(meta['n_tomograms'])} tomogram(s), {int(meta['n_clefts'])} zone(s)"
     )
     ax.set_xlim(0.0, float(r_vals[-1]) if len(r_vals) else AZ_CENTER_RIPLEY_R_MAX_NM)
@@ -1009,7 +1432,9 @@ def _plot_pooled_g_family_figure(
     fig.tight_layout()
 
     set_tag = _safe_name(str(set_name)) or "unspecified"
-    out_path = output_dir / f"{stem}_pooled_mean_sd_{set_tag}.png"
+    pick_tag = _safe_name(str(pick_label)) if str(pick_label).strip() else ""
+    pick_suffix = f"_{pick_tag}" if pick_tag else ""
+    out_path = output_dir / f"{stem}_pooled_mean_sd_{set_tag}{pick_suffix}.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Pooled AuNP vs AZ-center {label} figure (set {set_name}) -> {out_path}")
@@ -1020,7 +1445,6 @@ def plot_pooled_aunp_vs_az_center_ripley_visualizations(
     curves_csv: Path | str = POOLED_CURVES_CSV,
     output_dir: Path | str = POOLED_FIGURES_DIR,
     prism_csv: Path | str = POOLED_PRISM_CSV,
-    prism_wide_csv: Path | str = POOLED_PRISM_WIDE_CSV,
     g12_csv: Path | str = POOLED_G12_CSV,
     g12_pooled_csv: Path | str = POOLED_G12_POOLED_CSV,
 ) -> list[Path]:
@@ -1028,7 +1452,6 @@ def plot_pooled_aunp_vs_az_center_ripley_visualizations(
     curves_csv = Path(curves_csv)
     output_dir = Path(output_dir)
     prism_csv = Path(prism_csv)
-    prism_wide_csv = Path(prism_wide_csv)
     g12_csv = Path(g12_csv)
     g12_pooled_csv = Path(g12_pooled_csv)
 
@@ -1048,22 +1471,46 @@ def plot_pooled_aunp_vs_az_center_ripley_visualizations(
             else:
                 prism_csv.parent.mkdir(parents=True, exist_ok=True)
                 prism_long.to_csv(prism_csv, index=False)
-                _prism_long_to_wide(prism_long, id_cols=["set_name", "window_mode"]).to_csv(
-                    prism_wide_csv, index=False
-                )
                 print(f"Pooled AuNP vs AZ-center Ripley Prism table ({len(prism_long)} rows) -> {prism_csv}")
-                written += [prism_csv, prism_wide_csv]
+                written.append(prism_csv)
+
+                l_prism_written = write_pooled_az_center_l_prism_exports(
+                    prism_long,
+                    out_dir=prism_csv.parent,
+                    coarse_bin_width_nm=AZ_CENTER_G12_PRISM_BIN_WIDTH_NM,
+                )
+                written += l_prism_written
+                for path in l_prism_written:
+                    print(f"Pooled AuNP vs AZ-center L₁₂ Prism export -> {path}")
+
+            individual_written = _write_pooled_az_center_individual_wide_exports(
+                df, out_dir=prism_csv.parent
+            )
+            written += individual_written
+            for path in individual_written:
+                print(f"Pooled AuNP vs AZ-center individual wide curves -> {path}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for set_name, grp in (prism_long.groupby("set_name", sort=False) if not prism_long.empty else []):
-        grp = grp.sort_values("r_nm")
-        for prefix, _, _ in L_CURVE_FAMILIES:
-            out_path = _plot_pooled_l_family_figure(
-                grp, prefix=prefix, set_name=set_name, output_dir=output_dir
-            )
-            if out_path is not None:
-                written.append(out_path)
+    if not prism_long.empty:
+        group_cols = ["set_name"]
+        if "aunp_pick_label" in prism_long.columns and prism_long["aunp_pick_label"].astype(
+            str
+        ).str.strip().any():
+            group_cols.append("aunp_pick_label")
+        for key, grp in prism_long.groupby(group_cols, sort=False):
+            set_name, pick_label = _unpack_pool_group_key(key)
+            grp = grp.sort_values("r_nm")
+            for prefix, _, _ in L_CURVE_FAMILIES:
+                out_path = _plot_pooled_l_family_figure(
+                    grp,
+                    prefix=prefix,
+                    set_name=set_name,
+                    pick_label=pick_label,
+                    output_dir=output_dir,
+                )
+                if out_path is not None:
+                    written.append(out_path)
 
     if not g12_csv.is_file():
         print(f"No pooled AuNP vs AZ-center g₁₂ CSV at {g12_csv}; skipping g₁₂ pooled outputs.")
@@ -1081,14 +1528,32 @@ def plot_pooled_aunp_vs_az_center_ripley_visualizations(
 
     g12_pooled_csv.parent.mkdir(parents=True, exist_ok=True)
     g12_pooled.to_csv(g12_pooled_csv, index=False)
-    print(f"Pooled AuNP vs AZ-center g₁₂ table ({len(g12_pooled)} rows) -> {g12_pooled_csv}")
+    print(f"Pooled AuNP vs AZ-center g₁₂ table (1 nm shells, {len(g12_pooled)} rows) -> {g12_pooled_csv}")
     written.append(g12_pooled_csv)
 
-    for set_name, grp in g12_pooled.groupby("set_name", sort=False):
+    g12_rebinned = rebin_g_curves_table(
+        g12_df, coarse_bin_width_nm=AZ_CENTER_G12_PRISM_BIN_WIDTH_NM
+    )
+    if not g12_rebinned.empty:
+        g_prism_written = write_pooled_az_center_g_prism_exports(
+            g12_rebinned,
+            out_dir=g12_pooled_csv.parent,
+            coarse_bin_width_nm=AZ_CENTER_G12_PRISM_BIN_WIDTH_NM,
+        )
+        written += g_prism_written
+        for path in g_prism_written:
+            print(f"Pooled AuNP vs AZ-center g₁₂ Prism export -> {path}")
+
+    for key, grp in g12_pooled.groupby(_pool_group_columns(g12_pooled), sort=False):
+        set_name, pick_label = _unpack_pool_group_key(key)
         grp = grp.sort_values("r_nm")
         for stem in G_CURVE_FAMILIES:
             out_path = _plot_pooled_g_family_figure(
-                grp, stem=stem, set_name=set_name, output_dir=output_dir
+                grp,
+                stem=stem,
+                set_name=set_name,
+                pick_label=pick_label,
+                output_dir=output_dir,
             )
             if out_path is not None:
                 written.append(out_path)

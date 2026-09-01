@@ -731,29 +731,46 @@ def _append_tomogram_results_csv(
     d = df.copy()
     d["set_name"] = set_name
     d["alignment_dir"] = alignment_dir
+    d["tomogram_name"] = tomogram_name
     label = (aunp_pick_label or "").strip()
     d["aunp_pick_label"] = label
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         if csv_path.exists():
             df_existing = pd.read_csv(csv_path)
-            if "alignment_dir" not in df_existing.columns:
-                df_existing["alignment_dir"] = ""
-            if "aunp_pick_label" not in df_existing.columns:
-                df_existing["aunp_pick_label"] = ""
+            for col, default in (
+                ("tomogram_name", ""),
+                ("alignment_dir", ""),
+                ("aunp_pick_label", ""),
+            ):
+                if col not in df_existing.columns:
+                    df_existing[col] = default
+            existing_labels = df_existing["aunp_pick_label"].fillna("").astype(str)
             df_existing = df_existing[
                 ~(
-                    (df_existing["tomogram_name"] == tomogram_name)
-                    & (df_existing["alignment_dir"] == alignment_dir)
-                    & (df_existing["aunp_pick_label"].fillna("").astype(str) == label)
+                    (df_existing["tomogram_name"].astype(str) == str(tomogram_name))
+                    & (df_existing["alignment_dir"].astype(str) == str(alignment_dir))
+                    & (existing_labels == label)
                 )
             ]
-            pd.concat([df_existing, d], ignore_index=True).to_csv(csv_path, index=False)
+            merged = pd.concat([df_existing, d], ignore_index=True)
         else:
-            d.to_csv(csv_path, index=False)
+            merged = d
+        merged.to_csv(csv_path, index=False)
+        n_tomos = int(merged["tomogram_name"].astype(str).nunique()) if "tomogram_name" in merged.columns else 0
+        print(
+            f"Updated {csv_path.name}: +{len(d)} rows for {tomogram_name} "
+            f"({len(merged)} total rows, {n_tomos} tomogram(s))"
+        )
     except Exception as exc:
-        print(f"Error updating {csv_path.name}: {exc}")
-        d.to_csv(csv_path, index=False)
+        print(f"Error updating {csv_path.name} for {tomogram_name}: {exc}")
+        import traceback
+
+        traceback.print_exc()
+        print(
+            f"  Pooled file {csv_path} was NOT overwritten "
+            f"(previous tomogram rows are preserved)."
+        )
 
 
 def _tagged_aunp_output_name(stem: str, aunp_pick_label: Optional[str], suffix: str = ".csv") -> str:
@@ -1173,6 +1190,8 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
                     )
                 if prism_frames:
                     df_prism = pd.concat(prism_frames, ignore_index=True)
+                    if "tomogram_name" not in df_prism.columns:
+                        df_prism.insert(0, "tomogram_name", tomogram_name)
                     _append_tomogram_results_csv(
                         df_prism,
                         Path("results/aunps/fusion_point_aunp_ripley_l12_prism_envelopes.csv"),
@@ -1193,6 +1212,8 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
                     )
                 if g_prism_frames:
                     df_g_prism = pd.concat(g_prism_frames, ignore_index=True)
+                    if "tomogram_name" not in df_g_prism.columns:
+                        df_g_prism.insert(0, "tomogram_name", tomogram_name)
                     _append_tomogram_results_csv(
                         df_g_prism,
                         Path("results/aunps/fusion_point_aunp_ripley_g12_prism_envelopes.csv"),

@@ -1709,7 +1709,7 @@ def _save_fusion_vs_control_by_d_figures(
             dpi=150,
             bbox_inches="tight",
         )
-        plt.close(fig)
+    plt.close(fig)
 
 
 def _replicate_mean(curves: np.ndarray) -> np.ndarray:

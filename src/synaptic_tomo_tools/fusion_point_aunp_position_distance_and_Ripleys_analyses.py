@@ -101,12 +101,10 @@ ANALYSES_SUBDIR = "fusion_point_aunp_analyses"
 
 POOLED_RIPLEY_CURVES_CSV = Path("results/aunps/fusion_point_aunp_ripley_l12_curves.csv")
 POOLED_RIPLEY_PRISM_CSV = Path("results/aunps/fusion_point_aunp_ripley_l12_prism_envelopes_pooled.csv")
-POOLED_RIPLEY_PRISM_WIDE_CSV = Path("results/aunps/fusion_point_aunp_ripley_l12_prism_envelopes_pooled_wide.csv")
 POOLED_RIPLEY_FIGURES_DIR = Path("results/aunps/figures/fusion_point_aunp_ripley_l12_pooled")
 
 POOLED_G_CURVES_CSV = Path("results/aunps/fusion_point_aunp_ripley_g12_curves.csv")
 POOLED_G_PRISM_CSV = Path("results/aunps/fusion_point_aunp_ripley_g12_prism_envelopes_pooled.csv")
-POOLED_G_PRISM_WIDE_CSV = Path("results/aunps/fusion_point_aunp_ripley_g12_prism_envelopes_pooled_wide.csv")
 POOLED_G_FIGURES_DIR = Path("results/aunps/figures/fusion_point_aunp_ripley_g12_pooled")
 
 # Bidirectional K/L/g families (12: fusion-type-as-foci, 21: AuNPs-as-foci, combined:
@@ -508,45 +506,6 @@ def build_ripley_l12_prism_envelope_table(
     return pd.DataFrame(rows)
 
 
-def build_ripley_l12_prism_wide_table(
-    prism_long: pd.DataFrame,
-    *,
-    id_cols: Sequence[str] | None = None,
-) -> pd.DataFrame:
-    """
-    Wide layout for Prism XY tables: one row per ``r_nm`` per window/comparison.
-
-    Columns: r_nm, fusing/control means, percentile envelopes, mean ± SD envelopes (+ identifiers).
-    """
-    if prism_long.empty:
-        return prism_long.copy()
-    if id_cols is None:
-        id_cols = ["cleft_name", "aunp_subset", "window_mode", "control_comparison"]
-    value_cols = [
-        col
-        for col in (
-            "fusing_L12_mean",
-            "fusing_L12_sd",
-            "fusing_L12_sd_envelope_lo",
-            "fusing_L12_sd_envelope_hi",
-            "control_L12_mean",
-            "control_L12_sd",
-            "control_L12_envelope_lo",
-            "control_L12_envelope_hi",
-            "control_L12_sd_envelope_lo",
-            "control_L12_sd_envelope_hi",
-            "n_fusing_curves",
-            "n_control_curves",
-            "n_aunp_partners",
-            "n_tomograms",
-            "n_clefts",
-            "window_volume_nm3",
-        )
-        if col in prism_long.columns
-    ]
-    return prism_long[list(id_cols) + ["r_nm"] + value_cols].copy()
-
-
 def build_ripley_g12_prism_envelope_table(
     *,
     zone_name: str,
@@ -608,41 +567,6 @@ def build_ripley_g12_prism_envelope_table(
                 }
             )
     return pd.DataFrame(rows)
-
-
-def build_ripley_g12_prism_wide_table(
-    prism_long: pd.DataFrame,
-    *,
-    id_cols: Sequence[str] | None = None,
-) -> pd.DataFrame:
-    """Wide layout for Prism XY tables: one row per ``r_nm`` per window/comparison."""
-    if prism_long.empty:
-        return prism_long.copy()
-    if id_cols is None:
-        id_cols = ["cleft_name", "aunp_subset", "window_mode", "control_comparison"]
-    value_cols = [
-        col
-        for col in (
-            "fusing_G12_mean",
-            "fusing_G12_sd",
-            "fusing_G12_sd_envelope_lo",
-            "fusing_G12_sd_envelope_hi",
-            "control_G12_mean",
-            "control_G12_sd",
-            "control_G12_envelope_lo",
-            "control_G12_envelope_hi",
-            "control_G12_sd_envelope_lo",
-            "control_G12_sd_envelope_hi",
-            "n_fusing_curves",
-            "n_control_curves",
-            "n_aunp_partners",
-            "n_tomograms",
-            "n_clefts",
-            "window_volume_nm3",
-        )
-        if col in prism_long.columns
-    ]
-    return prism_long[list(id_cols) + ["r_nm"] + value_cols].copy()
 
 
 def _plot_g_control_comparison(
@@ -1438,18 +1362,15 @@ def plot_pooled_fusion_point_aunp_ripley_l12_visualizations(
     curves_csv: Path | str = POOLED_RIPLEY_CURVES_CSV,
     output_dir: Path | str = POOLED_RIPLEY_FIGURES_DIR,
     prism_csv: Path | str = POOLED_RIPLEY_PRISM_CSV,
-    prism_wide_csv: Path | str = POOLED_RIPLEY_PRISM_WIDE_CSV,
 ) -> list[Path]:
     """
     Pool individual Ripley curves across all tomograms/zones.
 
-    Writes PNGs (fusing mean vs control mean + 95% envelope), a long Prism CSV,
-    and a wide Prism CSV.
+    Writes PNGs (fusing mean vs control mean + 95% envelope) and a Prism CSV.
     """
     curves_csv = Path(curves_csv)
     output_dir = Path(output_dir)
     prism_csv = Path(prism_csv)
-    prism_wide_csv = Path(prism_wide_csv)
     if not curves_csv.is_file():
         print(f"No pooled Ripley curves CSV at {curves_csv}; skipping pooled outputs.")
         return []
@@ -1470,12 +1391,8 @@ def plot_pooled_fusion_point_aunp_ripley_l12_visualizations(
 
     prism_csv.parent.mkdir(parents=True, exist_ok=True)
     prism_long.to_csv(prism_csv, index=False)
-    build_ripley_l12_prism_wide_table(
-        prism_long,
-        id_cols=["aunp_subset", "window_mode", "control_comparison"],
-    ).to_csv(prism_wide_csv, index=False)
     print(
-        f"Pooled fusion-point/AuNP Ripley L₁₂ Prism tables "
+        f"Pooled fusion-point/AuNP Ripley L₁₂ Prism table "
         f"({len(prism_long)} rows) -> {prism_csv}"
     )
 
@@ -1621,13 +1538,11 @@ def plot_pooled_fusion_point_aunp_ripley_g12_visualizations(
     curves_csv: Path | str = POOLED_G_CURVES_CSV,
     output_dir: Path | str = POOLED_G_FIGURES_DIR,
     prism_csv: Path | str = POOLED_G_PRISM_CSV,
-    prism_wide_csv: Path | str = POOLED_G_PRISM_WIDE_CSV,
 ) -> list[Path]:
     """Pool individual pair-correlation (g₁₂) curves across all tomograms/zones."""
     curves_csv = Path(curves_csv)
     output_dir = Path(output_dir)
     prism_csv = Path(prism_csv)
-    prism_wide_csv = Path(prism_wide_csv)
     if not curves_csv.is_file():
         print(f"No pooled g₁₂ curves CSV at {curves_csv}; skipping pooled outputs.")
         return []
@@ -1648,12 +1563,8 @@ def plot_pooled_fusion_point_aunp_ripley_g12_visualizations(
 
     prism_csv.parent.mkdir(parents=True, exist_ok=True)
     prism_long.to_csv(prism_csv, index=False)
-    build_ripley_g12_prism_wide_table(
-        prism_long,
-        id_cols=["aunp_subset", "window_mode", "control_comparison"],
-    ).to_csv(prism_wide_csv, index=False)
     print(
-        f"Pooled fusion-point/AuNP pair-correlation (g₁₂) Prism tables "
+        f"Pooled fusion-point/AuNP pair-correlation (g₁₂) Prism table "
         f"({len(prism_long)} rows) -> {prism_csv}"
     )
 
@@ -2359,17 +2270,9 @@ def run_fusion_point_aunp_analyses_for_zone(
     if prism_frames:
         prism_long = pd.concat(prism_frames, ignore_index=True)
         prism_long.to_csv(out_dir / "ripley_l12_prism_envelopes.csv", index=False)
-        build_ripley_l12_prism_wide_table(prism_long).to_csv(
-            out_dir / "ripley_l12_prism_envelopes_wide.csv",
-            index=False,
-        )
     if g_prism_frames:
         g_prism_long = pd.concat(g_prism_frames, ignore_index=True)
         g_prism_long.to_csv(out_dir / "ripley_g12_prism_envelopes.csv", index=False)
-        build_ripley_g12_prism_wide_table(g_prism_long).to_csv(
-            out_dir / "ripley_g12_prism_envelopes_wide.csv",
-            index=False,
-        )
     if bidir_frames:
         bidir_long = pd.concat(bidir_frames, ignore_index=True)
         bidir_long.insert(0, "tomogram_name", tomogram_name)

@@ -2261,10 +2261,3 @@ def _safe_name(name: str) -> str:
     for ch in '<>:"/\\|?*':
         safe = safe.replace(ch, "_")
     return safe
-
-
-def _prism_long_to_wide(prism_long: pd.DataFrame, id_cols: Sequence[str]) -> pd.DataFrame:
-    if prism_long.empty:
-        return prism_long.copy()
-    value_cols = [c for c in prism_long.columns if c not in id_cols and c != "r_nm"]
-    return prism_long[list(id_cols) + ["r_nm"] + value_cols].copy()

@@ -73,7 +73,6 @@ from .ripley_library import (
     _isotropic_edge_factors_grid,
     _percentile_band,
     _points_inside_hull,
-    _prism_long_to_wide,
     _prism_sd_envelope_columns,
     _ripley_r_grid,
     _safe_name,
@@ -138,7 +137,6 @@ K_FAMILIES: tuple[str, ...] = tuple(_k_family_key(fam) for fam in L_FAMILIES)
 POOLED_CURVES_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_curves.csv")
 POOLED_MAD_SUMMARY_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_mad_summary.csv")
 POOLED_PRISM_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_prism_pooled.csv")
-POOLED_PRISM_WIDE_CSV = Path("results/aunps/aunp_monomer_dimer_ripley_l12_prism_pooled_wide.csv")
 POOLED_FIGURES_DIR = Path("results/aunps/figures/aunp_monomer_dimer_ripley_l12_pooled")
 
 
@@ -1396,9 +1394,6 @@ def run_monomer_dimer_ripley_for_zone(
     )
     prism_path = out_dir / "ripley_l12_prism.csv"
     prism_df.to_csv(prism_path, index=False)
-    _prism_long_to_wide(prism_df, id_cols=["cleft_name", "window_mode"]).to_csv(
-        out_dir / "ripley_l12_prism_wide.csv", index=False
-    )
 
     if write_figures:
         for fam in ALL_FAMILIES:
@@ -1654,14 +1649,12 @@ def plot_pooled_monomer_dimer_ripley_visualizations(
     curves_csv: Path | str = POOLED_CURVES_CSV,
     output_dir: Path | str = POOLED_FIGURES_DIR,
     prism_csv: Path | str = POOLED_PRISM_CSV,
-    prism_wide_csv: Path | str = POOLED_PRISM_WIDE_CSV,
 ) -> list[Path]:
     """Build pooled per-set Prism tables and observed-vs-null figures for every family in
     ``ALL_FAMILIES``."""
     curves_csv = Path(curves_csv)
     output_dir = Path(output_dir)
     prism_csv = Path(prism_csv)
-    prism_wide_csv = Path(prism_wide_csv)
 
     if not curves_csv.is_file():
         print(f"No pooled monomer/dimer Ripley CSV at {curves_csv}; skipping pooled outputs.")
@@ -1679,13 +1672,10 @@ def plot_pooled_monomer_dimer_ripley_visualizations(
 
     prism_csv.parent.mkdir(parents=True, exist_ok=True)
     prism_long.to_csv(prism_csv, index=False)
-    _prism_long_to_wide(prism_long, id_cols=["set_name", "window_mode"]).to_csv(
-        prism_wide_csv, index=False
-    )
     print(f"Pooled monomer/dimer Ripley Prism table ({len(prism_long)} rows) -> {prism_csv}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    written: list[Path] = [prism_csv, prism_wide_csv]
+    written: list[Path] = [prism_csv]
 
     for set_name, grp in prism_long.groupby("set_name", sort=False):
         grp = grp.sort_values("r_nm")
