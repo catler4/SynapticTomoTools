@@ -352,6 +352,18 @@ def merge_distance_column_dataframes(frames: Sequence[pd.DataFrame]) -> pd.DataF
     return pd.DataFrame(out)
 
 
+def _read_optional_distance_columns_csv(path: Path) -> pd.DataFrame:
+    """Read a vesicle-column distance CSV, treating missing/empty/corrupt files as empty."""
+    path = Path(path)
+    if not path.is_file() or path.stat().st_size == 0:
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
+    return df if not df.empty else pd.DataFrame()
+
+
 def upsert_pooled_distance_columns_csv(
     path: Path,
     new_df: pd.DataFrame,
@@ -368,7 +380,7 @@ def upsert_pooled_distance_columns_csv(
     path.parent.mkdir(parents=True, exist_ok=True)
     frames: list[pd.DataFrame] = []
     if path.is_file():
-        old = pd.read_csv(path)
+        old = _read_optional_distance_columns_csv(path)
         if drop_column_prefix and not old.empty:
             keep = [c for c in old.columns if not str(c).startswith(drop_column_prefix)]
             old = old[keep] if keep else pd.DataFrame()
@@ -377,6 +389,10 @@ def upsert_pooled_distance_columns_csv(
     if new_df is not None and not new_df.empty:
         frames.append(new_df)
     merged = merge_distance_column_dataframes(frames)
+    if merged.empty:
+        if path.is_file():
+            path.unlink()
+        return path
     merged.to_csv(path, index=False)
     return path
 
@@ -406,9 +422,19 @@ def write_pooled_fusion_point_aunp_distance_column_csvs(
         found: list[Path] = []
         for root in roots:
             found.extend(root.glob(f"**/{ANALYSES_SUBDIR}/*/{stem}.csv"))
-        frames = [pd.read_csv(p) for p in sorted(set(found)) if p.is_file()]
+        frames = [
+            _read_optional_distance_columns_csv(p)
+            for p in sorted(set(found))
+            if p.is_file()
+        ]
+        frames = [f for f in frames if not f.empty]
         merged = merge_distance_column_dataframes(frames)
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        if merged.empty:
+            if out_path.is_file():
+                out_path.unlink()
+            print(f"Pooled vesicle-column distances ({stem}: no data) -> skipped {out_path}")
+            continue
         merged.to_csv(out_path, index=False)
         print(
             f"Pooled vesicle-column distances ({stem}: {merged.shape[1]} columns, "
