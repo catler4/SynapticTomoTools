@@ -691,10 +691,13 @@ def build_pdf(
         )
         c.setFillColor("black")
         c.setFont("Helvetica-Bold", 11)
-        c.drawString(margin, y_top - 16, assets.entry.tomoname)
+        c.drawString(margin, y_top - 16, f"Tomogram ID: {assets.entry.tomoname}")
+        set_text = f"SET: {assets.entry.set_name}"
+        set_text_width = c.stringWidth(set_text, "Helvetica-Bold", 11)
+        c.drawString(width - margin - set_text_width, y_top - 16, set_text)
         y_top -= title_row_h
 
-        info_row_h = 36
+        info_row_h = 26
         c.setFillColor(HexColor("#eeeeee"))
         c.rect(
             margin - 6,
@@ -706,19 +709,14 @@ def build_pdf(
         )
         c.setFillColor("black")
         c.setFont("Helvetica", 11)
-        c.drawString(margin, y_top - 14, f"Cleft ID: {assets.cleft_id}")
-        c.drawString(
-            margin,
-            y_top - 28,
-            f"Tissue designation: {assets.tissue_quality}",
-        )
+        info_y = y_top - 16
+        c.drawString(margin, info_y, f"Cleft ID: {assets.cleft_id}")
+        tissue_text = f"Tissue designation: {assets.tissue_quality}"
+        tissue_text_width = c.stringWidth(tissue_text, "Helvetica", 11)
+        c.drawString(width - margin - tissue_text_width, info_y, tissue_text)
         return y_top - info_row_h - gap
 
-    for set_name, asset_list in grouped_assets:
-        c.setFont("Helvetica-Bold", 20)
-        c.drawString(margin, height - margin - 20, f"Set: {set_name}")
-        c.showPage()
-
+    for _set_name, asset_list in grouped_assets:
         for assets in asset_list:
             usable_width = width - 2 * margin
             side_w = (usable_width - gap) / 2
@@ -732,31 +730,35 @@ def build_pdf(
             labels_and_gaps = label_h + gap + label_h + gap
             image_area = y_top - margin - labels_and_gaps
             top_row_cap = max(100.0, image_area * top_row_image_frac)
-            position_w = side_w if has_slice else usable_width
+            position_label = "Membrane Segmentation & Cleft Position"
 
             c.setFont("Helvetica-Bold", 11)
-            c.drawString(margin, y_top - 10, "Cleft Position")
             if has_slice:
+                c.drawString(margin, y_top - 10, "Denoised Tomogram Slice")
                 c.drawString(
                     margin + side_w + gap,
                     y_top - 10,
-                    "Tomogram Slice",
+                    position_label,
                 )
+            else:
+                c.drawString(margin, y_top - 10, position_label)
             y_top -= label_h
 
-            h_position = _draw_image_top_aligned(
-                c, pair.position_png, margin, y_top, position_w, top_row_cap
-            )
             h_slice = 0.0
             if has_slice:
                 h_slice = _draw_image_top_aligned(
                     c,
                     assets.tomogram_slice_png,
-                    margin + side_w + gap,
+                    margin,
                     y_top,
                     side_w,
                     top_row_cap,
                 )
+            position_w = side_w if has_slice else usable_width
+            position_x = margin + side_w + gap if has_slice else margin
+            h_position = _draw_image_top_aligned(
+                c, pair.position_png, position_x, y_top, position_w, top_row_cap
+            )
             y_top -= max(h_position, h_slice) + gap
 
             mip_cap = y_top - margin - label_h
@@ -767,7 +769,7 @@ def build_pdf(
                 c.drawString(
                     margin,
                     y_top - 12,
-                    f"{assets.entry.tomoname} — Cleft MIP",
+                    f"Tomogram ID: {assets.entry.tomoname} — Cleft MIP",
                 )
                 y_top -= label_h + gap
                 mip_cap = y_top - margin
