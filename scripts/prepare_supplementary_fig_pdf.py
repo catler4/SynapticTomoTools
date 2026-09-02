@@ -5,7 +5,8 @@ Build a supplementary-figure PDF (and optionally copy source assets) from
 
 For each tomogram (grouped by set):
   - active zonogram position + matching zonogram PNG pair(s)
-  - center Z slice from ``{tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc`` (100 nm scale bar)
+  - ``active_zonograms/slicer000.jpg`` when present, else center Z slice from
+    ``{tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc`` (100 nm scale bar)
   - labels: tomogram name, cleft / active zone id, tissue quality
 
 Joins ``tomograms_full_set_FINAL.csv``: each CSV alignment row and each cleft/active
@@ -340,6 +341,14 @@ def discover_cleft_ids_from_pngs(alignment_path: Path) -> list[int]:
     return sorted(found)
 
 
+def default_slicer_jpg_path(alignment_path: Path) -> Path | None:
+    for active_dir in discover_active_zonogram_dirs(alignment_path):
+        jpg = active_dir / "slicer000.jpg"
+        if jpg.is_file():
+            return jpg
+    return None
+
+
 def default_mrc_path(alignment_path: Path, tomoname: str) -> Path | None:
     exact = alignment_path / f"{tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc"
     if exact.is_file():
@@ -492,16 +501,20 @@ def resolve_tomogram_assets_for_row(
     slice_png: Path | None = None
     if override and override.tomogram_slice_png and override.tomogram_slice_png.is_file():
         slice_png = override.tomogram_slice_png
-    elif mrc_path is not None:
-        target_dir = work_dir or Path(tempfile.gettempdir())
-        target_dir.mkdir(parents=True, exist_ok=True)
-        slice_png = target_dir / f"{entry.tomoname}_{alignment_dir}_center_slice_z.png"
-        render_center_slice_png(
-            mrc_path,
-            slice_png,
-            slice_z=override.slice_z if override else None,
-            scale_bar_nm=scale_bar_nm,
-        )
+    else:
+        slicer_jpg = default_slicer_jpg_path(alignment_path)
+        if slicer_jpg is not None:
+            slice_png = slicer_jpg
+        elif mrc_path is not None:
+            target_dir = work_dir or Path(tempfile.gettempdir())
+            target_dir.mkdir(parents=True, exist_ok=True)
+            slice_png = target_dir / f"{entry.tomoname}_{alignment_dir}_center_slice_z.png"
+            render_center_slice_png(
+                mrc_path,
+                slice_png,
+                slice_z=override.slice_z if override else None,
+                scale_bar_nm=scale_bar_nm,
+            )
 
     return [
         ResolvedTomogramAssets(
