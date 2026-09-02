@@ -610,6 +610,29 @@ def copy_assets(
     return copied
 
 
+def _max_fit_height(iw: int, ih: int, max_width: float, max_height: float) -> float:
+    if iw <= 0 or ih <= 0:
+        return 0.0
+    return min(max_height, max_width * ih / iw)
+
+
+def _common_fit_height(
+    img_paths: list[Path],
+    max_width: float,
+    max_height: float,
+) -> float:
+    heights: list[float] = []
+    for img_path in img_paths:
+        if not img_path.is_file():
+            continue
+        with Image.open(img_path) as img:
+            iw, ih = img.size
+        heights.append(_max_fit_height(iw, ih, max_width, max_height))
+    if not heights:
+        return 0.0
+    return min(heights)
+
+
 def _image_fit_size(iw: int, ih: int, max_width: float, max_height: float) -> tuple[int, int]:
     if iw <= 0 or ih <= 0:
         return 0, 0
@@ -639,17 +662,26 @@ def _draw_image_top_aligned(
     y_top: float,
     max_width: float,
     max_height: float,
+    *,
+    target_height: float | None = None,
 ) -> float:
     """Draw image with its top edge at ``y_top``; return drawn height."""
     if not img_path.is_file():
         return 0.0
     img = Image.open(img_path)
     iw, ih = img.size
-    nw, nh = _image_fit_size(iw, ih, max_width, max_height)
+    if target_height is not None and target_height > 0:
+        nh = max(1, int(round(target_height)))
+        nw = max(1, int(round(iw * nh / ih)))
+        if nw > max_width:
+            nw = max(1, int(max_width))
+    else:
+        nw, nh = _image_fit_size(iw, ih, max_width, max_height)
     if nh == 0:
         return 0.0
     y_bottom = y_top - nh
-    c.drawImage(ImageReader(img), x, y_bottom, width=nw, height=nh)
+    x_draw = x + (max_width - nw) / 2.0
+    c.drawImage(ImageReader(img), x_draw, y_bottom, width=nw, height=nh)
     return float(nh)
 
 
@@ -757,6 +789,13 @@ def build_pdf(
                 c.drawString(margin, y_top - 10, position_label)
             y_top -= label_h
 
+            top_row_h = 0.0
+            if has_slice:
+                top_row_h = _common_fit_height(
+                    [assets.tomogram_slice_png, pair.position_png],
+                    side_w,
+                    top_row_cap,
+                )
             h_slice = 0.0
             if has_slice:
                 h_slice = _draw_image_top_aligned(
@@ -766,13 +805,20 @@ def build_pdf(
                     y_top,
                     side_w,
                     top_row_cap,
+                    target_height=top_row_h,
                 )
             position_w = side_w if has_slice else usable_width
             position_x = margin + side_w + gap if has_slice else margin
             h_position = _draw_image_top_aligned(
-                c, pair.position_png, position_x, y_top, position_w, top_row_cap
+                c,
+                pair.position_png,
+                position_x,
+                y_top,
+                position_w,
+                top_row_cap,
+                target_height=top_row_h if has_slice else None,
             )
-            y_top -= max(h_position, h_slice) + gap
+            y_top -= (top_row_h if has_slice else max(h_position, h_slice)) + gap
 
             mip_cap = y_top - margin - label_h
             if mip_cap < 80:
