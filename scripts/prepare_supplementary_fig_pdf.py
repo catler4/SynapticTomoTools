@@ -51,7 +51,7 @@ _ENTRY_RE = re.compile(r"^(.+?)\s*\(([^)]+)\)\s*$")
 _CLEFT_ID_RE = re.compile(r"active_zonogram_(\d+)_position\.png$")
 _CLEFT_ID_HYPHEN_RE = re.compile(r"active-zonogram_(\d+)_position\.png$")
 
-DEFAULT_SCALE_BAR_NM = 100.0
+_CLEFT_MIP_SELECTED_AUNPS_SETS: frozenset[str] = frozenset({"15F1and5F11dimer"})
 _DEFAULT_VOXEL_SIZE_NM = 1.0
 
 
@@ -296,19 +296,36 @@ def discover_active_zonogram_dirs(alignment_path: Path) -> list[Path]:
     return [p for p in candidates if p.is_dir()]
 
 
+def _cleft_mip_png_candidates(active_dir: Path, cleft_id: int, set_name: str) -> list[Path]:
+    """Cleft MIP image for the bottom panel (set-specific naming)."""
+    if set_name in _CLEFT_MIP_SELECTED_AUNPS_SETS:
+        return [
+            active_dir / f"active_zonogram_{cleft_id}_selected_aunps.png",
+            active_dir / f"active-zonogram_{cleft_id}_selected_aunps.png",
+            active_dir / f"active_zonogram_{cleft_id}.png",
+            active_dir / f"active-zonogram_{cleft_id}.png",
+        ]
+    return [
+        active_dir / f"active_zonogram_{cleft_id}.png",
+        active_dir / f"active-zonogram_{cleft_id}.png",
+    ]
+
+
 def default_position_zonogram_paths(
     alignment_path: Path,
     cleft_id: int,
+    *,
+    set_name: str,
 ) -> tuple[Path | None, Path | None]:
     for active_dir in discover_active_zonogram_dirs(alignment_path):
         underscore_pos = active_dir / f"active_zonogram_{cleft_id}_position.png"
-        underscore_zono = active_dir / f"active_zonogram_{cleft_id}.png"
         hyphen_pos = active_dir / f"active-zonogram_{cleft_id}_position.png"
-        hyphen_zono = active_dir / f"active-zonogram_{cleft_id}.png"
-        if underscore_pos.is_file() and underscore_zono.is_file():
-            return underscore_pos, underscore_zono
-        if hyphen_pos.is_file() and hyphen_zono.is_file():
-            return hyphen_pos, hyphen_zono
+        for pos in (underscore_pos, hyphen_pos):
+            if not pos.is_file():
+                continue
+            for zono in _cleft_mip_png_candidates(active_dir, cleft_id, set_name):
+                if zono.is_file():
+                    return pos, zono
     return None, None
 
 
@@ -455,7 +472,9 @@ def resolve_tomogram_assets_for_row(
     else:
         cleft_ids = cleft_ids_for_row(alignment_path, csv_row, override, warnings)
         for cid in cleft_ids:
-            pos, zono = default_position_zonogram_paths(alignment_path, cid)
+            pos, zono = default_position_zonogram_paths(
+                alignment_path, cid, set_name=entry.set_name
+            )
             if pos is None or zono is None:
                 warnings.append(f"Missing active zonogram pair for cleft {cid}")
                 continue
@@ -568,7 +587,7 @@ def copy_assets(
                 f"set: {assets.entry.set_name}",
                 f"alignment_dir: {assets.alignment_dir}",
                 f"cleft_id: {assets.cleft_id}",
-                f"tissue_quality: {assets.tissue_quality}",
+                f"tissue_designation: {assets.tissue_quality}",
             ]
         ),
         encoding="utf-8",
@@ -581,6 +600,21 @@ def _image_fit_size(iw: int, ih: int, max_width: float, max_height: float) -> tu
     if iw <= 0 or ih <= 0:
         return 0, 0
     scale = min(max_width / iw, max_height / ih)
+    return max(1, int(iw * scale)), max(1, int(ih * scale))
+
+
+def _image_fit_size_fill_width(
+    iw: int,
+    ih: int,
+    max_width: float,
+    max_height: float,
+) -> tuple[int, int]:
+    """Scale to ``max_width`` when height allows; otherwise limit by height."""
+    if iw <= 0 or ih <= 0:
+        return 0, 0
+    scale = max_width / iw
+    if ih * scale > max_height:
+        scale = max_height / ih
     return max(1, int(iw * scale)), max(1, int(ih * scale))
 
 
@@ -605,6 +639,28 @@ def _draw_image_top_aligned(
     return float(nh)
 
 
+def _draw_image_top_aligned_fill_width(
+    c: canvas.Canvas,
+    img_path: Path,
+    x: float,
+    y_top: float,
+    max_width: float,
+    max_height: float,
+) -> float:
+    """Draw image at full available width when possible (for Cleft MIP)."""
+    if not img_path.is_file():
+        return 0.0
+    img = Image.open(img_path)
+    iw, ih = img.size
+    nw, nh = _image_fit_size_fill_width(iw, ih, max_width, max_height)
+    if nh == 0:
+        return 0.0
+    y_bottom = y_top - nh
+    x_draw = x + (max_width - nw) / 2.0
+    c.drawImage(ImageReader(img), x_draw, y_bottom, width=nw, height=nh)
+    return float(nh)
+
+
 def build_pdf(
     grouped_assets: list[tuple[str, list[ResolvedTomogramAssets]]],
     output_pdf: Path,
@@ -617,42 +673,45 @@ def build_pdf(
     margin = 36
     gap = 12
     label_h = 14
-    max_top_row_h = 165
-    max_mip_h = 200
+    top_row_image_frac = 0.54
 
     def _draw_page_header(assets: ResolvedTomogramAssets) -> float:
         """Draw title + info blocks; return ``y_top`` below header."""
         y_top = height - margin
-        header_row_h = 50
+        title_row_h = 26
         c.setFillColor(HexColor("#cccccc"))
         c.rect(
             margin - 6,
-            y_top - header_row_h,
+            y_top - title_row_h,
             width - 2 * margin + 12,
-            header_row_h,
+            title_row_h,
             fill=1,
             stroke=0,
         )
         c.setFillColor("black")
-        c.setFont("Helvetica", 11)
-        c.drawString(margin, y_top - 14, assets.entry.tomoname)
-        y_top -= header_row_h
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(margin, y_top - 16, assets.entry.tomoname)
+        y_top -= title_row_h
 
+        info_row_h = 36
         c.setFillColor(HexColor("#eeeeee"))
         c.rect(
             margin - 6,
-            y_top - header_row_h,
+            y_top - info_row_h,
             width - 2 * margin + 12,
-            header_row_h,
+            info_row_h,
             fill=1,
             stroke=0,
         )
         c.setFillColor("black")
         c.setFont("Helvetica", 11)
         c.drawString(margin, y_top - 14, f"Cleft ID: {assets.cleft_id}")
-        c.drawString(margin, y_top - 28, f"Tissue quality: {assets.tissue_quality}")
-        c.drawString(margin, y_top - 42, f"Alignment: {assets.alignment_dir}")
-        return y_top - header_row_h - gap
+        c.drawString(
+            margin,
+            y_top - 28,
+            f"Tissue designation: {assets.tissue_quality}",
+        )
+        return y_top - info_row_h - gap
 
     for set_name, asset_list in grouped_assets:
         c.setFont("Helvetica-Bold", 20)
@@ -669,25 +728,23 @@ def build_pdf(
 
             y_top = _draw_page_header(assets)
 
-            mip_reserve = label_h + max_mip_h + gap
-            top_row_cap = min(
-                max_top_row_h,
-                y_top - margin - mip_reserve - label_h - gap,
-            )
-            top_row_cap = max(72.0, top_row_cap)
+            labels_and_gaps = label_h + gap + label_h + gap
+            image_area = y_top - margin - labels_and_gaps
+            top_row_cap = max(100.0, image_area * top_row_image_frac)
+            position_w = side_w if has_slice else usable_width
 
             c.setFont("Helvetica-Bold", 11)
-            c.drawString(margin, y_top - 10, f"Position (cleft {pair.cleft_id})")
+            c.drawString(margin, y_top - 10, "Cleft Position")
             if has_slice:
                 c.drawString(
                     margin + side_w + gap,
                     y_top - 10,
-                    "Tomogram center slice",
+                    "Tomogram Slice",
                 )
             y_top -= label_h
 
             h_position = _draw_image_top_aligned(
-                c, pair.position_png, margin, y_top, side_w, top_row_cap
+                c, pair.position_png, margin, y_top, position_w, top_row_cap
             )
             h_slice = 0.0
             if has_slice:
@@ -701,23 +758,23 @@ def build_pdf(
                 )
             y_top -= max(h_position, h_slice) + gap
 
-            mip_cap = min(max_mip_h, y_top - margin - label_h)
-            if mip_cap < 72:
+            mip_cap = y_top - margin - label_h
+            if mip_cap < 80:
                 c.showPage()
                 y_top = height - margin
                 c.setFont("Helvetica-Bold", 12)
                 c.drawString(
                     margin,
                     y_top - 12,
-                    f"{assets.entry.tomoname} — Cleft MIP (cleft {pair.cleft_id})",
+                    f"{assets.entry.tomoname} — Cleft MIP",
                 )
                 y_top -= label_h + gap
-                mip_cap = min(max_mip_h, y_top - margin)
+                mip_cap = y_top - margin
             else:
                 c.setFont("Helvetica-Bold", 11)
-                c.drawString(margin, y_top - 10, f"Cleft MIP (cleft {pair.cleft_id})")
+                c.drawString(margin, y_top - 10, "Cleft MIP")
                 y_top -= label_h
-            mip_h = _draw_image_top_aligned(
+            mip_h = _draw_image_top_aligned_fill_width(
                 c,
                 pair.zonogram_png,
                 margin,
