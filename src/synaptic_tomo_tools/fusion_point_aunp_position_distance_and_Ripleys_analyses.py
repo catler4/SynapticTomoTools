@@ -20,9 +20,10 @@ pool is used (``use_single_pick_pool``), analyses run for the ``all`` subset.
 
 Vesicle–AuNP distance tables are also written in a Prism-friendly form with one column
 per vesicle (or vesicle×simulation), distances listed down the column, for fusing,
-close, 40 nm-shifted, and label-permutation sites. Per-zone files live under
-``STT_results/aunps/fusion_point_aunp_analyses/<zone>/``; pooled files under
-``results/aunps/fusion_point_aunp_distances_*_columns_pooled.csv``.
+close, 40 nm-shifted, and label-permutation sites. Per-zone wide distance CSVs and
+cumulative-count histograms use ``__{subset}`` suffixes (``monomer``, ``dimer``, ``both``,
+or ``all``). Pooled column and cumulative-histogram tables use the same suffix under
+``results/aunps/``.
 """
 
 from __future__ import annotations
@@ -636,58 +637,79 @@ def write_pooled_fusion_point_aunp_distance_column_csvs(
         DISTANCE_COLUMNS_ONLY_STEMS["label_permutation_cumhist"]: POOLED_DIST_LABEL_PERM_CUMHIST_CSV,
     }
     written: list[Path] = []
-    for stem, out_path in stem_to_out.items():
-        found: list[Path] = []
-        for root in roots:
-            found.extend(root.glob(f"**/{ANALYSES_SUBDIR}/*/{stem}.csv"))
-        frames = [
-            _read_optional_distance_columns_csv(p)
-            for p in sorted(set(found))
-            if p.is_file()
-        ]
-        frames = [f for f in frames if not f.empty]
-        merged = merge_distance_column_dataframes(frames)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        if merged.empty:
-            if out_path.is_file():
-                out_path.unlink()
-            print(f"Pooled vesicle-column distances ({stem}: no data) -> skipped {out_path}")
-            continue
-        merged.to_csv(out_path, index=False)
-        print(
-            f"Pooled vesicle-column distances ({stem}: {merged.shape[1]} columns, "
-            f"{merged.shape[0]} rows) -> {out_path}"
-        )
-        written.append(out_path)
-    for stem, out_path in cumhist_stem_to_out.items():
-        found: list[Path] = []
-        for root in roots:
-            found.extend(root.glob(f"**/{ANALYSES_SUBDIR}/*/{stem}.csv"))
-        frames = [
-            _read_optional_distance_columns_csv(p)
-            for p in sorted(set(found))
-            if p.is_file()
-        ]
-        frames = [f for f in frames if not f.empty]
-        merged = merge_cumulative_histogram_dataframes(frames)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        if merged.empty:
-            if out_path.is_file():
-                out_path.unlink()
-            print(f"Pooled cumulative histogram ({stem}: no data) -> skipped {out_path}")
-            continue
-        merged.to_csv(out_path, index=False)
-        n_value_cols = merged.shape[1] - 1
-        print(
-            f"Pooled cumulative histogram ({stem}: {n_value_cols} columns, "
-            f"{merged.shape[0]} r rows) -> {out_path}"
-        )
-        written.append(out_path)
+    subsets_for_pooling = AUNP_SUBSETS
+    for stem, out_path_base in stem_to_out.items():
+        for subset in subsets_for_pooling:
+            out_path = _pooled_subset_csv(out_path_base, subset)
+            found: list[Path] = []
+            for root in roots:
+                found.extend(
+                    root.glob(f"**/{ANALYSES_SUBDIR}/*/{stem}__{subset}.csv")
+                )
+            frames = [
+                _read_optional_distance_columns_csv(p)
+                for p in sorted(set(found))
+                if p.is_file()
+            ]
+            frames = [f for f in frames if not f.empty]
+            merged = merge_distance_column_dataframes(frames)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            if merged.empty:
+                if out_path.is_file():
+                    out_path.unlink()
+                print(
+                    f"Pooled vesicle-column distances ({stem}__{subset}: no data) "
+                    f"-> skipped {out_path}"
+                )
+                continue
+            merged.to_csv(out_path, index=False)
+            print(
+                f"Pooled vesicle-column distances ({stem}__{subset}: {merged.shape[1]} columns, "
+                f"{merged.shape[0]} rows) -> {out_path}"
+            )
+            written.append(out_path)
+    for stem, out_path_base in cumhist_stem_to_out.items():
+        for subset in subsets_for_pooling:
+            out_path = _pooled_subset_csv(out_path_base, subset)
+            found: list[Path] = []
+            for root in roots:
+                found.extend(
+                    root.glob(f"**/{ANALYSES_SUBDIR}/*/{stem}__{subset}.csv")
+                )
+            frames = [
+                _read_optional_distance_columns_csv(p)
+                for p in sorted(set(found))
+                if p.is_file()
+            ]
+            frames = [f for f in frames if not f.empty]
+            merged = merge_cumulative_histogram_dataframes(frames)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            if merged.empty:
+                if out_path.is_file():
+                    out_path.unlink()
+                print(
+                    f"Pooled cumulative histogram ({stem}__{subset}: no data) "
+                    f"-> skipped {out_path}"
+                )
+                continue
+            merged.to_csv(out_path, index=False)
+            n_value_cols = merged.shape[1] - 1
+            print(
+                f"Pooled cumulative histogram ({stem}__{subset}: {n_value_cols} columns, "
+                f"{merged.shape[0]} r rows) -> {out_path}"
+            )
+            written.append(out_path)
     return written
 
 
 def _distance_csv_name(stem: str, subset: AunpSubset) -> str:
     return f"{stem}__{subset}.csv"
+
+
+def _pooled_subset_csv(path: Path, subset: AunpSubset) -> Path:
+    """Per-subset pooled CSV path (``…_pooled__monomer.csv``)."""
+    path = Path(path)
+    return path.parent / f"{path.stem}__{subset}{path.suffix}"
 
 
 def _fusing_mean_curve(obs_curves: np.ndarray, r_vals: np.ndarray, *, k_curves: np.ndarray | None = None) -> np.ndarray:
@@ -2411,52 +2433,63 @@ def run_fusion_point_aunp_analyses_for_zone(
         if len(sub_coords) == 0:
             print(f"  No {subset} AuNPs for {zone_name}; distance CSVs written empty")
 
-    # Vesicle-as-column tables using all loaded AuNPs for this zone (pooled across tomograms later).
-    shift_cumhist_df = build_shift_cumulative_histogram_dataframe(
-        aunp_coords_all,
-        fusing_rows,
-        shift_by_rep,
-        tomogram_name=tomogram_name,
-        alignment_dir=alignment_dir,
-        zone_name=zone_name,
-    )
-    label_perm_cumhist_df = build_label_permutation_cumulative_histogram_dataframe(
-        aunp_coords_all,
-        label_pooled,
-        tomogram_name=tomogram_name,
-        alignment_dir=alignment_dir,
-        zone_name=zone_name,
-    )
-
+    zone_prefix = _zone_column_prefix(tomogram_name, alignment_dir, zone_name)
+    distance_column_paths: dict[str, Path] = {}
     col_only_specs = [
         ("fusing", original_cols_global, POOLED_DIST_FUSING_COLUMNS_CSV),
         ("close", close_cols_global, POOLED_DIST_CLOSE_COLUMNS_CSV),
         ("shift_40nm", shift_cols_global, POOLED_DIST_SHIFT_COLUMNS_CSV),
         ("label_permutation", label_cols_global, POOLED_DIST_PERM_COLUMNS_CSV),
     ]
-    cumhist_specs = [
-        ("shift_40nm_cumhist", shift_cumhist_df, POOLED_DIST_SHIFT_CUMHIST_CSV),
-        ("label_permutation_cumhist", label_perm_cumhist_df, POOLED_DIST_LABEL_PERM_CUMHIST_CSV),
-    ]
-    zone_prefix = _zone_column_prefix(tomogram_name, alignment_dir, zone_name)
-    distance_column_paths: dict[str, Path] = {}
-    for kind, cols_global, pooled_path in col_only_specs:
-        df_cols = build_distance_columns_only_dataframe(aunp_coords_all, cols_global)
-        stem = DISTANCE_COLUMNS_ONLY_STEMS[kind]
-        p_cols = out_dir / f"{stem}.csv"
-        df_cols.to_csv(p_cols, index=False)
-        distance_column_paths[kind] = p_cols
-        upsert_pooled_distance_columns_csv(
-            pooled_path, df_cols, drop_column_prefix=zone_prefix
+    cumhist_pooled_bases = {
+        "shift_40nm_cumhist": POOLED_DIST_SHIFT_CUMHIST_CSV,
+        "label_permutation_cumhist": POOLED_DIST_LABEL_PERM_CUMHIST_CSV,
+    }
+
+    for subset in subsets_to_run:
+        sub_coords, _ = subset_aunps(aunp_meta, subset=subset)
+        shift_cumhist_df = build_shift_cumulative_histogram_dataframe(
+            sub_coords,
+            fusing_rows,
+            shift_by_rep,
+            tomogram_name=tomogram_name,
+            alignment_dir=alignment_dir,
+            zone_name=zone_name,
         )
-    for kind, df_hist, pooled_path in cumhist_specs:
-        stem = DISTANCE_COLUMNS_ONLY_STEMS[kind]
-        p_hist = out_dir / f"{stem}.csv"
-        df_hist.to_csv(p_hist, index=False)
-        distance_column_paths[kind] = p_hist
-        upsert_pooled_cumulative_histogram_csv(
-            pooled_path, df_hist, drop_column_prefix=zone_prefix
+        label_perm_cumhist_df = build_label_permutation_cumulative_histogram_dataframe(
+            sub_coords,
+            label_pooled,
+            tomogram_name=tomogram_name,
+            alignment_dir=alignment_dir,
+            zone_name=zone_name,
         )
+        cumhist_by_kind = {
+            "shift_40nm_cumhist": shift_cumhist_df,
+            "label_permutation_cumhist": label_perm_cumhist_df,
+        }
+
+        for kind, cols_global, pooled_base in col_only_specs:
+            df_cols = build_distance_columns_only_dataframe(sub_coords, cols_global)
+            stem = DISTANCE_COLUMNS_ONLY_STEMS[kind]
+            p_cols = out_dir / _distance_csv_name(stem, subset)
+            df_cols.to_csv(p_cols, index=False)
+            distance_column_paths[f"{kind}__{subset}"] = p_cols
+            upsert_pooled_distance_columns_csv(
+                _pooled_subset_csv(pooled_base, subset),
+                df_cols,
+                drop_column_prefix=zone_prefix,
+            )
+
+        for kind, df_hist in cumhist_by_kind.items():
+            stem = DISTANCE_COLUMNS_ONLY_STEMS[kind]
+            p_hist = out_dir / _distance_csv_name(stem, subset)
+            df_hist.to_csv(p_hist, index=False)
+            distance_column_paths[f"{kind}__{subset}"] = p_hist
+            upsert_pooled_cumulative_histogram_csv(
+                _pooled_subset_csv(cumhist_pooled_bases[kind], subset),
+                df_hist,
+                drop_column_prefix=zone_prefix,
+            )
     # --- Ripley: both window modes × three AuNP partner subsets ---
     ripley_frames: list[pd.DataFrame] = []
     prism_frames: list[pd.DataFrame] = []
