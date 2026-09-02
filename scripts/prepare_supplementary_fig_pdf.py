@@ -8,6 +8,9 @@ For each tomogram (grouped by set):
   - center Z slice from ``{tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc`` (100 nm scale bar)
   - labels: tomogram name, cleft / active zone id, tissue quality
 
+Joins ``tomograms_full_set_FINAL.csv``: each CSV alignment row and each cleft/active
+zone gets its own PDF page (and copy subdirectory).
+
 Optional per-tomogram overrides via CSV (see ``data/supplementary_fig_overrides.example.csv``).
 """
 from __future__ import annotations
@@ -25,6 +28,7 @@ from typing import Iterable, Sequence
 import mrcfile
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+from tqdm import tqdm
 from reportlab.lib.colors import HexColor
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.utils import ImageReader
@@ -140,9 +144,9 @@ class CleftImagePair:
 class ResolvedTomogramAssets:
     entry: SupplementaryEntry
     alignment_dir: str
-    cleft_ids_display: str
+    cleft_id: int
     tissue_quality: str
-    pairs: list[CleftImagePair] = field(default_factory=list)
+    pair: CleftImagePair
     mrc_path: Path | None = None
     tomogram_slice_png: Path | None = None
     tomogram_root: Path | None = None
@@ -249,19 +253,51 @@ def load_overrides_csv(path: Path | None) -> dict[tuple[str, str], TomogramOverr
     return overrides
 
 
-def choose_csv_row(rows: list[dict], override: TomogramOverride | None) -> dict:
+def select_csv_rows(
+    rows: list[dict],
+    override: TomogramOverride | None,
+) -> list[dict]:
+    """Return CSV rows to render for one supplementary-list entry."""
     if override and override.alignment_dir:
         for row in rows:
             if row["alignment_dir"] == override.alignment_dir:
-                return row
+                return [row]
         raise ValueError(
             f"No CSV row with alignment_dir={override.alignment_dir!r} "
             f"(override requested but not in tomogram CSV)."
         )
-    for row in rows:
-        if row["alignment_dir"] == "best_alignment":
-            return row
-    return rows[0]
+    return list(rows)
+
+
+def row_override(
+    override: TomogramOverride | None,
+    csv_row: dict,
+) -> TomogramOverride | None:
+    """Per-alignment override: tissue applies globally; file paths only when pinned."""
+    if override is None:
+        return None
+    alignment_dir = csv_row["alignment_dir"]
+    if override.alignment_dir and override.alignment_dir != alignment_dir:
+        return None
+    use_file_overrides = override.alignment_dir is not None or not any(
+        [
+            override.position_png,
+            override.zonogram_png,
+            override.mrc_path,
+            override.tomogram_slice_png,
+            override.slice_z is not None,
+        ]
+    )
+    return TomogramOverride(
+        tissue_quality=override.tissue_quality,
+        alignment_dir=alignment_dir,
+        cleft_ids=override.cleft_ids,
+        position_png=override.position_png if use_file_overrides else None,
+        zonogram_png=override.zonogram_png if use_file_overrides else None,
+        mrc_path=override.mrc_path if use_file_overrides else None,
+        slice_z=override.slice_z if use_file_overrides else None,
+        tomogram_slice_png=override.tomogram_slice_png if use_file_overrides else None,
+    )
 
 
 def tomogram_path(data_dir: Path, set_name: str, tomoname: str) -> Path:
@@ -348,72 +384,98 @@ def render_center_slice_png(
     return output_png
 
 
-def format_cleft_display(cleft_ids: Sequence[int]) -> str:
-    if not cleft_ids:
-        return "unknown"
-    return ", ".join(str(i) for i in cleft_ids)
+
+def cleft_ids_for_row(
+    alignment_path: Path,
+    csv_row: dict,
+    override: TomogramOverride | None,
+    warnings: list[str],
+) -> list[int]:
+    if override and override.cleft_ids:
+        return list(override.cleft_ids)
+    cleft_ids = csv_row.get("cleft_ids")
+    if cleft_ids is not None:
+        return list(cleft_ids)
+    discovered = discover_cleft_ids_from_pngs(alignment_path)
+    if discovered:
+        return discovered
+    warnings.append("No cleft_IDs in CSV and no position PNGs found; trying cleft 0")
+    return [0]
 
 
-def resolve_tomogram_assets(
+def count_planned_pages(
     entry: SupplementaryEntry,
     csv_index: dict[tuple[str, str], list[dict]],
+    overrides: dict[tuple[str, str], TomogramOverride],
+    data_dir: Path,
+) -> int:
+    """Estimate PDF pages for one supplementary-list entry (alignment × zone)."""
+    key = (entry.set_name, entry.tomoname)
+    rows = csv_index.get(key)
+    if not rows:
+        return 0
+    try:
+        selected_rows = select_csv_rows(rows, overrides.get(key))
+    except ValueError:
+        return 0
+    override = overrides.get(key)
+    n_pages = 0
+    for csv_row in selected_rows:
+        per_row_override = row_override(override, csv_row)
+        if per_row_override and per_row_override.position_png and per_row_override.zonogram_png:
+            n_pages += 1
+            continue
+        alignment_dir = require_alignment_dir(csv_row["alignment_dir"], context=entry.tomoname)
+        alignment_path = tomogram_path(data_dir, entry.set_name, entry.tomoname) / alignment_dir
+        if not alignment_path.is_dir():
+            n_pages += 1
+            continue
+        cleft_ids = cleft_ids_for_row(alignment_path, csv_row, per_row_override, [])
+        n_pages += len(cleft_ids)
+    return n_pages
+
+
+def resolve_tomogram_assets_for_row(
+    entry: SupplementaryEntry,
+    csv_row: dict,
     data_dir: Path,
     override: TomogramOverride | None,
     *,
     work_dir: Path | None = None,
     scale_bar_nm: float = DEFAULT_SCALE_BAR_NM,
-) -> ResolvedTomogramAssets:
-    key = (entry.set_name, entry.tomoname)
-    rows = csv_index.get(key)
+) -> list[ResolvedTomogramAssets]:
+    """One ``ResolvedTomogramAssets`` per cleft/active zone for this CSV alignment row."""
     warnings: list[str] = []
-    if not rows:
-        raise FileNotFoundError(
-            f"No CSV row for set={entry.set_name!r}, tomoname={entry.tomoname!r}"
-        )
-    if len(rows) > 1 and not (override and override.alignment_dir):
-        warnings.append(
-            f"Multiple CSV alignment rows; using {choose_csv_row(rows, override)['alignment_dir']}"
-        )
-    csv_row = choose_csv_row(rows, override)
-    alignment_dir = override.alignment_dir if override and override.alignment_dir else csv_row["alignment_dir"]
-    alignment_dir = require_alignment_dir(alignment_dir, context=entry.tomoname)
+    alignment_dir = require_alignment_dir(csv_row["alignment_dir"], context=entry.tomoname)
     tissue = (
         override.tissue_quality
         if override and override.tissue_quality
         else entry.tissue_quality
-    )
-    cleft_ids = (
-        override.cleft_ids
-        if override and override.cleft_ids
-        else csv_row.get("cleft_ids")
     )
     root = tomogram_path(data_dir, entry.set_name, entry.tomoname)
     alignment_path = root / alignment_dir
     if not alignment_path.is_dir():
         raise FileNotFoundError(f"Alignment directory not found: {alignment_path}")
 
-    pairs: list[CleftImagePair] = []
+    zone_pairs: list[CleftImagePair] = []
     if override and override.position_png and override.zonogram_png:
         if not override.position_png.is_file():
             raise FileNotFoundError(f"Override position_png missing: {override.position_png}")
         if not override.zonogram_png.is_file():
             raise FileNotFoundError(f"Override zonogram_png missing: {override.zonogram_png}")
-        cid = cleft_ids[0] if cleft_ids else 0
-        pairs.append(
+        cleft_ids = cleft_ids_for_row(alignment_path, csv_row, override, warnings)
+        cid = cleft_ids[0]
+        zone_pairs.append(
             CleftImagePair(cid, override.position_png, override.zonogram_png)
         )
     else:
-        if cleft_ids is None:
-            cleft_ids = discover_cleft_ids_from_pngs(alignment_path)
-            if not cleft_ids:
-                cleft_ids = [0]
-                warnings.append("No cleft_IDs in CSV and no position PNGs found; trying cleft 0")
+        cleft_ids = cleft_ids_for_row(alignment_path, csv_row, override, warnings)
         for cid in cleft_ids:
             pos, zono = default_position_zonogram_paths(alignment_path, cid)
             if pos is None or zono is None:
                 warnings.append(f"Missing active zonogram pair for cleft {cid}")
                 continue
-            pairs.append(CleftImagePair(cid, pos, zono))
+            zone_pairs.append(CleftImagePair(cid, pos, zono))
 
     mrc_path = None
     if override and override.mrc_path:
@@ -429,7 +491,7 @@ def resolve_tomogram_assets(
     elif mrc_path is not None:
         target_dir = work_dir or Path(tempfile.gettempdir())
         target_dir.mkdir(parents=True, exist_ok=True)
-        slice_png = target_dir / f"{entry.tomoname}_center_slice_z.png"
+        slice_png = target_dir / f"{entry.tomoname}_{alignment_dir}_center_slice_z.png"
         render_center_slice_png(
             mrc_path,
             slice_png,
@@ -437,33 +499,75 @@ def resolve_tomogram_assets(
             scale_bar_nm=scale_bar_nm,
         )
 
-    return ResolvedTomogramAssets(
-        entry=entry,
-        alignment_dir=alignment_dir,
-        cleft_ids_display=format_cleft_display(
-            cleft_ids if cleft_ids is not None else [p.cleft_id for p in pairs]
-        ),
-        tissue_quality=tissue,
-        pairs=pairs,
-        mrc_path=mrc_path,
-        tomogram_slice_png=slice_png,
-        tomogram_root=root,
-        warnings=warnings,
-    )
+    return [
+        ResolvedTomogramAssets(
+            entry=entry,
+            alignment_dir=alignment_dir,
+            cleft_id=pair.cleft_id,
+            tissue_quality=tissue,
+            pair=pair,
+            mrc_path=mrc_path,
+            tomogram_slice_png=slice_png,
+            tomogram_root=root,
+            warnings=list(warnings),
+        )
+        for pair in zone_pairs
+    ]
+
+
+def resolve_all_assets_for_entry(
+    entry: SupplementaryEntry,
+    csv_index: dict[tuple[str, str], list[dict]],
+    data_dir: Path,
+    override: TomogramOverride | None,
+    *,
+    work_dir: Path | None = None,
+    scale_bar_nm: float = DEFAULT_SCALE_BAR_NM,
+) -> list[ResolvedTomogramAssets]:
+    """Resolve one supplementary-list entry; multiple alignments and zones → multiple pages."""
+    key = (entry.set_name, entry.tomoname)
+    rows = csv_index.get(key)
+    if not rows:
+        raise FileNotFoundError(
+            f"No CSV row for set={entry.set_name!r}, tomoname={entry.tomoname!r}"
+        )
+    selected_rows = select_csv_rows(rows, override)
+    assets_list: list[ResolvedTomogramAssets] = []
+    for csv_row in selected_rows:
+        per_row_override = row_override(override, csv_row)
+        batch = resolve_tomogram_assets_for_row(
+            entry,
+            csv_row,
+            data_dir,
+            per_row_override,
+            work_dir=work_dir,
+            scale_bar_nm=scale_bar_nm,
+        )
+        if not batch:
+            raise FileNotFoundError(
+                f"No active zonogram image pairs for alignment {csv_row['alignment_dir']}"
+            )
+        assets_list.extend(batch)
+    return assets_list
 
 
 def copy_assets(
     assets: ResolvedTomogramAssets,
     copy_root: Path,
 ) -> list[Path]:
-    dest_dir = copy_root / assets.entry.set_name / assets.entry.tomoname
+    dest_dir = (
+        copy_root
+        / assets.entry.set_name
+        / assets.entry.tomoname
+        / assets.alignment_dir
+        / f"cleft_{assets.cleft_id}"
+    )
     dest_dir.mkdir(parents=True, exist_ok=True)
     copied: list[Path] = []
-    for pair in assets.pairs:
-        for src in (pair.position_png, pair.zonogram_png):
-            dst = dest_dir / src.name
-            shutil.copy2(src, dst)
-            copied.append(dst)
+    for src in (assets.pair.position_png, assets.pair.zonogram_png):
+        dst = dest_dir / src.name
+        shutil.copy2(src, dst)
+        copied.append(dst)
     if assets.mrc_path and assets.mrc_path.is_file():
         dst = dest_dir / assets.mrc_path.name
         shutil.copy2(assets.mrc_path, dst)
@@ -479,7 +583,7 @@ def copy_assets(
                 f"tomoname: {assets.entry.tomoname}",
                 f"set: {assets.entry.set_name}",
                 f"alignment_dir: {assets.alignment_dir}",
-                f"cleft_ids: {assets.cleft_ids_display}",
+                f"cleft_id: {assets.cleft_id}",
                 f"tissue_quality: {assets.tissue_quality}",
             ]
         ),
@@ -510,6 +614,8 @@ def _draw_image(
 def build_pdf(
     grouped_assets: list[tuple[str, list[ResolvedTomogramAssets]]],
     output_pdf: Path,
+    *,
+    page_progress: tqdm | None = None,
 ) -> None:
     output_pdf.parent.mkdir(parents=True, exist_ok=True)
     c = canvas.Canvas(str(output_pdf), pagesize=letter)
@@ -529,7 +635,10 @@ def build_pdf(
             c.rect(margin - 6, y - title_h, width - 2 * margin + 12, title_h, fill=1, stroke=0)
             c.setFillColor("black")
             c.setFont("Helvetica-Bold", 16)
-            c.drawString(margin, y - 22, assets.entry.tomoname)
+            title = assets.entry.tomoname
+            if assets.alignment_dir:
+                title = f"{title} ({assets.alignment_dir}, cleft {assets.cleft_id})"
+            c.drawString(margin, y - 22, title)
             y -= title_h
 
             info_h = 50
@@ -537,29 +646,29 @@ def build_pdf(
             c.rect(margin - 6, y - info_h, width - 2 * margin + 12, info_h, fill=1, stroke=0)
             c.setFillColor("black")
             c.setFont("Helvetica", 11)
-            c.drawString(margin, y - 14, f"Cleft / active zone: {assets.cleft_ids_display}")
+            c.drawString(margin, y - 14, f"Cleft / active zone: {assets.cleft_id}")
             c.drawString(margin, y - 28, f"Tissue quality: {assets.tissue_quality}")
             c.drawString(margin, y - 42, f"Alignment: {assets.alignment_dir}")
             y -= info_h + gap
 
             usable_width = width - 2 * margin
             pair_height = 220
-            for pair in assets.pairs:
-                side_w = (usable_width - gap) / 2
-                c.setFont("Helvetica-Bold", 11)
-                c.drawString(margin, y, f"Position (cleft {pair.cleft_id})")
-                c.drawString(margin + side_w + gap, y, f"Active zonogram (cleft {pair.cleft_id})")
-                y -= 12
-                h1 = _draw_image(c, pair.position_png, margin, y - pair_height, side_w, pair_height)
-                h2 = _draw_image(
-                    c,
-                    pair.zonogram_png,
-                    margin + side_w + gap,
-                    y - pair_height,
-                    side_w,
-                    pair_height,
-                )
-                y -= max(h1, h2) + gap
+            pair = assets.pair
+            side_w = (usable_width - gap) / 2
+            c.setFont("Helvetica-Bold", 11)
+            c.drawString(margin, y, f"Position (cleft {pair.cleft_id})")
+            c.drawString(margin + side_w + gap, y, f"Active zonogram (cleft {pair.cleft_id})")
+            y -= 12
+            h1 = _draw_image(c, pair.position_png, margin, y - pair_height, side_w, pair_height)
+            h2 = _draw_image(
+                c,
+                pair.zonogram_png,
+                margin + side_w + gap,
+                y - pair_height,
+                side_w,
+                pair_height,
+            )
+            y -= max(h1, h2) + gap
 
             if assets.tomogram_slice_png and assets.tomogram_slice_png.is_file():
                 slice_height = 220
@@ -583,25 +692,10 @@ def build_pdf(
                     y -= 11
 
             c.showPage()
+            if page_progress is not None:
+                page_progress.update(1)
 
     c.save()
-
-
-def group_assets_by_set(
-    entries: list[SupplementaryEntry],
-    resolved: dict[tuple[str, str], ResolvedTomogramAssets],
-) -> list[tuple[str, list[ResolvedTomogramAssets]]]:
-    grouped: dict[str, list[ResolvedTomogramAssets]] = {}
-    order: list[str] = []
-    for entry in entries:
-        key = (entry.set_name, entry.tomoname)
-        if key not in resolved:
-            continue
-        if entry.set_name not in grouped:
-            grouped[entry.set_name] = []
-            order.append(entry.set_name)
-        grouped[entry.set_name].append(resolved[key])
-    return [(name, grouped[name]) for name in order]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -637,9 +731,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=DEFAULT_SCALE_BAR_NM,
         help="Scale bar length on extracted tomogram slices (default: 100 nm)",
     )
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Process only the first 3 tomograms from the list (for troubleshooting)",
+    )
     args = parser.parse_args(argv)
 
     entries = parse_supplementary_list(args.list)
+    if args.test:
+        entries = entries[:3]
+        tqdm.write(f"Test mode: processing first {len(entries)} tomogram(s) from the list")
     csv_index = load_tomogram_csv_index(args.tomocsv)
     overrides = load_overrides_csv(args.overrides)
 
@@ -647,14 +749,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     if work_dir is None and not args.no_pdf:
         work_dir = Path(tempfile.mkdtemp(prefix="supp_fig_slices_"))
 
-    resolved: dict[tuple[str, str], ResolvedTomogramAssets] = {}
+    resolved_ordered: list[ResolvedTomogramAssets] = []
+    grouped: dict[str, list[ResolvedTomogramAssets]] = {}
+    set_order: list[str] = []
     errors: list[str] = []
+
+    total_pages = sum(
+        count_planned_pages(entry, csv_index, overrides, args.data_dir) for entry in entries
+    )
+    resolve_bar = tqdm(total=total_pages, desc="Resolving pages", unit="page")
 
     for entry in entries:
         key = (entry.set_name, entry.tomoname)
         override = overrides.get(key)
         try:
-            assets = resolve_tomogram_assets(
+            assets_batch = resolve_all_assets_for_entry(
                 entry,
                 csv_index,
                 args.data_dir,
@@ -662,38 +771,61 @@ def main(argv: Sequence[str] | None = None) -> int:
                 work_dir=work_dir,
                 scale_bar_nm=args.scale_bar_nm,
             )
-            if not assets.pairs:
-                raise FileNotFoundError("No active zonogram image pairs resolved")
-            resolved[key] = assets
-            for warn in assets.warnings:
-                print(f"Warning [{entry.tomoname}]: {warn}")
-            print(f"Resolved {entry.set_name}/{entry.tomoname} ({assets.alignment_dir})")
+            for assets in assets_batch:
+                for warn in assets.warnings:
+                    resolve_bar.write(
+                        f"Warning [{entry.tomoname}/{assets.alignment_dir}/"
+                        f"cleft {assets.cleft_id}]: {warn}"
+                    )
+                resolve_bar.set_postfix_str(
+                    f"{entry.tomoname} {assets.alignment_dir} cleft{assets.cleft_id}",
+                    refresh=False,
+                )
+                resolve_bar.update(1)
+            resolved_ordered.extend(assets_batch)
+            if entry.set_name not in grouped:
+                grouped[entry.set_name] = []
+                set_order.append(entry.set_name)
+            grouped[entry.set_name].extend(assets_batch)
         except Exception as exc:
             msg = f"Failed {entry.set_name}/{entry.tomoname}: {exc}"
-            print(msg)
+            resolve_bar.write(msg)
             errors.append(msg)
 
-    if not resolved:
+    resolve_bar.close()
+
+    if not resolved_ordered:
         print("No tomograms resolved; nothing to do.")
         return 1
 
     if args.copy_assets_dir is not None:
         args.copy_assets_dir.mkdir(parents=True, exist_ok=True)
         n_copied = 0
-        for assets in resolved.values():
+        copy_bar = tqdm(resolved_ordered, desc="Copying assets", unit="page")
+        for assets in copy_bar:
+            copy_bar.set_postfix_str(
+                f"{assets.entry.tomoname} {assets.alignment_dir} cleft{assets.cleft_id}",
+                refresh=False,
+            )
             copied = copy_assets(assets, args.copy_assets_dir)
             n_copied += len(copied)
-        print(f"Copied {n_copied} files under {args.copy_assets_dir}")
+        copy_bar.close()
+        tqdm.write(f"Copied {n_copied} files under {args.copy_assets_dir}")
 
     if not args.no_pdf:
-        grouped = group_assets_by_set(entries, resolved)
-        build_pdf(grouped, args.output_pdf)
-        print(f"PDF written: {args.output_pdf}")
+        pdf_bar = tqdm(total=len(resolved_ordered), desc="Writing PDF", unit="page")
+        build_pdf(
+            [(name, grouped[name]) for name in set_order],
+            args.output_pdf,
+            page_progress=pdf_bar,
+        )
+        pdf_bar.close()
+        tqdm.write(f"PDF written: {args.output_pdf}")
 
     if errors:
-        print("\nErrors:")
+        tqdm.write("\nErrors:")
         for err in errors:
-            print(f"  - {err}")
+            tqdm.write(f"  - {err}")
         return 1
     return 0
 
