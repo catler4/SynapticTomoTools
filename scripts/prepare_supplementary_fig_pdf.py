@@ -52,6 +52,7 @@ _CLEFT_ID_RE = re.compile(r"active_zonogram_(\d+)_position\.png$")
 _CLEFT_ID_HYPHEN_RE = re.compile(r"active-zonogram_(\d+)_position\.png$")
 
 _CLEFT_MIP_SELECTED_AUNPS_SETS: frozenset[str] = frozenset({"15F1and5F11dimer"})
+DEFAULT_SCALE_BAR_NM = 100.0
 _DEFAULT_VOXEL_SIZE_NM = 1.0
 
 
