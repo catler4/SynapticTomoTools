@@ -131,11 +131,21 @@ POOLED_DIST_SHIFT_COLUMNS_CSV = Path(
 POOLED_DIST_PERM_COLUMNS_CSV = Path(
     "results/aunps/fusion_point_aunp_distances_label_permutation_columns_pooled.csv"
 )
+# Mean cumulative AuNP count vs distance (1 nm bins, centers 0.5, 1.5, …).
+POOLED_DIST_SHIFT_CUMHIST_CSV = Path(
+    "results/aunps/fusion_point_aunp_distances_40nm_shift_cumulative_hist_pooled.csv"
+)
+POOLED_DIST_LABEL_PERM_CUMHIST_CSV = Path(
+    "results/aunps/fusion_point_aunp_distances_label_permutation_cumulative_hist_pooled.csv"
+)
+DISTANCE_HIST_BIN_WIDTH_NM = 1.0
 DISTANCE_COLUMNS_ONLY_STEMS = {
     "fusing": "distances_fusing_columns_only",
     "close": "distances_close_columns_only",
     "shift_40nm": "distances_40nm_shift_columns_only",
     "label_permutation": "distances_label_permutation_columns_only",
+    "shift_40nm_cumhist": "distances_40nm_shift_cumulative_hist",
+    "label_permutation_cumhist": "distances_label_permutation_cumulative_hist",
 }
 
 CONTROL_COMPARISONS: tuple[ControlKind, ...] = ("close", "shift_40nm", "label_permutation")
@@ -325,6 +335,153 @@ def _global_site_column_name(
     return "__".join(parts)
 
 
+def _tomogram_zone_column_name(
+    tomogram_name: str,
+    alignment_dir: str,
+    zone_name: str,
+    suffix: str,
+) -> str:
+    """Pooled column id for one tomogram×zone (no per-vesicle suffix)."""
+    parts = [
+        str(tomogram_name).replace(" ", "_"),
+        str(alignment_dir).replace(" ", "_"),
+        str(zone_name).replace(" ", "_"),
+        str(suffix).replace(" ", "_"),
+    ]
+    return "__".join(parts)
+
+
+def _distances_to_single_site(aunp_coords: np.ndarray, site_xyz: np.ndarray) -> np.ndarray:
+    aunp_coords = np.atleast_2d(np.asarray(aunp_coords, dtype=float))
+    site = np.asarray(site_xyz, dtype=float).reshape(3)
+    return np.linalg.norm(aunp_coords - site, axis=1)
+
+
+def _min_distances_to_query_sites(
+    aunp_coords: np.ndarray,
+    queries: Sequence[np.ndarray],
+) -> np.ndarray:
+    """Per-AuNP minimum distance to any query site in one label-permutation replicate."""
+    aunp_coords = np.atleast_2d(np.asarray(aunp_coords, dtype=float))
+    if not queries:
+        return np.full(len(aunp_coords), np.nan)
+    q = np.vstack([np.asarray(query, dtype=float).reshape(3) for query in queries])
+    if len(q) == 0:
+        return np.full(len(aunp_coords), np.nan)
+    d = np.linalg.norm(aunp_coords[:, None, :] - q[None, :, :], axis=2)
+    return np.min(d, axis=1)
+
+
+def _distance_hist_bin_centers(
+    r_max_nm: float = DEFAULT_RIPLEY_R_MAX_NM,
+    *,
+    bin_width_nm: float = DISTANCE_HIST_BIN_WIDTH_NM,
+) -> np.ndarray:
+    """Bin centers 0.5, 1.5, … for 1 nm bins [0, 1), [1, 2), … up to ``r_max_nm``."""
+    coarse = float(bin_width_nm)
+    r_max = float(r_max_nm)
+    n_bins = int(np.floor(r_max / coarse))
+    if n_bins < 1:
+        n_bins = 1
+    return (np.arange(n_bins, dtype=float) + 0.5) * coarse
+
+
+def _cumulative_aunp_count_at_bin_centers(
+    distances: np.ndarray,
+    r_centers: np.ndarray,
+) -> np.ndarray:
+    """
+    Cumulative AuNP count at each bin center.
+
+    Center ``c`` denotes the bin [c − Δ/2, c + Δ/2) (e.g. 0.5 → [0, 1) nm);
+    the value is the number of AuNPs with distance strictly below the upper edge
+    (c + Δ/2).
+    """
+    d = np.asarray(distances, dtype=float)
+    d = d[np.isfinite(d)]
+    if len(d) == 0:
+        return np.zeros(len(r_centers), dtype=float)
+    half = 0.5 * float(DISTANCE_HIST_BIN_WIDTH_NM)
+    upper_edges = np.asarray(r_centers, dtype=float) + half
+    return np.array([float(np.sum(d < edge)) for edge in upper_edges], dtype=float)
+
+
+def _mean_cumulative_histogram(
+    distances_per_replicate: Sequence[np.ndarray],
+    r_centers: np.ndarray,
+) -> np.ndarray:
+    """Mean cumulative AuNP-count curve across null replicates."""
+    curves = [
+        _cumulative_aunp_count_at_bin_centers(d, r_centers)
+        for d in distances_per_replicate
+        if len(np.asarray(d, dtype=float).reshape(-1)) > 0
+    ]
+    if not curves:
+        return np.full(len(r_centers), np.nan)
+    return np.nanmean(np.vstack(curves), axis=0)
+
+
+def build_shift_cumulative_histogram_dataframe(
+    aunp_coords: np.ndarray,
+    fusing_rows: Sequence[dict],
+    shift_by_replicate: dict[int, dict[int, np.ndarray]],
+    *,
+    tomogram_name: str,
+    alignment_dir: str,
+    zone_name: str,
+    r_max_nm: float = DEFAULT_RIPLEY_R_MAX_NM,
+) -> pd.DataFrame:
+    """Per-vesicle mean cumulative AuNP-count histogram (40 nm shift null)."""
+    r_centers = _distance_hist_bin_centers(r_max_nm)
+    columns: dict[str, np.ndarray] = {}
+    for fp in fusing_rows:
+        vesicle_id = int(fp["vesicle_id"])
+        dists_by_rep = [
+            _distances_to_single_site(aunp_coords, site)
+            for rep_id in sorted(shift_by_replicate)
+            for site in [shift_by_replicate.get(rep_id, {}).get(vesicle_id)]
+            if site is not None
+        ]
+        col = _global_site_column_name(
+            tomogram_name,
+            alignment_dir,
+            zone_name,
+            fp["vesicle_name"],
+            "shift_cumhist",
+        )
+        columns[col] = _mean_cumulative_histogram(dists_by_rep, r_centers)
+    if not columns:
+        return pd.DataFrame({"r_nm": r_centers})
+    return pd.DataFrame({"r_nm": r_centers, **columns})
+
+
+def build_label_permutation_cumulative_histogram_dataframe(
+    aunp_coords: np.ndarray,
+    label_pooled: dict[int, list[np.ndarray]],
+    *,
+    tomogram_name: str,
+    alignment_dir: str,
+    zone_name: str,
+    r_max_nm: float = DEFAULT_RIPLEY_R_MAX_NM,
+) -> pd.DataFrame:
+    """Per tomogram×zone mean cumulative AuNP-count histogram (label-perm null)."""
+    r_centers = _distance_hist_bin_centers(r_max_nm)
+    dists_by_rep = [
+        _min_distances_to_query_sites(aunp_coords, label_pooled[perm_id])
+        for perm_id in sorted(label_pooled)
+        if label_pooled[perm_id]
+    ]
+    col = _tomogram_zone_column_name(
+        tomogram_name, alignment_dir, zone_name, "label_perm_cumhist"
+    )
+    return pd.DataFrame(
+        {
+            "r_nm": r_centers,
+            col: _mean_cumulative_histogram(dists_by_rep, r_centers),
+        }
+    )
+
+
 def _zone_column_prefix(tomogram_name: str, alignment_dir: str, zone_name: str) -> str:
     return "__".join(
         [
@@ -397,6 +554,63 @@ def upsert_pooled_distance_columns_csv(
     return path
 
 
+def merge_cumulative_histogram_dataframes(
+    frames: Sequence[pd.DataFrame],
+) -> pd.DataFrame:
+    """Horizontally merge cumulative-histogram tables sharing the same ``r_nm`` grid."""
+    usable = [
+        f
+        for f in frames
+        if f is not None and not f.empty and "r_nm" in f.columns
+    ]
+    if not usable:
+        return pd.DataFrame()
+    r_nm = usable[0]["r_nm"].to_numpy(dtype=float)
+    for frame in usable[1:]:
+        other = frame["r_nm"].to_numpy(dtype=float)
+        if len(other) != len(r_nm) or not np.allclose(other, r_nm):
+            raise ValueError("r_nm grids must match when merging cumulative histograms")
+    out: dict[str, np.ndarray] = {"r_nm": r_nm}
+    for frame in usable:
+        for col in frame.columns:
+            if col == "r_nm":
+                continue
+            out[str(col)] = frame[col].to_numpy(dtype=float)
+    return pd.DataFrame(out)
+
+
+def upsert_pooled_cumulative_histogram_csv(
+    path: Path,
+    new_df: pd.DataFrame,
+    *,
+    drop_column_prefix: str | None = None,
+) -> Path:
+    """Merge ``new_df`` into a pooled cumulative-histogram CSV (rows = ``r_nm``)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frames: list[pd.DataFrame] = []
+    if path.is_file():
+        old = _read_optional_distance_columns_csv(path)
+        if drop_column_prefix and not old.empty:
+            keep = ["r_nm"] + [
+                c
+                for c in old.columns
+                if c != "r_nm" and not str(c).startswith(drop_column_prefix)
+            ]
+            old = old[keep] if keep else pd.DataFrame()
+        if not old.empty:
+            frames.append(old)
+    if new_df is not None and not new_df.empty:
+        frames.append(new_df)
+    merged = merge_cumulative_histogram_dataframes(frames)
+    if merged.empty:
+        if path.is_file():
+            path.unlink()
+        return path
+    merged.to_csv(path, index=False)
+    return path
+
+
 def write_pooled_fusion_point_aunp_distance_column_csvs(
     search_roots: Sequence[Path] | str | Path,
 ) -> list[Path]:
@@ -416,6 +630,10 @@ def write_pooled_fusion_point_aunp_distance_column_csvs(
         DISTANCE_COLUMNS_ONLY_STEMS["close"]: POOLED_DIST_CLOSE_COLUMNS_CSV,
         DISTANCE_COLUMNS_ONLY_STEMS["shift_40nm"]: POOLED_DIST_SHIFT_COLUMNS_CSV,
         DISTANCE_COLUMNS_ONLY_STEMS["label_permutation"]: POOLED_DIST_PERM_COLUMNS_CSV,
+    }
+    cumhist_stem_to_out = {
+        DISTANCE_COLUMNS_ONLY_STEMS["shift_40nm_cumhist"]: POOLED_DIST_SHIFT_CUMHIST_CSV,
+        DISTANCE_COLUMNS_ONLY_STEMS["label_permutation_cumhist"]: POOLED_DIST_LABEL_PERM_CUMHIST_CSV,
     }
     written: list[Path] = []
     for stem, out_path in stem_to_out.items():
@@ -439,6 +657,30 @@ def write_pooled_fusion_point_aunp_distance_column_csvs(
         print(
             f"Pooled vesicle-column distances ({stem}: {merged.shape[1]} columns, "
             f"{merged.shape[0]} rows) -> {out_path}"
+        )
+        written.append(out_path)
+    for stem, out_path in cumhist_stem_to_out.items():
+        found: list[Path] = []
+        for root in roots:
+            found.extend(root.glob(f"**/{ANALYSES_SUBDIR}/*/{stem}.csv"))
+        frames = [
+            _read_optional_distance_columns_csv(p)
+            for p in sorted(set(found))
+            if p.is_file()
+        ]
+        frames = [f for f in frames if not f.empty]
+        merged = merge_cumulative_histogram_dataframes(frames)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        if merged.empty:
+            if out_path.is_file():
+                out_path.unlink()
+            print(f"Pooled cumulative histogram ({stem}: no data) -> skipped {out_path}")
+            continue
+        merged.to_csv(out_path, index=False)
+        n_value_cols = merged.shape[1] - 1
+        print(
+            f"Pooled cumulative histogram ({stem}: {n_value_cols} columns, "
+            f"{merged.shape[0]} r rows) -> {out_path}"
         )
         written.append(out_path)
     return written
@@ -2131,11 +2373,31 @@ def run_fusion_point_aunp_analyses_for_zone(
             print(f"  No {subset} AuNPs for {zone_name}; distance CSVs written empty")
 
     # Vesicle-as-column tables using all loaded AuNPs for this zone (pooled across tomograms later).
+    shift_cumhist_df = build_shift_cumulative_histogram_dataframe(
+        aunp_coords_all,
+        fusing_rows,
+        shift_by_rep,
+        tomogram_name=tomogram_name,
+        alignment_dir=alignment_dir,
+        zone_name=zone_name,
+    )
+    label_perm_cumhist_df = build_label_permutation_cumulative_histogram_dataframe(
+        aunp_coords_all,
+        label_pooled,
+        tomogram_name=tomogram_name,
+        alignment_dir=alignment_dir,
+        zone_name=zone_name,
+    )
+
     col_only_specs = [
         ("fusing", original_cols_global, POOLED_DIST_FUSING_COLUMNS_CSV),
         ("close", close_cols_global, POOLED_DIST_CLOSE_COLUMNS_CSV),
         ("shift_40nm", shift_cols_global, POOLED_DIST_SHIFT_COLUMNS_CSV),
         ("label_permutation", label_cols_global, POOLED_DIST_PERM_COLUMNS_CSV),
+    ]
+    cumhist_specs = [
+        ("shift_40nm_cumhist", shift_cumhist_df, POOLED_DIST_SHIFT_CUMHIST_CSV),
+        ("label_permutation_cumhist", label_perm_cumhist_df, POOLED_DIST_LABEL_PERM_CUMHIST_CSV),
     ]
     zone_prefix = _zone_column_prefix(tomogram_name, alignment_dir, zone_name)
     distance_column_paths: dict[str, Path] = {}
@@ -2147,6 +2409,14 @@ def run_fusion_point_aunp_analyses_for_zone(
         distance_column_paths[kind] = p_cols
         upsert_pooled_distance_columns_csv(
             pooled_path, df_cols, drop_column_prefix=zone_prefix
+        )
+    for kind, df_hist, pooled_path in cumhist_specs:
+        stem = DISTANCE_COLUMNS_ONLY_STEMS[kind]
+        p_hist = out_dir / f"{stem}.csv"
+        df_hist.to_csv(p_hist, index=False)
+        distance_column_paths[kind] = p_hist
+        upsert_pooled_cumulative_histogram_csv(
+            pooled_path, df_hist, drop_column_prefix=zone_prefix
         )
     # --- Ripley: both window modes × three AuNP partner subsets ---
     ripley_frames: list[pd.DataFrame] = []
