@@ -84,12 +84,6 @@ def add_scale_bar_to_grayscale_image(
     x1 = x2 - bar_px
     y2 = height - margin
     y1 = y2 - thickness
-    outline = max(1, thickness // 3)
-    for offset in range(outline, 0, -1):
-        draw.rectangle(
-            [x1 - offset, y1 - offset, x2 + offset, y2 + offset],
-            fill="black",
-        )
     draw.rectangle([x1, y1, x2, y2], fill="white")
     text = label if label is not None else f"{int(bar_length_nm)} nm"
     font = ImageFont.load_default()
@@ -100,16 +94,6 @@ def add_scale_bar_to_grayscale_image(
     text_y = y1 - text_h - 4
     if text_y < 2:
         text_y = y2 + 4
-    pad = 2
-    draw.rectangle(
-        [
-            text_x - pad,
-            text_y - pad,
-            text_x + text_w + pad,
-            text_y + text_h + pad,
-        ],
-        fill="black",
-    )
     draw.text((text_x, text_y), text, fill="white", font=font)
     return img
 
@@ -593,21 +577,31 @@ def copy_assets(
     return copied
 
 
-def _draw_image(
+def _image_fit_size(iw: int, ih: int, max_width: float, max_height: float) -> tuple[int, int]:
+    if iw <= 0 or ih <= 0:
+        return 0, 0
+    scale = min(max_width / iw, max_height / ih)
+    return max(1, int(iw * scale)), max(1, int(ih * scale))
+
+
+def _draw_image_top_aligned(
     c: canvas.Canvas,
     img_path: Path,
     x: float,
-    y: float,
+    y_top: float,
     max_width: float,
     max_height: float,
 ) -> float:
+    """Draw image with its top edge at ``y_top``; return drawn height."""
     if not img_path.is_file():
         return 0.0
     img = Image.open(img_path)
     iw, ih = img.size
-    scale = min(max_width / iw, max_height / ih)
-    nw, nh = int(iw * scale), int(ih * scale)
-    c.drawImage(ImageReader(img), x, y, width=nw, height=nh)
+    nw, nh = _image_fit_size(iw, ih, max_width, max_height)
+    if nh == 0:
+        return 0.0
+    y_bottom = y_top - nh
+    c.drawImage(ImageReader(img), x, y_bottom, width=nw, height=nh)
     return float(nh)
 
 
@@ -622,6 +616,43 @@ def build_pdf(
     width, height = letter
     margin = 36
     gap = 12
+    label_h = 14
+    max_top_row_h = 165
+    max_mip_h = 200
+
+    def _draw_page_header(assets: ResolvedTomogramAssets) -> float:
+        """Draw title + info blocks; return ``y_top`` below header."""
+        y_top = height - margin
+        header_row_h = 50
+        c.setFillColor(HexColor("#cccccc"))
+        c.rect(
+            margin - 6,
+            y_top - header_row_h,
+            width - 2 * margin + 12,
+            header_row_h,
+            fill=1,
+            stroke=0,
+        )
+        c.setFillColor("black")
+        c.setFont("Helvetica", 11)
+        c.drawString(margin, y_top - 14, assets.entry.tomoname)
+        y_top -= header_row_h
+
+        c.setFillColor(HexColor("#eeeeee"))
+        c.rect(
+            margin - 6,
+            y_top - header_row_h,
+            width - 2 * margin + 12,
+            header_row_h,
+            fill=1,
+            stroke=0,
+        )
+        c.setFillColor("black")
+        c.setFont("Helvetica", 11)
+        c.drawString(margin, y_top - 14, f"Cleft ID: {assets.cleft_id}")
+        c.drawString(margin, y_top - 28, f"Tissue quality: {assets.tissue_quality}")
+        c.drawString(margin, y_top - 42, f"Alignment: {assets.alignment_dir}")
+        return y_top - header_row_h - gap
 
     for set_name, asset_list in grouped_assets:
         c.setFont("Helvetica-Bold", 20)
@@ -629,73 +660,114 @@ def build_pdf(
         c.showPage()
 
         for assets in asset_list:
-            y = height - margin
-            title_h = 34
-            c.setFillColor(HexColor("#cccccc"))
-            c.rect(margin - 6, y - title_h, width - 2 * margin + 12, title_h, fill=1, stroke=0)
-            c.setFillColor("black")
-            c.setFont("Helvetica-Bold", 16)
-            title = assets.entry.tomoname
-            if assets.alignment_dir:
-                title = f"{title} ({assets.alignment_dir}, cleft {assets.cleft_id})"
-            c.drawString(margin, y - 22, title)
-            y -= title_h
-
-            info_h = 50
-            c.setFillColor(HexColor("#eeeeee"))
-            c.rect(margin - 6, y - info_h, width - 2 * margin + 12, info_h, fill=1, stroke=0)
-            c.setFillColor("black")
-            c.setFont("Helvetica", 11)
-            c.drawString(margin, y - 14, f"Cleft / active zone: {assets.cleft_id}")
-            c.drawString(margin, y - 28, f"Tissue quality: {assets.tissue_quality}")
-            c.drawString(margin, y - 42, f"Alignment: {assets.alignment_dir}")
-            y -= info_h + gap
-
             usable_width = width - 2 * margin
-            pair_height = 220
-            pair = assets.pair
             side_w = (usable_width - gap) / 2
-            c.setFont("Helvetica-Bold", 11)
-            c.drawString(margin, y, f"Position (cleft {pair.cleft_id})")
-            c.drawString(margin + side_w + gap, y, f"Active zonogram (cleft {pair.cleft_id})")
-            y -= 12
-            h1 = _draw_image(c, pair.position_png, margin, y - pair_height, side_w, pair_height)
-            h2 = _draw_image(
-                c,
-                pair.zonogram_png,
-                margin + side_w + gap,
-                y - pair_height,
-                side_w,
-                pair_height,
+            has_slice = (
+                assets.tomogram_slice_png is not None and assets.tomogram_slice_png.is_file()
             )
-            y -= max(h1, h2) + gap
+            pair = assets.pair
 
-            if assets.tomogram_slice_png and assets.tomogram_slice_png.is_file():
-                slice_height = 220
-                c.setFont("Helvetica-Bold", 11)
-                c.drawString(margin, y, "Tomogram center slice")
-                y -= 12
-                nh = _draw_image(
+            y_top = _draw_page_header(assets)
+
+            mip_reserve = label_h + max_mip_h + gap
+            top_row_cap = min(
+                max_top_row_h,
+                y_top - margin - mip_reserve - label_h - gap,
+            )
+            top_row_cap = max(72.0, top_row_cap)
+
+            c.setFont("Helvetica-Bold", 11)
+            c.drawString(margin, y_top - 10, f"Position (cleft {pair.cleft_id})")
+            if has_slice:
+                c.drawString(
+                    margin + side_w + gap,
+                    y_top - 10,
+                    "Tomogram center slice",
+                )
+            y_top -= label_h
+
+            h_position = _draw_image_top_aligned(
+                c, pair.position_png, margin, y_top, side_w, top_row_cap
+            )
+            h_slice = 0.0
+            if has_slice:
+                h_slice = _draw_image_top_aligned(
                     c,
                     assets.tomogram_slice_png,
-                    margin,
-                    y - slice_height,
-                    usable_width,
-                    slice_height,
+                    margin + side_w + gap,
+                    y_top,
+                    side_w,
+                    top_row_cap,
                 )
-                y -= nh + gap
+            y_top -= max(h_position, h_slice) + gap
+
+            mip_cap = min(max_mip_h, y_top - margin - label_h)
+            if mip_cap < 72:
+                c.showPage()
+                y_top = height - margin
+                c.setFont("Helvetica-Bold", 12)
+                c.drawString(
+                    margin,
+                    y_top - 12,
+                    f"{assets.entry.tomoname} — Cleft MIP (cleft {pair.cleft_id})",
+                )
+                y_top -= label_h + gap
+                mip_cap = min(max_mip_h, y_top - margin)
+            else:
+                c.setFont("Helvetica-Bold", 11)
+                c.drawString(margin, y_top - 10, f"Cleft MIP (cleft {pair.cleft_id})")
+                y_top -= label_h
+            mip_h = _draw_image_top_aligned(
+                c,
+                pair.zonogram_png,
+                margin,
+                y_top,
+                usable_width,
+                mip_cap,
+            )
+            y_top -= mip_h + gap
 
             if assets.warnings:
                 c.setFont("Helvetica", 9)
                 for warn in assets.warnings:
-                    c.drawString(margin, y, f"Warning: {warn}")
-                    y -= 11
+                    if y_top < margin + 10:
+                        break
+                    c.drawString(margin, y_top - 8, f"Warning: {warn}")
+                    y_top -= 11
 
             c.showPage()
             if page_progress is not None:
                 page_progress.update(1)
 
     c.save()
+
+
+def _require_existing_file(path: Path, arg_name: str) -> Path:
+    path = Path(path)
+    if path.is_dir():
+        raise ValueError(
+            f"{arg_name} must be a file, but {path} is a directory."
+        )
+    if not path.is_file():
+        raise FileNotFoundError(f"{arg_name} not found: {path}")
+    return path
+
+
+def _require_output_pdf_path(path: Path) -> Path:
+    path = Path(path)
+    if path.is_dir():
+        suggested = path / "supplementary_figure.pdf"
+        raise ValueError(
+            f"--output-pdf must be a PDF file path, but {path} is a directory. "
+            f"Use e.g. {suggested} for the PDF and --copy-assets-dir {path} "
+            "if you want assets copied into that folder."
+        )
+    if path.suffix.lower() != ".pdf":
+        raise ValueError(
+            f"--output-pdf should end with .pdf (got {path}). "
+            "If you meant an output folder, use --copy-assets-dir instead."
+        )
+    return path
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -737,6 +809,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Process only the first 3 tomograms from the list (for troubleshooting)",
     )
     args = parser.parse_args(argv)
+
+    args.list = _require_existing_file(args.list, "--list")
+    args.tomocsv = _require_existing_file(args.tomocsv, "--tomocsv")
+    if args.overrides is not None:
+        args.overrides = _require_existing_file(args.overrides, "--overrides")
+    if not args.no_pdf:
+        args.output_pdf = _require_output_pdf_path(args.output_pdf)
 
     entries = parse_supplementary_list(args.list)
     if args.test:
