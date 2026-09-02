@@ -1910,8 +1910,14 @@ def _extract_bidir_curves_matrix(
 
 
 def build_pooled_bidirectional_prism_table(df: pd.DataFrame) -> pd.DataFrame:
-    """Pooled fusing-mean vs each control's mean+95% envelope, per (aunp_subset,
-    window_mode, family, control_comparison, r_nm), across all tomograms/zones."""
+    """
+    Pooled fusing vs control means and envelopes per (aunp_subset, window_mode,
+    family, control_comparison, r_nm).
+
+    Includes mean ± SEM/SD envelope columns for Prism paste (``fusing_sem_envelope_*``,
+    ``control_sem_envelope_*``), plus the control 2.5–97.5% percentile band. SEM is
+    across tomogram×zone curves on the stored L/g scale (not K→L transformed).
+    """
     if df.empty or "tomogram_name" not in df.columns:
         return pd.DataFrame()
 
@@ -1929,7 +1935,9 @@ def build_pooled_bidirectional_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                 r_vals, obs_curves = _extract_bidir_curves_matrix(sub_df, "fusing")
                 if len(obs_curves) == 0:
                     continue
-                obs_mean = np.nanmean(obs_curves, axis=0)
+                fusing_sd = _prism_sd_envelope_columns(
+                    obs_curves, r_vals, prefix="fusing"
+                )
                 n_tomograms = int(sub_df["tomogram_name"].nunique())
                 n_zones = int(
                     sub_df[["tomogram_name", "alignment_dir", "cleft_name"]]
@@ -1939,11 +1947,14 @@ def build_pooled_bidirectional_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                 for comparison in CONTROL_COMPARISONS:
                     _, control_curves = _extract_bidir_curves_matrix(sub_df, comparison)
                     if len(control_curves):
-                        lo, ctrl_mean, hi = _percentile_band(control_curves)
+                        lo, _, hi = _percentile_band(control_curves)
                         n_control = int(len(control_curves))
                     else:
-                        lo = ctrl_mean = hi = np.full(len(r_vals), np.nan)
+                        lo = hi = np.full(len(r_vals), np.nan)
                         n_control = 0
+                    ctrl_sd = _prism_sd_envelope_columns(
+                        control_curves, r_vals, prefix="control"
+                    )
                     for i, r_nm in enumerate(r_vals):
                         rows.append(
                             {
@@ -1952,10 +1963,38 @@ def build_pooled_bidirectional_prism_table(df: pd.DataFrame) -> pd.DataFrame:
                                 "family": family,
                                 "control_comparison": comparison,
                                 "r_nm": float(r_nm),
-                                "fusing_mean": float(obs_mean[i]),
-                                "control_mean": float(ctrl_mean[i]),
+                                "fusing_mean": float(fusing_sd["fusing_mean"][i]),
+                                "fusing_sd": float(fusing_sd["fusing_sd"][i]),
+                                "fusing_sd_envelope_lo": float(
+                                    fusing_sd["fusing_sd_envelope_lo"][i]
+                                ),
+                                "fusing_sd_envelope_hi": float(
+                                    fusing_sd["fusing_sd_envelope_hi"][i]
+                                ),
+                                "fusing_sem": float(fusing_sd["fusing_sem"][i]),
+                                "fusing_sem_envelope_lo": float(
+                                    fusing_sd["fusing_sem_envelope_lo"][i]
+                                ),
+                                "fusing_sem_envelope_hi": float(
+                                    fusing_sd["fusing_sem_envelope_hi"][i]
+                                ),
+                                "control_mean": float(ctrl_sd["control_mean"][i]),
+                                "control_sd": float(ctrl_sd["control_sd"][i]),
                                 "control_envelope_lo": float(lo[i]),
                                 "control_envelope_hi": float(hi[i]),
+                                "control_sd_envelope_lo": float(
+                                    ctrl_sd["control_sd_envelope_lo"][i]
+                                ),
+                                "control_sd_envelope_hi": float(
+                                    ctrl_sd["control_sd_envelope_hi"][i]
+                                ),
+                                "control_sem": float(ctrl_sd["control_sem"][i]),
+                                "control_sem_envelope_lo": float(
+                                    ctrl_sd["control_sem_envelope_lo"][i]
+                                ),
+                                "control_sem_envelope_hi": float(
+                                    ctrl_sd["control_sem_envelope_hi"][i]
+                                ),
                                 "n_fusing_curves": int(len(obs_curves)),
                                 "n_control_curves": n_control,
                                 "n_tomograms": n_tomograms,
