@@ -1,0 +1,61 @@
+>unlabeled
+20250227_AMmilled25-3_Position_16 (tissue)
+20250227_AMmilled25-3_Position_64 (tissue)
+20250227_AMmilled25-3_Position_69_3 (tissue)
+20250227_AMmilled25-3_Position_79 (tissue)
+20250228_AMmilled25-2_Position_8_2 (synaptosome)
+
+>15F1
+20231017_EGmilled24-2_68
+20231017_HippAu_159
+20231026_HippAu_26
+20240111_WaffleHipp_116
+20240111_WaffleHipp_183
+20240111_WaffleHipp_195 (synaptosome)
+20240111_WaffleHipp_198
+20240111_WaffleHipp_227 (semi-tissue)
+20240209_waffleHip_78 (semi-tissue)
+20240523_HippWaffle_71
+20240624_HippWaffle_21
+20240624_HippWaffle_76
+20240624_HippWaffle_86
+20241030_AMmilled12-1_12
+20241030_AMmilled12-1_15
+20241030_AMmilled12-2_78
+
+>15F1-H4K2Cys
+AMmilled54-1_Position_61
+AMmilled55-1_Position_10_3
+AMmilled55-1_Position_112_2
+AMmilled55-1_Position_34
+AMmilled55-1_Position_35_2
+AMmilled55-1_Position_43
+AMmilled55-1_Position_47
+AMmilled55-1_Position_49
+AMmilled55-1_Position_75
+AMmilled55-1_Position_82
+
+>11B8
+20250206_AMmilled27-2_100 (semi-tissue)
+20250206_AMmilled27-2_289 (synaptosome)
+20250206_AMmilled27-2_101 (synaptosome)
+
+>5F11
+20240822_HippWaffle_125 (synaptosome)
+20240822_HippWaffle_129 (semi-tissue)
+20240822_HippWaffle_51 (synaptosome)
+20240920_HippWaffle_113 (synaptosome)
+20240920_HippWaffle_129 (semi-tissue)
+
+>15F1and5F11dimer
+20241206_AMmilled24-3_58 (semi-tissue)
+20241208_AMmilled24-1_64
+20241208_AMmilled24-1_65 (semi-tissue)
+20241211_HippWaffle_49
+20241211_HippWaffle_50 (semi-tissue)
+20250418_AMmilled29-2_Position_87 (semi-tissue)
+20251117_AMmilled40-2_Position_148
+20260127_AMmilled50-3_Position_13_3
+20260127_AMmilled50-3_Position_40
+20260127_AMmilled50-3_Position_57_2 (semi-tissue)
+20260128_AMmilled50-2_Position_2_2

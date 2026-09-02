@@ -1,0 +1,5 @@
+set,tomoname,tissue_quality,alignment_dir,cleft_id,position_png,zonogram_png,mrc_path,slice_z,tomogram_slice_png
+# Example: override only the zonogram image for one tomogram
+#15F1,20231017_EGmilled24-2_68,,liza_az2,0,,/path/to/custom_active_zonogram_0.png,,,
+# Example: use a pre-made tomogram slice instead of extracting from MRC
+#5F11,20240822_HippWaffle_125,synaptosome,best_alignment,0,,,,,/path/to/custom_slice.png
