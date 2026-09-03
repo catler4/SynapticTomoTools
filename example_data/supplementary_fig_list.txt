@@ -1,11 +1,4 @@
->unlabeled
-20250227_AMmilled25-3_Position_16 (tissue)
-20250227_AMmilled25-3_Position_64 (tissue)
-20250227_AMmilled25-3_Position_69_3 (tissue)
-20250227_AMmilled25-3_Position_79 (tissue)
-20250228_AMmilled25-2_Position_8_2 (synaptosome)
-
->15F1
+>15F1 (anti-GluA2 15F1 "C-term")
 20231017_EGmilled24-2_68
 20231017_HippAu_159
 20231026_HippAu_26
@@ -23,7 +16,7 @@
 20241030_AMmilled12-1_15
 20241030_AMmilled12-2_78
 
->15F1-H4K2Cys
+>15F1-H4K2Cys (anti-GluA2 15F1 "H4K-2Cys")
 AMmilled54-1_Position_61
 AMmilled55-1_Position_10_3
 AMmilled55-1_Position_112_2
@@ -35,19 +28,19 @@ AMmilled55-1_Position_49
 AMmilled55-1_Position_75
 AMmilled55-1_Position_82
 
->11B8
+>11B8 (anti-GluA1 11B8 "C-term")
 20250206_AMmilled27-2_100 (semi-tissue)
 20250206_AMmilled27-2_289 (synaptosome)
 20250206_AMmilled27-2_101 (synaptosome)
 
->5F11
+>5F11 (anti-GluN1 5F11 "C-term")
 20240822_HippWaffle_125 (synaptosome)
 20240822_HippWaffle_129 (semi-tissue)
 20240822_HippWaffle_51 (synaptosome)
 20240920_HippWaffle_113 (synaptosome)
 20240920_HippWaffle_129 (semi-tissue)
 
->15F1and5F11dimer
+>15F1and5F11dimer (anti-GluA2 15F1 monomer & anti-GluN1 5F11 dimer)
 20241206_AMmilled24-3_58 (semi-tissue)
 20241208_AMmilled24-1_64
 20241208_AMmilled24-1_65 (semi-tissue)
@@ -59,3 +52,10 @@ AMmilled55-1_Position_82
 20260127_AMmilled50-3_Position_40
 20260127_AMmilled50-3_Position_57_2 (semi-tissue)
 20260128_AMmilled50-2_Position_2_2
+
+>unlabeled (no labeling)
+20250227_AMmilled25-3_Position_16 (tissue)
+20250227_AMmilled25-3_Position_64 (tissue)
+20250227_AMmilled25-3_Position_69_3 (tissue)
+20250227_AMmilled25-3_Position_79 (tissue)
+20250228_AMmilled25-2_Position_8_2 (synaptosome)

@@ -48,7 +48,7 @@ DEFAULT_DATA_DIR = Path("data")
 DEFAULT_OUTPUT_PDF = Path("results/supplementary_figure.pdf")
 
 _TISSUE_DEFAULT = "tissue"
-_SET_HEADER_RE = re.compile(r"^>\s*(.+?)\s*$")
+_SET_HEADER_RE = re.compile(r"^>\s*(\S+)(?:\s*\((.+)\))?\s*$")
 _ENTRY_RE = re.compile(r"^(.+?)\s*\(([^)]+)\)\s*$")
 _CLEFT_ID_RE = re.compile(r"active_zonogram_(\d+)_position(?:_cropped)?\.png$")
 
@@ -105,6 +105,11 @@ class SupplementaryEntry:
     set_name: str
     tomoname: str
     tissue_quality: str = _TISSUE_DEFAULT
+    set_display_name: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.set_display_name:
+            self.set_display_name = self.set_name
 
 
 @dataclass
@@ -142,6 +147,7 @@ class ResolvedTomogramAssets:
 def parse_supplementary_list(path: Path) -> list[SupplementaryEntry]:
     entries: list[SupplementaryEntry] = []
     current_set: str | None = None
+    current_set_display: str = ""
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -149,6 +155,8 @@ def parse_supplementary_list(path: Path) -> list[SupplementaryEntry]:
         set_match = _SET_HEADER_RE.match(line)
         if set_match:
             current_set = set_match.group(1).strip()
+            display = (set_match.group(2) or "").strip()
+            current_set_display = display or current_set
             continue
         if current_set is None:
             raise ValueError(f"Tomogram entry before any set header: {line}")
@@ -159,7 +167,14 @@ def parse_supplementary_list(path: Path) -> list[SupplementaryEntry]:
         else:
             tomoname = line.strip()
             tissue = _TISSUE_DEFAULT
-        entries.append(SupplementaryEntry(current_set, tomoname, tissue))
+        entries.append(
+            SupplementaryEntry(
+                current_set,
+                tomoname,
+                tissue,
+                set_display_name=current_set_display,
+            )
+        )
     return entries
 
 
@@ -753,7 +768,7 @@ def build_pdf(
         c.setFillColor("black")
         c.setFont("Helvetica-Bold", 11)
         c.drawString(margin, y_top - 16, f"Tomogram ID: {assets.entry.tomoname}")
-        set_text = f"SET: {assets.entry.set_name}"
+        set_text = f"SET: {assets.entry.set_display_name}"
         set_text_width = c.stringWidth(set_text, "Helvetica-Bold", 11)
         c.drawString(width - margin - set_text_width, y_top - 16, set_text)
         y_top -= title_row_h
@@ -772,7 +787,7 @@ def build_pdf(
         c.setFont("Helvetica", 11)
         info_y = y_top - 16
         c.drawString(margin, info_y, f"Cleft ID: {assets.cleft_id}")
-        tissue_text = f"Tissue designation: {assets.tissue_quality}"
+        tissue_text = f"Type: {assets.tissue_quality}"
         tissue_text_width = c.stringWidth(tissue_text, "Helvetica", 11)
         c.drawString(width - margin - tissue_text_width, info_y, tissue_text)
         return y_top - info_row_h - gap
