@@ -976,9 +976,11 @@ def build_aunps_per_zone_rows(
     az_individual_zone_results: Dict[str, Dict[str, Any]],
     packing_density_results: Optional[Dict[str, Dict[str, Any]]] = None,
     status: str = "completed",
+    aunp_pick_label: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Build one CSV row per synaptic cleft from AuNP analysis results."""
     packing_density_results = packing_density_results or {}
+    pick_label = (aunp_pick_label or "").strip()
 
     idx_to_name: Dict[int, str] = {}
     for zone_name, zdata in az_individual_zone_results.items():
@@ -1035,6 +1037,7 @@ def build_aunps_per_zone_rows(
             "tomogram_name": tomogram_name,
             "set_name": set_name or "",
             "alignment_dir": alignment_dir,
+            "aunp_pick_label": pick_label,
             "cleft": zone_name,
             "cleft_index": zone_idx,
             "status": status,
@@ -2254,6 +2257,7 @@ def analyze_aunps(tomogram_path, cleft_indices=None, set_name=None,
             az_individual_zone_results=az_individual_zone_results,
             packing_density_results=packing_density_results,
             status="completed",
+            aunp_pick_label=aunp_pick_label,
         )
         summary_stats["individual_zone_results"] = {
             row["cleft"]: row for row in per_zone_rows

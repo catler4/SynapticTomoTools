@@ -32,7 +32,7 @@ from scipy.spatial import ConvexHull, cKDTree
 
 from .alignment_utils import require_alignment_dir
 from .aunps import _read_aunp_pick_star_dataframe
-from .fusion_point_vs_aunp_density import load_presynaptic_az_points_for_zone
+from .fusion_point_geometry import load_presynaptic_az_points_for_zone
 
 # NumPy RuntimeWarnings when every replicate at a radius is NaN (g-shell masking, sparse
 # nulls, skipped zones in pooled tables). NaN outputs there are intentional.

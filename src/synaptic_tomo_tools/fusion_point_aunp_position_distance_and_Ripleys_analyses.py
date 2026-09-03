@@ -40,7 +40,7 @@ from scipy.spatial import cKDTree
 
 from .alignment_utils import require_alignment_dir
 from .aunps import enumerate_close_vesicle_fusion_points
-from .fusion_point_vs_aunp_density import (
+from .fusion_point_geometry import (
     FUSION_POINT_AZ_MAX_SNAP_DISTANCE_NM,
     FUSION_POINT_SHIFT_OFFSET_NM,
     filter_fusion_rows_for_zone,
