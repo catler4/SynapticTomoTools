@@ -5,7 +5,8 @@ Build a supplementary-figure PDF (and optionally copy source assets) from
 
 For each tomogram (grouped by set):
   - active zonogram position + matching zonogram PNG pair(s)
-  - ``active_zonograms/slicer000.jpg`` when present, else center Z slice from
+  - ``active_zonograms/slicer000.jpg`` (cleft 0) or ``slicer000_{cleft_id}.jpg``
+    (later clefts) when present, else center Z slice from
     ``{tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc`` (100 nm scale bar)
   - labels: tomogram name, cleft / active zone id, tissue quality
 
@@ -49,8 +50,7 @@ DEFAULT_OUTPUT_PDF = Path("results/supplementary_figure.pdf")
 _TISSUE_DEFAULT = "tissue"
 _SET_HEADER_RE = re.compile(r"^>\s*(.+?)\s*$")
 _ENTRY_RE = re.compile(r"^(.+?)\s*\(([^)]+)\)\s*$")
-_CLEFT_ID_RE = re.compile(r"active_zonogram_(\d+)_position\.png$")
-_CLEFT_ID_HYPHEN_RE = re.compile(r"active-zonogram_(\d+)_position\.png$")
+_CLEFT_ID_RE = re.compile(r"active_zonogram_(\d+)_position(?:_cropped)?\.png$")
 
 _CLEFT_MIP_SELECTED_AUNPS_SETS: frozenset[str] = frozenset({"15F1and5F11dimer"})
 DEFAULT_SCALE_BAR_NM = 100.0
@@ -320,9 +320,11 @@ def default_position_zonogram_paths(
     set_name: str,
 ) -> tuple[Path | None, Path | None]:
     for active_dir in discover_active_zonogram_dirs(alignment_path):
-        underscore_pos = active_dir / f"active_zonogram_{cleft_id}_position.png"
-        hyphen_pos = active_dir / f"active-zonogram_{cleft_id}_position.png"
-        for pos in (underscore_pos, hyphen_pos):
+        position_candidates = [
+            active_dir / f"active_zonogram_{cleft_id}_position_cropped.png",
+            active_dir / f"active_zonogram_{cleft_id}_position.png",
+        ]
+        for pos in position_candidates:
             if not pos.is_file():
                 continue
             for zono in _cleft_mip_png_candidates(active_dir, cleft_id, set_name):
@@ -334,16 +336,18 @@ def default_position_zonogram_paths(
 def discover_cleft_ids_from_pngs(alignment_path: Path) -> list[int]:
     found: set[int] = set()
     for active_dir in discover_active_zonogram_dirs(alignment_path):
-        for png in active_dir.glob("*_position.png"):
-            m = _CLEFT_ID_RE.match(png.name) or _CLEFT_ID_HYPHEN_RE.match(png.name)
+        for png in active_dir.glob("*_position*.png"):
+            m = _CLEFT_ID_RE.match(png.name)
             if m:
                 found.add(int(m.group(1)))
     return sorted(found)
 
 
-def default_slicer_jpg_path(alignment_path: Path) -> Path | None:
+def default_slicer_jpg_path(alignment_path: Path, cleft_id: int) -> Path | None:
+    """Per-cleft denoised slice: ``slicer000.jpg`` for cleft 0, ``slicer000_{id}.jpg`` otherwise."""
+    filename = "slicer000.jpg" if int(cleft_id) == 0 else f"slicer000_{int(cleft_id)}.jpg"
     for active_dir in discover_active_zonogram_dirs(alignment_path):
-        jpg = active_dir / "slicer000.jpg"
+        jpg = active_dir / filename
         if jpg.is_file():
             return jpg
     return None
@@ -498,38 +502,48 @@ def resolve_tomogram_assets_for_row(
     if mrc_path is None or not mrc_path.is_file():
         warnings.append(f"No ddw MRC found under {alignment_path}")
 
-    slice_png: Path | None = None
-    if override and override.tomogram_slice_png and override.tomogram_slice_png.is_file():
-        slice_png = override.tomogram_slice_png
-    else:
-        slicer_jpg = default_slicer_jpg_path(alignment_path)
-        if slicer_jpg is not None:
-            slice_png = slicer_jpg
-        elif mrc_path is not None:
-            target_dir = work_dir or Path(tempfile.gettempdir())
-            target_dir.mkdir(parents=True, exist_ok=True)
-            slice_png = target_dir / f"{entry.tomoname}_{alignment_dir}_center_slice_z.png"
-            render_center_slice_png(
-                mrc_path,
-                slice_png,
-                slice_z=override.slice_z if override else None,
-                scale_bar_nm=scale_bar_nm,
-            )
+    override_slice = (
+        override.tomogram_slice_png
+        if override and override.tomogram_slice_png and override.tomogram_slice_png.is_file()
+        else None
+    )
+    mrc_slice_png: Path | None = None
 
-    return [
-        ResolvedTomogramAssets(
-            entry=entry,
-            alignment_dir=alignment_dir,
-            cleft_id=pair.cleft_id,
-            tissue_quality=tissue,
-            pair=pair,
-            mrc_path=mrc_path,
-            tomogram_slice_png=slice_png,
-            tomogram_root=root,
-            warnings=list(warnings),
+    resolved: list[ResolvedTomogramAssets] = []
+    for pair in zone_pairs:
+        slice_png: Path | None = override_slice
+        if slice_png is None:
+            slicer_jpg = default_slicer_jpg_path(alignment_path, pair.cleft_id)
+            if slicer_jpg is not None:
+                slice_png = slicer_jpg
+            elif mrc_path is not None:
+                if mrc_slice_png is None:
+                    target_dir = work_dir or Path(tempfile.gettempdir())
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    mrc_slice_png = (
+                        target_dir / f"{entry.tomoname}_{alignment_dir}_center_slice_z.png"
+                    )
+                    render_center_slice_png(
+                        mrc_path,
+                        mrc_slice_png,
+                        slice_z=override.slice_z if override else None,
+                        scale_bar_nm=scale_bar_nm,
+                    )
+                slice_png = mrc_slice_png
+        resolved.append(
+            ResolvedTomogramAssets(
+                entry=entry,
+                alignment_dir=alignment_dir,
+                cleft_id=pair.cleft_id,
+                tissue_quality=tissue,
+                pair=pair,
+                mrc_path=mrc_path,
+                tomogram_slice_png=slice_png,
+                tomogram_root=root,
+                warnings=list(warnings),
+            )
         )
-        for pair in zone_pairs
-    ]
+    return resolved
 
 
 def resolve_all_assets_for_entry(
