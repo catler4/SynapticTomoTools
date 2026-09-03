@@ -344,12 +344,14 @@ def discover_cleft_ids_from_pngs(alignment_path: Path) -> list[int]:
 
 
 def default_slicer_jpg_path(alignment_path: Path, cleft_id: int) -> Path | None:
-    """Per-cleft denoised slice: ``slicer000.jpg`` for cleft 0, ``slicer000_{id}.jpg`` otherwise."""
-    filename = "slicer000.jpg" if int(cleft_id) == 0 else f"slicer000_{int(cleft_id)}.jpg"
+    """Per-cleft denoised slice, then shared ``slicer000.jpg`` if only one exists."""
+    cleft_id = int(cleft_id)
+    names = ["slicer000.jpg"] if cleft_id == 0 else [f"slicer000_{cleft_id}.jpg", "slicer000.jpg"]
     for active_dir in discover_active_zonogram_dirs(alignment_path):
-        jpg = active_dir / filename
-        if jpg.is_file():
-            return jpg
+        for filename in names:
+            jpg = active_dir / filename
+            if jpg.is_file():
+                return jpg
     return None
 
 
