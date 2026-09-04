@@ -30,8 +30,8 @@ AMmilled55-1_Position_82
 
 >11B8 (anti-GluA1 11B8 "C-term")
 20250206_AMmilled27-2_100 (semi-tissue)
-20250206_AMmilled27-2_289 (synaptosome)
 20250206_AMmilled27-2_101 (synaptosome)
+20250206_AMmilled27-2_289 (synaptosome)
 
 >5F11 (anti-GluN1 5F11 "C-term")
 20240822_HippWaffle_125 (synaptosome)
