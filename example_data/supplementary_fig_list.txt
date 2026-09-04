@@ -40,7 +40,7 @@ AMmilled55-1_Position_82
 20240920_HippWaffle_113 (synaptosome)
 20240920_HippWaffle_129 (semi-tissue)
 
->15F1and5F11dimer (anti-GluA2 15F1 monomer & anti-GluN1 5F11 dimer)
+>15F1and5F11dimer (Dual 15F1 monomer & 5F11 dimer)
 20241206_AMmilled24-3_58 (semi-tissue)
 20241208_AMmilled24-1_64
 20241208_AMmilled24-1_65 (semi-tissue)
