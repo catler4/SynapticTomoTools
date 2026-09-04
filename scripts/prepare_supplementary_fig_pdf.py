@@ -52,7 +52,6 @@ _SET_HEADER_RE = re.compile(r"^>\s*(\S+)(?:\s*\((.+)\))?\s*$")
 _ENTRY_RE = re.compile(r"^(.+?)\s*\(([^)]+)\)\s*$")
 _CLEFT_ID_RE = re.compile(r"active_zonogram_(\d+)_position(?:_cropped)?\.png$")
 
-_CLEFT_MIP_SELECTED_AUNPS_SETS: frozenset[str] = frozenset({"15F1and5F11dimer"})
 DEFAULT_SCALE_BAR_NM = 100.0
 _DEFAULT_VOXEL_SIZE_NM = 1.0
 
@@ -314,18 +313,8 @@ def discover_active_zonogram_dirs(alignment_path: Path) -> list[Path]:
 
 
 def _cleft_mip_png_candidates(active_dir: Path, cleft_id: int, set_name: str) -> list[Path]:
-    """Cleft MIP image for the bottom panel (set-specific naming)."""
-    if set_name in _CLEFT_MIP_SELECTED_AUNPS_SETS:
-        return [
-            active_dir / f"active_zonogram_{cleft_id}_selected_aunps.png",
-            active_dir / f"active-zonogram_{cleft_id}_selected_aunps.png",
-            active_dir / f"active_zonogram_{cleft_id}.png",
-            active_dir / f"active-zonogram_{cleft_id}.png",
-        ]
-    return [
-        active_dir / f"active_zonogram_{cleft_id}.png",
-        active_dir / f"active-zonogram_{cleft_id}.png",
-    ]
+    """Cleft MIP image for the bottom panel (two-panel render only)."""
+    return [active_dir / f"active_zonogram_{cleft_id}_two_panel.png"]
 
 
 def default_position_zonogram_paths(
