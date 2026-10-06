@@ -1,0 +1,3 @@
+1. find_eachdimer.py: locates the two AuNPs of each dimer and their midpoint.
+2. make_distance_mrc.py: builds a post-to-pre membrane distance map as an MRC volume.
+3. extract_activezone_coords.py: keeps only the AuNP coordinates inside each active zonogram.
