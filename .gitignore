@@ -1,6 +1,10 @@
 # Ignore large files that should not be committed
 sam_vit_h_4b8939.pth
 
+# macOS folder metadata
+.DS_Store
+**/.DS_Store
+
 # Ignore all STT_results directories and their contents
 STT_results/
 **/STT_results/
@@ -30,9 +34,6 @@ results/summary_pdfs/*.pdf
 # Ignore all .glb files
 *.glb
 **/*.glb
-# Ignore all scripts/utilities (standalone utilities)
-scripts/utilities/
-
 # Ignore everything in data folder except CSV files
 data/
 !data/*.csv
