@@ -15,7 +15,7 @@ Reads a tomogram CSV (``tomoname``, ``set``, ``alignment_dir``) and copies:
         AuNP pick STARs, MemBrain smooth seg, pre/post .glb
 
 Alignment rename:
-  best_alignment      -> IMOD_alignment
+  best_alignment      -> alignment_IMOD
   liza_azN[_rerun]    -> alignment_cleftN
 
 Example
@@ -55,6 +55,9 @@ AUNP_STAR_DIMER = "aunp_tm_BP_active_zone_*_manual_refined_dimer.star"
 AUNP_STAR_MONOMER_ALT = "aunp_tm_BP_active_zone_*_manual_refined-monomer.star"
 AUNP_STAR_DIMER_ALT = "aunp_tm_BP_active_zone_*_manual_refined-dimer.star"
 
+XYZ_COLS = ("faCoordinateX", "faCoordinateY", "faCoordinateZ")
+XYZ_STAR_SUFFIX = "_xyz_only"  # inserted before .star; originals are kept
+
 
 @dataclass
 class CopyPlan:
@@ -73,7 +76,7 @@ class TomogramJob:
 def map_alignment_dir(alignment_dir: str) -> str:
     name = alignment_dir.strip()
     if name == "best_alignment":
-        return "IMOD_alignment"
+        return "alignment_IMOD"
     m = LIZA_AZ_RE.match(name)
     if m:
         return f"alignment_cleft{int(m.group(1))}"
@@ -426,6 +429,102 @@ def execute_copy(plan: CopyPlan, dry_run: bool) -> None:
     print(f"  copied {plan.kind}: {plan.dest}")
 
 
+def _star_dataframe(path: Path):
+    """Return the first table DataFrame from a Relion/STAR file."""
+    import starfile
+
+    star_data = starfile.read(path)
+    if isinstance(star_data, dict):
+        for value in star_data.values():
+            if hasattr(value, "columns"):
+                return value
+    if hasattr(star_data, "columns"):
+        return star_data
+    raise ValueError(f"No table found in STAR file: {path}")
+
+
+def xyz_only_star_path(star_path: Path) -> Path:
+    """``foo.star`` -> ``foo_xyz_only.star`` (never overwrites the input name)."""
+    if star_path.name.endswith(f"{XYZ_STAR_SUFFIX}.star"):
+        return star_path
+    return star_path.with_name(f"{star_path.stem}{XYZ_STAR_SUFFIX}.star")
+
+
+def write_aunp_xyz_only_star(
+    src_star: Path,
+    *,
+    out_path: Path | None = None,
+    dry_run: bool = False,
+    force: bool = False,
+) -> Path | None:
+    """
+    Write a Relion-style STAR containing only faCoordinateX/Y/Z.
+
+    Original ``src_star`` is left unchanged. Returns the output path, or None if
+    skipped / failed.
+    """
+    if src_star.name.endswith(f"{XYZ_STAR_SUFFIX}.star"):
+        return None
+    if out_path is None:
+        out_path = xyz_only_star_path(src_star)
+    if out_path.exists() and not force and not dry_run:
+        print(f"  skip existing xyz STAR: {out_path}")
+        return out_path
+
+    if dry_run:
+        print(f"  [dry-run] xyz STAR: {src_star} -> {out_path}")
+        return out_path
+
+    if not src_star.is_file():
+        print(f"  ERROR: STAR not found for xyz export: {src_star}")
+        return None
+
+    try:
+        df = _star_dataframe(src_star)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ERROR reading {src_star}: {exc}")
+        return None
+
+    # Accept columns with or without a leading underscore
+    colmap: dict[str, str] = {}
+    for want in XYZ_COLS:
+        if want in df.columns:
+            colmap[want] = want
+        elif f"_{want}" in df.columns:
+            colmap[want] = f"_{want}"
+        else:
+            print(f"  ERROR: {src_star} missing column {want}")
+            return None
+
+    slim = df[[colmap[c] for c in XYZ_COLS]].copy()
+    slim.columns = list(XYZ_COLS)
+
+    import starfile
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    starfile.write(slim, out_path, overwrite=True)
+    print(f"  wrote xyz STAR: {out_path}")
+    return out_path
+
+
+def annotation_stars_for_job(dest_tomo: Path) -> list[Path]:
+    """Find AuNP annotation STAR files under a destination tomogram tree."""
+    stars: list[Path] = []
+    if not dest_tomo.is_dir():
+        return stars
+    for ann_dir in dest_tomo.glob("*/annotations"):
+        if not ann_dir.is_dir():
+            continue
+        for path in sorted(ann_dir.glob("*.star")):
+            if path.name.endswith(f"{XYZ_STAR_SUFFIX}.star"):
+                continue
+            # Only AuNP pick-like STARs
+            name = path.name
+            if "manual_refined" in name or name.startswith("aunp_tm_BP_active_zone_"):
+                stars.append(path)
+    return stars
+
+
 def build_plans_for_job(
     job: TomogramJob,
     *,
@@ -526,6 +625,14 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional CSV path for missing-file / warning report",
     )
+    parser.add_argument(
+        "--write-aunp-xyz-stars",
+        action="store_true",
+        help=(
+            "After copying, write sibling Relion STAR files containing only "
+            "faCoordinateX/Y/Z (named *_xyz_only.star). Does not delete originals."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not args.tomocsv.is_file():
@@ -543,12 +650,14 @@ def main(argv: list[str] | None = None) -> int:
         f"  processed: {args.processed_root}\n"
         f"  raw:       {args.raw_root}\n"
         f"  dest:      {args.dest_root}\n"
-        f"  dry_run:   {args.dry_run}"
+        f"  dry_run:   {args.dry_run}\n"
+        f"  xyz_stars: {args.write_aunp_xyz_stars}"
     )
 
     all_warnings: list[dict[str, str]] = []
     n_copied = 0
     n_planned = 0
+    n_xyz = 0
 
     for job in jobs:
         print(f"\n=== {job.set_name}/{job.tomoname} ({', '.join(job.alignment_dirs)}) ===")
@@ -584,6 +693,45 @@ def main(argv: list[str] | None = None) -> int:
                     }
                 )
 
+        if args.write_aunp_xyz_stars:
+            dest_tomo = args.dest_root / job.set_name / job.tomoname
+            # Prefer stars just copied into annotations/; also pick up any already present
+            star_targets: list[Path] = []
+            for plan in plans:
+                if (
+                    plan.dest.suffix == ".star"
+                    and "annotations" in plan.dest.parts
+                    and not plan.dest.name.endswith(f"{XYZ_STAR_SUFFIX}.star")
+                ):
+                    star_targets.append(plan.dest)
+            if not args.dry_run:
+                star_targets.extend(annotation_stars_for_job(dest_tomo))
+            # Unique, stable order
+            seen: set[Path] = set()
+            unique_stars: list[Path] = []
+            for path in star_targets:
+                key = path.resolve() if path.exists() else path
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique_stars.append(path)
+
+            for dest_star in unique_stars:
+                src_for_xyz = dest_star
+                if not src_for_xyz.exists():
+                    for plan in plans:
+                        if plan.dest == dest_star and plan.src.exists():
+                            src_for_xyz = plan.src
+                            break
+                out = write_aunp_xyz_only_star(
+                    src_for_xyz,
+                    out_path=xyz_only_star_path(dest_star),
+                    dry_run=args.dry_run,
+                    force=args.force,
+                )
+                if out is not None:
+                    n_xyz += 1
+
     if args.report is not None:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         with args.report.open("w", newline="", encoding="utf-8") as fh:
@@ -593,8 +741,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\nWrote report: {args.report} ({len(all_warnings)} warnings)")
 
     action = "planned" if args.dry_run else "copied"
-    print(f"\nDone: {n_copied}/{n_planned} files {action}; {len(all_warnings)} warnings")
-    return 0 if n_planned else 1
+    print(
+        f"\nDone: {n_copied}/{n_planned} files {action}; "
+        f"{n_xyz} xyz STAR(s); {len(all_warnings)} warnings"
+    )
+    return 0 if n_planned or n_xyz else 1
 
 
 if __name__ == "__main__":
