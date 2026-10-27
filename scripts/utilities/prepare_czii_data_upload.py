@@ -8,8 +8,9 @@ Reads a tomogram CSV (``tomoname``, ``set``, ``alignment_dir``) and copies:
     frames/                         # raw movies + mdocs + gain (once per tomo)
     {renamed_alignment}/
       {tomoname}.defocus
-      {tomoname}.xf                 # alignment transforms (per alignment)
-      {tomoname}.mrc                # motion-corrected tilt stack
+      {tomoname}.xf                 # alignment transforms (most sets)
+      {tomoname}.mrc                # motion-corrected tilt stack (most sets)
+      {tomoname}.xml / {tomoname}.st  # H4K2Cys only (Warp etomo + tiltstack)
       {tomoname}_full_rec_BP_3DCTF_BIN4.mrc
       {tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc
       annotations/
@@ -18,6 +19,10 @@ Reads a tomogram CSV (``tomoname``, ``set``, ``alignment_dir``) and copies:
 Alignment rename:
   best_alignment      -> alignment_IMOD
   liza_azN[_rerun]    -> alignment_cleftN
+
+For set ``15F1-H4K2Cys`` only: skip ``.xf`` / ``.mrc``; copy Warp
+``{tomoname}.xml`` (etomo) and ``{tomoname}.st`` (tiltstack/{tomoname}/)
+instead.
 
 Example
 -------
@@ -41,6 +46,14 @@ DEFAULT_PROCESSED_ROOT = Path(
 )
 DEFAULT_RAW_ROOT = Path("/home/groups/mammoth/rawdata/CJS/BestTomo_rawdata")
 DEFAULT_DEST_ROOT = Path("/goliath/rawdata/Gouaux/CJS/TOMO/CZII_data_upload")
+DEFAULT_H4K2CYS_ETOMO_DIR = Path(
+    "/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/analyses/"
+    "20260324_H4K2Cys_TOMO_Warp_CJS/warp_tiltseries/etomo"
+)
+DEFAULT_H4K2CYS_TILTSTACK_ROOT = Path(
+    "/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/analyses/"
+    "20260324_H4K2Cys_TOMO_Warp_CJS/warp_tiltseries_2.5/tiltstack"
+)
 
 FRAME_SUFFIXES = (".tif", ".eer", ".mrc")
 GAIN_NAME_RE = re.compile(r"^gain_reference\.", re.IGNORECASE)
@@ -48,6 +61,7 @@ LIZA_AZ_RE = re.compile(r"^liza_az(\d+)(?:_rerun)?$", re.IGNORECASE)
 POSITION_RE = re.compile(r"(Position[_\-][\w\-]+)", re.IGNORECASE)
 DIMER_SET = "15F1and5F11dimer"
 UNLABELED_SET = "unlabeled"
+H4K2CYS_SET = "15F1-H4K2Cys"
 
 # AuNP pick patterns (basename globs under aunps/)
 AUNP_STAR_DEFAULT = "aunp_tm_BP_active_zone_*_manual_refined.star"
@@ -490,24 +504,97 @@ def resolve_processed_alignment(
     return None
 
 
+def resolve_file_with_position_fallback(
+    directory: Path, tomoname: str, dest_name: str
+) -> Path | None:
+    """Look for ``dest_name`` in ``directory``, then the Position_… short name."""
+    candidates = [directory / dest_name]
+    short_name = short_position_filename(dest_name, tomoname)
+    if short_name and short_name != dest_name:
+        candidates.append(directory / short_name)
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+def resolve_h4k2cys_warp_assets(
+    tomoname: str,
+    etomo_dir: Path,
+    tiltstack_root: Path,
+) -> tuple[list[tuple[Path, str]], list[str]]:
+    """
+    For H4K2Cys: locate Warp etomo XML + tiltstack .st (instead of .xf / .mrc).
+
+    Destination names always use the full ``tomoname``.
+    """
+    warnings: list[str] = []
+    items: list[tuple[Path, str]] = []
+
+    xml_dest = f"{tomoname}.xml"
+    xml_src = resolve_file_with_position_fallback(etomo_dir, tomoname, xml_dest)
+    if xml_src is not None:
+        items.append((xml_src, xml_dest))
+    else:
+        warnings.append(f"missing H4K2Cys etomo XML: {etomo_dir / xml_dest}")
+
+    st_dest = f"{tomoname}.st"
+    short = position_basename(tomoname)
+    st_dir_candidates = [tiltstack_root / tomoname]
+    if short and short != tomoname:
+        st_dir_candidates.append(tiltstack_root / short)
+
+    st_src: Path | None = None
+    for st_dir in st_dir_candidates:
+        st_src = resolve_file_with_position_fallback(st_dir, tomoname, st_dest)
+        if st_src is not None:
+            break
+    if st_src is not None:
+        items.append((st_src, st_dest))
+    else:
+        warnings.append(
+            f"missing H4K2Cys tiltstack .st under {tiltstack_root}/{{{tomoname}"
+            + (f"|{short}" if short and short != tomoname else "")
+            + f"}}/{st_dest}"
+        )
+
+    return items, warnings
+
+
 def collect_alignment_assets(
-    align_path: Path, tomoname: str, set_name: str
+    align_path: Path,
+    tomoname: str,
+    set_name: str,
+    *,
+    h4k2cys_etomo_dir: Path | None = None,
+    h4k2cys_tiltstack_root: Path | None = None,
 ) -> tuple[list[tuple[Path, str]], list[str]]:
     """
     Return (src, relative_dest_under_alignment_dir) pairs and warnings.
 
     relative_dest is e.g. ``tomoname.defocus`` or ``annotations/foo.star``.
+    For ``15F1-H4K2Cys``, ``.xf`` / ``.mrc`` are omitted and Warp ``.xml`` /
+    ``.st`` are added instead.
     """
     warnings: list[str] = []
     items: list[tuple[Path, str]] = []
+    is_h4k2cys = set_name == H4K2CYS_SET
 
     required = [
         f"{tomoname}.defocus",
-        f"{tomoname}.xf",
-        f"{tomoname}.mrc",
         f"{tomoname}_full_rec_BP_3DCTF_BIN4.mrc",
         f"{tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc",
     ]
+    if not is_h4k2cys:
+        # Insert after defocus to keep a stable order with other sets
+        required = [
+            f"{tomoname}.defocus",
+            f"{tomoname}.xf",
+            f"{tomoname}.mrc",
+            f"{tomoname}_full_rec_BP_3DCTF_BIN4.mrc",
+            f"{tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc",
+        ]
+
     for name in required:
         src = resolve_alignment_file(align_path, tomoname, name)
         if src is not None:
@@ -515,6 +602,15 @@ def collect_alignment_assets(
             items.append((src, name))
             continue
         warnings.append(f"missing {align_path / name}")
+
+    if is_h4k2cys:
+        etomo = h4k2cys_etomo_dir or DEFAULT_H4K2CYS_ETOMO_DIR
+        tiltstack = h4k2cys_tiltstack_root or DEFAULT_H4K2CYS_TILTSTACK_ROOT
+        warp_items, warp_warns = resolve_h4k2cys_warp_assets(
+            tomoname, etomo, tiltstack
+        )
+        items.extend(warp_items)
+        warnings.extend(warp_warns)
 
     # Annotations
     ann_sources: list[Path] = []
@@ -698,6 +794,8 @@ def build_plans_for_job(
     raw_root: Path,
     dest_root: Path,
     force: bool,
+    h4k2cys_etomo_dir: Path | None = None,
+    h4k2cys_tiltstack_root: Path | None = None,
 ) -> tuple[list[CopyPlan], list[str]]:
     plans: list[CopyPlan] = []
     warnings: list[str] = []
@@ -729,7 +827,11 @@ def build_plans_for_job(
             )
             continue
         assets, asset_warns = collect_alignment_assets(
-            align_src, job.tomoname, job.set_name
+            align_src,
+            job.tomoname,
+            job.set_name,
+            h4k2cys_etomo_dir=h4k2cys_etomo_dir,
+            h4k2cys_tiltstack_root=h4k2cys_tiltstack_root,
         )
         warnings.extend(asset_warns)
         align_dest = dest_tomo / out_name
@@ -768,6 +870,24 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=DEFAULT_DEST_ROOT,
         help=f"CZII upload destination (default: {DEFAULT_DEST_ROOT})",
+    )
+    parser.add_argument(
+        "--h4k2cys-etomo-dir",
+        type=Path,
+        default=DEFAULT_H4K2CYS_ETOMO_DIR,
+        help=(
+            f"H4K2Cys Warp etomo dir with {{tomoname}}.xml "
+            f"(default: {DEFAULT_H4K2CYS_ETOMO_DIR})"
+        ),
+    )
+    parser.add_argument(
+        "--h4k2cys-tiltstack-root",
+        type=Path,
+        default=DEFAULT_H4K2CYS_TILTSTACK_ROOT,
+        help=(
+            f"H4K2Cys Warp tiltstack root containing {{tomoname}}/{{tomoname}}.st "
+            f"(default: {DEFAULT_H4K2CYS_TILTSTACK_ROOT})"
+        ),
     )
     parser.add_argument(
         "--sets",
@@ -811,6 +931,7 @@ def main(argv: list[str] | None = None) -> int:
         print("No tomogram rows to process.")
         return 1
 
+    uses_h4k2cys = any(j.set_name == H4K2CYS_SET for j in jobs)
     print(
         f"Jobs: {len(jobs)} tomograms from {args.tomocsv}\n"
         f"  processed: {args.processed_root}\n"
@@ -819,6 +940,11 @@ def main(argv: list[str] | None = None) -> int:
         f"  dry_run:   {args.dry_run}\n"
         f"  xyz_stars: {args.write_aunp_xyz_stars}"
     )
+    if uses_h4k2cys:
+        print(
+            f"  H4K2Cys etomo:     {args.h4k2cys_etomo_dir}\n"
+            f"  H4K2Cys tiltstack: {args.h4k2cys_tiltstack_root}"
+        )
 
     all_warnings: list[dict[str, str]] = []
     n_copied = 0
@@ -833,6 +959,8 @@ def main(argv: list[str] | None = None) -> int:
             raw_root=args.raw_root,
             dest_root=args.dest_root,
             force=args.force,
+            h4k2cys_etomo_dir=args.h4k2cys_etomo_dir,
+            h4k2cys_tiltstack_root=args.h4k2cys_tiltstack_root,
         )
         for w in warnings:
             print(f"  WARN: {w}")
