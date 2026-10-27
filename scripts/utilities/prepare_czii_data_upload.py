@@ -136,6 +136,41 @@ def position_basename(tomoname: str) -> str | None:
     return short if short and short != tomoname else None
 
 
+def session_tokens(tomoname: str) -> list[str]:
+    """
+    Session identifiers that must contain a Position_…-only raw match.
+
+    Example: ``20250418_AMmilled29-2_Position_47`` →
+    ``['20250418_AMmilled29-2', 'AMmilled29-2']``.
+    Multiple sessions can reuse the same Position_ labels, so short-name
+    frame matches are only accepted under a matching session directory.
+    """
+    m = POSITION_RE.search(tomoname)
+    if not m:
+        return []
+    prefix = tomoname[: m.start()].rstrip("_-")
+    if not prefix:
+        return []
+    tokens = [prefix]
+    date_stripped = re.match(r"^\d{8}_(.+)$", prefix)
+    if date_stripped and date_stripped.group(1) not in tokens:
+        tokens.append(date_stripped.group(1))
+    return tokens
+
+
+def path_matches_session(path: Path, sessions: list[str]) -> bool:
+    """True if any path component equals or is prefixed by a session token."""
+    if not sessions:
+        return False
+    for part in path.parts:
+        for session in sessions:
+            if part == session or part.startswith(session + "_") or part.startswith(
+                session + "-"
+            ):
+                return True
+    return False
+
+
 def short_position_filename(dest_name: str, tomoname: str) -> str | None:
     """Map a full-tomoname filename to the Position_… basename variant."""
     short = position_basename(tomoname)
@@ -191,16 +226,32 @@ def is_gain_file(path: Path) -> bool:
     return path.is_file() and GAIN_NAME_RE.match(path.name) is not None
 
 
-def frame_matches_tomo(path: Path, tomoname: str, pos: str | None) -> bool:
+def frame_matches_tomo(
+    path: Path,
+    tomoname: str,
+    pos: str | None,
+    sessions: list[str] | None = None,
+) -> bool:
+    """
+    Match a raw frame/mdoc to ``tomoname``.
+
+    Full-name / date-stripped matches are accepted anywhere. A match that only
+    uses the ``Position_…`` token also requires the file to sit under a session
+    directory matching ``sessions`` (so ``Position_20`` in session A is not
+    confused with ``Position_20`` in session B).
+    """
     stem = path.name
     if tomoname in stem:
-        return True
-    if pos and pos in stem:
         return True
     # Also match without date prefix: strip leading YYYYMMDD_ if present
     m = re.match(r"^\d{8}_(.+)$", tomoname)
     if m and m.group(1) in stem:
         return True
+    if pos and pos in stem:
+        if not sessions:
+            # No session context available → refuse Position-only match
+            return False
+        return path_matches_session(path, sessions)
     return False
 
 
@@ -238,9 +289,13 @@ def os_walk_limited(root: Path, max_depth: int):
         yield dirpath, dirnames, filenames
 
 
-def collect_from_directory(directory: Path, tomoname: str) -> tuple[list[Path], list[Path], list[Path]]:
+def collect_from_directory(
+    directory: Path, tomoname: str, sessions: list[str] | None = None
+) -> tuple[list[Path], list[Path], list[Path]]:
     """Collect frames/mdocs/gain from a tilt-series directory (layout A or mixed)."""
     pos = position_token(tomoname)
+    if sessions is None:
+        sessions = session_tokens(tomoname)
     frames: list[Path] = []
     mdocs: list[Path] = []
     gains: list[Path] = []
@@ -280,16 +335,22 @@ def collect_from_directory(directory: Path, tomoname: str) -> tuple[list[Path], 
                 gains.append(path)
                 continue
             if is_mdoc_file(path):
-                if frame_matches_tomo(path, tomoname, pos) or path.parent == directory:
+                if (
+                    frame_matches_tomo(path, tomoname, pos, sessions)
+                    or path.parent == directory
+                ):
                     seen.add(resolved)
                     mdocs.append(path)
                 continue
-            if is_frame_file(path) and frame_matches_tomo(path, tomoname, pos):
+            if is_frame_file(path) and frame_matches_tomo(
+                path, tomoname, pos, sessions
+            ):
                 seen.add(resolved)
                 frames.append(path)
 
     # If directory itself is the series folder and contains unmatched frames that
-    # all share the tomoname prefix, take all non-gain frames/mdocs in that folder.
+    # all share the tomoname / Position_ prefix, take all non-gain frames/mdocs
+    # in that folder. Directory was already session-scoped by the caller.
     if not frames and directory.is_dir():
         local_frames = [
             p
@@ -312,6 +373,24 @@ def collect_from_directory(directory: Path, tomoname: str) -> tuple[list[Path], 
     return sorted(set(frames)), sorted(set(mdocs)), sorted(set(gains))
 
 
+def find_session_dirs(set_root: Path, sessions: list[str]) -> list[Path]:
+    """Find directories under set_root whose name matches a session token."""
+    if not sessions or not set_root.is_dir():
+        return []
+    hits: list[Path] = []
+    for dirpath, dirnames, _filenames in os_walk_limited(set_root, max_depth=3):
+        p = Path(dirpath)
+        if p == set_root:
+            continue
+        for session in sessions:
+            if p.name == session or p.name.startswith(session + "_") or p.name.startswith(
+                session + "-"
+            ):
+                hits.append(p)
+                break
+    return sorted(set(hits))
+
+
 def find_raw_assets(
     raw_root: Path, set_name: str, tomoname: str
 ) -> tuple[list[Path], list[Path], list[Path], list[str]]:
@@ -321,53 +400,73 @@ def find_raw_assets(
     Supports:
     - Series folder with per-tilt .tif/.eer/.mrc (+ .mdoc)
     - Session folder with frames/ + mdoc/ (EER style)
+
+    ``Position_…``-only names are only accepted inside a matching session
+    directory (prefix of ``tomoname`` before ``Position_``).
     """
     warnings: list[str] = []
     set_root = raw_root / set_name
     if not set_root.is_dir():
         return [], [], [], [f"raw set root missing: {set_root}"]
 
-    # 1) Directory named exactly as tomoname
+    pos = position_token(tomoname)
+    short = position_basename(tomoname)
+    sessions = session_tokens(tomoname)
+
+    # 1) Directory named as full tomoname (unambiguous)
     named = find_named_dirs(set_root, tomoname)
+
+    # 2) Position_…-only series dirs — only under a matching session
+    if short and short != tomoname and sessions:
+        for session_dir in find_session_dirs(set_root, sessions):
+            for d in find_named_dirs(session_dir, short):
+                if d not in named:
+                    named.append(d)
+            # Session dir itself may be the series folder named Position_…
+            if session_dir.name == short and session_dir not in named:
+                named.append(session_dir)
+
     frames: list[Path] = []
     mdocs: list[Path] = []
     gains: list[Path] = []
 
     for d in named:
-        f, m, g = collect_from_directory(d, tomoname)
+        f, m, g = collect_from_directory(d, tomoname, sessions)
         frames.extend(f)
         mdocs.extend(m)
         gains.extend(g)
 
-    # 2) If nothing found, search session frames/ folders by Position / name match
+    # 3) If nothing found, search frames/ folders (Position-only matches
+    #    still require a matching session path component)
     if not frames:
-        pos = position_token(tomoname)
         for dirpath, dirnames, _filenames in os_walk_limited(set_root, max_depth=3):
             p = Path(dirpath)
             if p.name != "frames":
                 continue
-            for path in p.iterdir():
-                if path.is_file() and is_frame_file(path) and frame_matches_tomo(
-                    path, tomoname, pos
-                ):
-                    frames.append(path)
-            # sibling mdoc/
+            local_frames = [
+                path
+                for path in p.iterdir()
+                if path.is_file()
+                and is_frame_file(path)
+                and frame_matches_tomo(path, tomoname, pos, sessions)
+            ]
+            if not local_frames:
+                continue
+            frames.extend(local_frames)
+            # sibling mdoc/ + per-frame mdocs next to movies
             mdoc_dir = p.parent / "mdoc"
+            mdoc_roots = [p]
             if mdoc_dir.is_dir():
-                for path in mdoc_dir.iterdir():
+                mdoc_roots.append(mdoc_dir)
+            for root in mdoc_roots:
+                for path in root.iterdir():
                     if path.is_file() and is_mdoc_file(path) and frame_matches_tomo(
-                        path, tomoname, pos
+                        path, tomoname, pos, sessions
                     ):
                         mdocs.append(path)
             for gpath in p.parent.iterdir():
                 if gpath.is_file() and is_gain_file(gpath):
                     gains.append(gpath)
-            # Also per-frame mdocs next to eers (rare)
-            for path in p.iterdir():
-                if path.is_file() and is_mdoc_file(path) and frame_matches_tomo(
-                    path, tomoname, pos
-                ):
-                    mdocs.append(path)
 
     frames = sorted(set(frames))
     mdocs = sorted(set(mdocs))
