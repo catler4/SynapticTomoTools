@@ -10,7 +10,7 @@ Reads a tomogram CSV (``tomoname``, ``set``, ``alignment_dir``) and copies:
       {tomoname}.defocus
       {tomoname}.xf                 # alignment transforms (most sets)
       {tomoname}.mrc                # motion-corrected tilt stack (most sets)
-      {tomoname}.xml / {tomoname}.st  # H4K2Cys only (Warp etomo + tiltstack)
+      {tomoname}.xml / {tomoname}.st  # H4K2Cys only (Warp XML + tiltstack)
       {tomoname}_full_rec_BP_3DCTF_BIN4.mrc
       {tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc
       annotations/
@@ -20,9 +20,9 @@ Alignment rename:
   best_alignment      -> alignment_IMOD
   liza_azN[_rerun]    -> alignment_cleftN
 
-For set ``15F1-H4K2Cys`` only: skip ``.xf`` / ``.mrc``; copy Warp
-``{tomoname}.xml`` (etomo) and ``{tomoname}.st`` (tiltstack/{tomoname}/)
-instead.
+For set ``15F1-H4K2Cys`` only: skip ``.defocus`` / ``.xf`` / ``{tomoname}.mrc``;
+copy Warp ``{tomoname}.xml`` (warp_tiltseries_2.5) and ``{tomoname}.st``
+(tiltstack/{tomoname}/) instead.
 
 Example
 -------
@@ -48,7 +48,7 @@ DEFAULT_RAW_ROOT = Path("/home/groups/mammoth/rawdata/CJS/BestTomo_rawdata")
 DEFAULT_DEST_ROOT = Path("/goliath/rawdata/Gouaux/CJS/TOMO/CZII_data_upload")
 DEFAULT_H4K2CYS_ETOMO_DIR = Path(
     "/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/analyses/"
-    "20260324_H4K2Cys_TOMO_Warp_CJS/warp_tiltseries_2.5/etomo"
+    "20260324_H4K2Cys_TOMO_Warp_CJS/warp_tiltseries_2.5"
 )
 DEFAULT_H4K2CYS_TILTSTACK_ROOT = Path(
     "/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/analyses/"
@@ -524,7 +524,7 @@ def resolve_h4k2cys_warp_assets(
     tiltstack_root: Path,
 ) -> tuple[list[tuple[Path, str]], list[str]]:
     """
-    For H4K2Cys: locate Warp etomo XML + tiltstack .st (instead of .xf / .mrc).
+    For H4K2Cys: locate Warp XML + tiltstack .st (instead of .xf / .mrc).
 
     Destination names always use the full ``tomoname``.
     """
@@ -536,7 +536,7 @@ def resolve_h4k2cys_warp_assets(
     if xml_src is not None:
         items.append((xml_src, xml_dest))
     else:
-        warnings.append(f"missing H4K2Cys etomo XML: {etomo_dir / xml_dest}")
+        warnings.append(f"missing H4K2Cys Warp XML: {etomo_dir / xml_dest}")
 
     st_dest = f"{tomoname}.st"
     short = position_basename(tomoname)
@@ -573,20 +573,20 @@ def collect_alignment_assets(
     Return (src, relative_dest_under_alignment_dir) pairs and warnings.
 
     relative_dest is e.g. ``tomoname.defocus`` or ``annotations/foo.star``.
-    For ``15F1-H4K2Cys``, ``.xf`` / ``.mrc`` are omitted and Warp ``.xml`` /
-    ``.st`` are added instead.
+    For ``15F1-H4K2Cys``, ``.defocus`` / ``.xf`` / ``{tomoname}.mrc`` are
+    omitted and Warp ``.xml`` / ``.st`` are added instead.
     """
     warnings: list[str] = []
     items: list[tuple[Path, str]] = []
     is_h4k2cys = set_name == H4K2CYS_SET
 
-    required = [
-        f"{tomoname}.defocus",
-        f"{tomoname}_full_rec_BP_3DCTF_BIN4.mrc",
-        f"{tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc",
-    ]
-    if not is_h4k2cys:
-        # Insert after defocus to keep a stable order with other sets
+    if is_h4k2cys:
+        # No .defocus / .xf / {tomoname}.mrc for this set; Warp .xml + .st instead
+        required = [
+            f"{tomoname}_full_rec_BP_3DCTF_BIN4.mrc",
+            f"{tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc",
+        ]
+    else:
         required = [
             f"{tomoname}.defocus",
             f"{tomoname}.xf",
@@ -876,7 +876,7 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=DEFAULT_H4K2CYS_ETOMO_DIR,
         help=(
-            f"H4K2Cys Warp etomo dir with {{tomoname}}.xml "
+            f"H4K2Cys Warp dir containing {{tomoname}}.xml "
             f"(default: {DEFAULT_H4K2CYS_ETOMO_DIR})"
         ),
     )
@@ -942,7 +942,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     if uses_h4k2cys:
         print(
-            f"  H4K2Cys etomo:     {args.h4k2cys_etomo_dir}\n"
+            f"  H4K2Cys xml dir:   {args.h4k2cys_etomo_dir}\n"
             f"  H4K2Cys tiltstack: {args.h4k2cys_tiltstack_root}"
         )
 
