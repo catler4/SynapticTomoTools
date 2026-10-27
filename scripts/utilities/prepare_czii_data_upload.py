@@ -47,6 +47,7 @@ GAIN_NAME_RE = re.compile(r"^gain_reference\.", re.IGNORECASE)
 LIZA_AZ_RE = re.compile(r"^liza_az(\d+)(?:_rerun)?$", re.IGNORECASE)
 POSITION_RE = re.compile(r"(Position[_\-][\w\-]+)", re.IGNORECASE)
 DIMER_SET = "15F1and5F11dimer"
+UNLABELED_SET = "unlabeled"
 
 # AuNP pick patterns (basename globs under aunps/)
 AUNP_STAR_DEFAULT = "aunp_tm_BP_active_zone_*_manual_refined.star"
@@ -116,9 +117,58 @@ def load_jobs(csv_path: Path, sets_filter: set[str] | None) -> list[TomogramJob]
 
 
 def position_token(tomoname: str) -> str | None:
-    """Return Position_… substring used to match EER/mdoc basenames, if any."""
+    """Return Position_… token used to match EER/mdoc basenames, if any."""
     m = POSITION_RE.search(tomoname)
     return m.group(1) if m else None
+
+
+def position_basename(tomoname: str) -> str | None:
+    """
+    Basename starting at ``Position_…`` through the end of ``tomoname``.
+
+    Example: ``AMmilled49-1_Position_10_2`` → ``Position_10_2``.
+    Used when on-disk files still use the shorter original name.
+    """
+    m = POSITION_RE.search(tomoname)
+    if not m:
+        return None
+    short = tomoname[m.start() :]
+    return short if short and short != tomoname else None
+
+
+def short_position_filename(dest_name: str, tomoname: str) -> str | None:
+    """Map a full-tomoname filename to the Position_… basename variant."""
+    short = position_basename(tomoname)
+    if not short or tomoname not in dest_name:
+        return None
+    return dest_name.replace(tomoname, short, 1)
+
+
+def resolve_alignment_file(
+    align_path: Path, tomoname: str, dest_name: str
+) -> Path | None:
+    """
+    Find ``dest_name`` under the alignment dir (or parent for tilt stack).
+
+    If the full tomoname file is missing and ``tomoname`` contains ``Position_…``,
+    also try the shorter basename that starts at ``Position_``. Destination naming
+    still uses ``dest_name`` (full tomoname).
+    """
+    candidates = [align_path / dest_name]
+    # Motion-corrected tilt stack sometimes lives one level up (tomo root)
+    if dest_name == f"{tomoname}.mrc":
+        candidates.append(align_path.parent / dest_name)
+
+    short_name = short_position_filename(dest_name, tomoname)
+    if short_name and short_name != dest_name:
+        candidates.append(align_path / short_name)
+        if dest_name == f"{tomoname}.mrc":
+            candidates.append(align_path.parent / short_name)
+
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
 
 
 def is_frame_file(path: Path) -> bool:
@@ -360,33 +410,57 @@ def collect_alignment_assets(
         f"{tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc",
     ]
     for name in required:
-        src = align_path / name
-        if src.exists():
+        src = resolve_alignment_file(align_path, tomoname, name)
+        if src is not None:
+            # Always write under the full tomoname in the upload tree
             items.append((src, name))
-        else:
-            warnings.append(f"missing {src}")
+            continue
+        warnings.append(f"missing {align_path / name}")
 
     # Annotations
     ann_sources: list[Path] = []
     aunps_dir = align_path / "aunps"
     membrain_dir = align_path / "membrain"
+    expect_aunps = set_name != UNLABELED_SET
 
-    if set_name == DIMER_SET:
-        patterns = [AUNP_STAR_MONOMER, AUNP_STAR_DIMER, AUNP_STAR_MONOMER_ALT, AUNP_STAR_DIMER_ALT]
-    else:
-        patterns = [AUNP_STAR_DEFAULT]
+    if expect_aunps:
+        if set_name == DIMER_SET:
+            patterns = [
+                AUNP_STAR_MONOMER,
+                AUNP_STAR_DIMER,
+                AUNP_STAR_MONOMER_ALT,
+                AUNP_STAR_DIMER_ALT,
+            ]
+        else:
+            patterns = [AUNP_STAR_DEFAULT]
 
-    if aunps_dir.is_dir():
-        for pat in patterns:
-            ann_sources.extend(sorted(aunps_dir.glob(pat)))
-        for glb in ("presynapticmembranes.glb", "postsynapticmembranes.glb"):
-            g = aunps_dir / glb
-            if g.is_file():
-                ann_sources.append(g)
-            else:
-                warnings.append(f"missing {g}")
+        if aunps_dir.is_dir():
+            for pat in patterns:
+                ann_sources.extend(sorted(aunps_dir.glob(pat)))
+            for glb in ("presynapticmembranes.glb", "postsynapticmembranes.glb"):
+                g = aunps_dir / glb
+                if g.is_file():
+                    ann_sources.append(g)
+                else:
+                    warnings.append(f"missing {g}")
+        else:
+            warnings.append(f"missing aunps/ under {align_path}")
+
+        if set_name == DIMER_SET:
+            if not any("monomer" in p.name for p in ann_sources if p.suffix == ".star"):
+                warnings.append(f"no monomer STAR found under {aunps_dir}")
+            if not any("dimer" in p.name for p in ann_sources if p.suffix == ".star"):
+                warnings.append(f"no dimer STAR found under {aunps_dir}")
+        else:
+            if not any(p.suffix == ".star" for p in ann_sources):
+                warnings.append(f"no manual_refined STAR found under {aunps_dir}")
     else:
-        warnings.append(f"missing aunps/ under {align_path}")
+        # unlabeled: still copy membrane .glb files if present, but do not require AuNP STARs
+        if aunps_dir.is_dir():
+            for glb in ("presynapticmembranes.glb", "postsynapticmembranes.glb"):
+                g = aunps_dir / glb
+                if g.is_file():
+                    ann_sources.append(g)
 
     if membrain_dir.is_dir():
         smooth = sorted(membrain_dir.glob("*_smooth.mrc"))
@@ -396,15 +470,6 @@ def collect_alignment_assets(
             warnings.append(f"no *_smooth.mrc under {membrain_dir}")
     else:
         warnings.append(f"missing membrain/ under {align_path}")
-
-    if set_name == DIMER_SET:
-        if not any("monomer" in p.name for p in ann_sources if p.suffix == ".star"):
-            warnings.append(f"no monomer STAR found under {aunps_dir}")
-        if not any("dimer" in p.name for p in ann_sources if p.suffix == ".star"):
-            warnings.append(f"no dimer STAR found under {aunps_dir}")
-    else:
-        if not any(p.suffix == ".star" for p in ann_sources):
-            warnings.append(f"no manual_refined STAR found under {aunps_dir}")
 
     for src in ann_sources:
         items.append((src, f"annotations/{src.name}"))
