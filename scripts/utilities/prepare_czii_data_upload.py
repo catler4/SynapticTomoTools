@@ -48,7 +48,7 @@ DEFAULT_RAW_ROOT = Path("/home/groups/mammoth/rawdata/CJS/BestTomo_rawdata")
 DEFAULT_DEST_ROOT = Path("/goliath/rawdata/Gouaux/CJS/TOMO/CZII_data_upload")
 DEFAULT_H4K2CYS_ETOMO_DIR = Path(
     "/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/analyses/"
-    "20260324_H4K2Cys_TOMO_Warp_CJS/warp_tiltseries/etomo"
+    "20260324_H4K2Cys_TOMO_Warp_CJS/warp_tiltseries_2.5/etomo"
 )
 DEFAULT_H4K2CYS_TILTSTACK_ROOT = Path(
     "/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/analyses/"
