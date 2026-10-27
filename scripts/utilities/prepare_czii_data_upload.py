@@ -8,6 +8,7 @@ Reads a tomogram CSV (``tomoname``, ``set``, ``alignment_dir``) and copies:
     frames/                         # raw movies + mdocs + gain (once per tomo)
     {renamed_alignment}/
       {tomoname}.defocus
+      {tomoname}.xf                 # alignment transforms (per alignment)
       {tomoname}.mrc                # motion-corrected tilt stack
       {tomoname}_full_rec_BP_3DCTF_BIN4.mrc
       {tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc
@@ -353,6 +354,7 @@ def collect_alignment_assets(
 
     required = [
         f"{tomoname}.defocus",
+        f"{tomoname}.xf",
         f"{tomoname}.mrc",
         f"{tomoname}_full_rec_BP_3DCTF_BIN4.mrc",
         f"{tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc",
