@@ -46,14 +46,16 @@ DEFAULT_PROCESSED_ROOT = Path(
 )
 DEFAULT_RAW_ROOT = Path("/home/groups/mammoth/rawdata/CJS/BestTomo_rawdata")
 DEFAULT_DEST_ROOT = Path("/goliath/rawdata/Gouaux/CJS/TOMO/CZII_data_upload")
-DEFAULT_H4K2CYS_ETOMO_DIR = Path(
+_H4K2CYS_WARP_BASE = Path(
     "/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/analyses/"
-    "20260324_H4K2Cys_TOMO_Warp_CJS/warp_tiltseries_2.5"
+    "20260324_H4K2Cys_TOMO_Warp_CJS"
 )
-DEFAULT_H4K2CYS_TILTSTACK_ROOT = Path(
-    "/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/analyses/"
-    "20260324_H4K2Cys_TOMO_Warp_CJS/warp_tiltseries_2.5/tiltstack"
-)
+DEFAULT_H4K2CYS_ETOMO_DIR = _H4K2CYS_WARP_BASE / "warp_tiltseries_2.5"
+# AMmilled54/55 under warp_tiltseries_2.5; AMmilled49 under warp_tiltseries_49
+DEFAULT_H4K2CYS_TILTSTACK_ROOTS = [
+    _H4K2CYS_WARP_BASE / "warp_tiltseries_2.5" / "tiltstack",
+    _H4K2CYS_WARP_BASE / "warp_tiltseries_49" / "tiltstack",
+]
 
 FRAME_SUFFIXES = (".tif", ".eer", ".mrc")
 GAIN_NAME_RE = re.compile(r"^gain_reference\.", re.IGNORECASE)
@@ -518,10 +520,29 @@ def resolve_file_with_position_fallback(
     return None
 
 
+def h4k2cys_tiltstack_roots_for(
+    tomoname: str, roots: list[Path] | None = None
+) -> list[Path]:
+    """
+    Ordered tiltstack roots for H4K2Cys.
+
+    Prefer ``warp_tiltseries_49`` for AMmilled49 tomograms and
+    ``warp_tiltseries_2.5`` otherwise (AMmilled54/55), then fall back to the rest.
+    """
+    candidates = list(roots) if roots else list(DEFAULT_H4K2CYS_TILTSTACK_ROOTS)
+    if "AMmilled49" in tomoname:
+        preferred = [p for p in candidates if "warp_tiltseries_49" in str(p)]
+        other = [p for p in candidates if p not in preferred]
+        return preferred + other
+    preferred = [p for p in candidates if "warp_tiltseries_2.5" in str(p)]
+    other = [p for p in candidates if p not in preferred]
+    return preferred + other
+
+
 def resolve_h4k2cys_warp_assets(
     tomoname: str,
     etomo_dir: Path,
-    tiltstack_root: Path,
+    tiltstack_roots: list[Path],
 ) -> tuple[list[tuple[Path, str]], list[str]]:
     """
     For H4K2Cys: locate Warp XML + tiltstack .st (instead of .xf / .mrc).
@@ -540,22 +561,26 @@ def resolve_h4k2cys_warp_assets(
 
     st_dest = f"{tomoname}.st"
     short = position_basename(tomoname)
-    st_dir_candidates = [tiltstack_root / tomoname]
-    if short and short != tomoname:
-        st_dir_candidates.append(tiltstack_root / short)
+    ordered_roots = h4k2cys_tiltstack_roots_for(tomoname, tiltstack_roots)
 
     st_src: Path | None = None
-    for st_dir in st_dir_candidates:
-        st_src = resolve_file_with_position_fallback(st_dir, tomoname, st_dest)
+    for tiltstack_root in ordered_roots:
+        st_dir_candidates = [tiltstack_root / tomoname]
+        if short and short != tomoname:
+            st_dir_candidates.append(tiltstack_root / short)
+        for st_dir in st_dir_candidates:
+            st_src = resolve_file_with_position_fallback(st_dir, tomoname, st_dest)
+            if st_src is not None:
+                break
         if st_src is not None:
             break
+
     if st_src is not None:
         items.append((st_src, st_dest))
     else:
+        searched = ", ".join(str(r) for r in ordered_roots) or "(none)"
         warnings.append(
-            f"missing H4K2Cys tiltstack .st under {tiltstack_root}/{{{tomoname}"
-            + (f"|{short}" if short and short != tomoname else "")
-            + f"}}/{st_dest}"
+            f"missing H4K2Cys tiltstack .st for {tomoname} under: {searched}"
         )
 
     return items, warnings
@@ -567,7 +592,7 @@ def collect_alignment_assets(
     set_name: str,
     *,
     h4k2cys_etomo_dir: Path | None = None,
-    h4k2cys_tiltstack_root: Path | None = None,
+    h4k2cys_tiltstack_roots: list[Path] | None = None,
 ) -> tuple[list[tuple[Path, str]], list[str]]:
     """
     Return (src, relative_dest_under_alignment_dir) pairs and warnings.
@@ -605,9 +630,13 @@ def collect_alignment_assets(
 
     if is_h4k2cys:
         etomo = h4k2cys_etomo_dir or DEFAULT_H4K2CYS_ETOMO_DIR
-        tiltstack = h4k2cys_tiltstack_root or DEFAULT_H4K2CYS_TILTSTACK_ROOT
+        tiltstacks = (
+            h4k2cys_tiltstack_roots
+            if h4k2cys_tiltstack_roots
+            else list(DEFAULT_H4K2CYS_TILTSTACK_ROOTS)
+        )
         warp_items, warp_warns = resolve_h4k2cys_warp_assets(
-            tomoname, etomo, tiltstack
+            tomoname, etomo, tiltstacks
         )
         items.extend(warp_items)
         warnings.extend(warp_warns)
@@ -795,7 +824,7 @@ def build_plans_for_job(
     dest_root: Path,
     force: bool,
     h4k2cys_etomo_dir: Path | None = None,
-    h4k2cys_tiltstack_root: Path | None = None,
+    h4k2cys_tiltstack_roots: list[Path] | None = None,
 ) -> tuple[list[CopyPlan], list[str]]:
     plans: list[CopyPlan] = []
     warnings: list[str] = []
@@ -831,7 +860,7 @@ def build_plans_for_job(
             job.tomoname,
             job.set_name,
             h4k2cys_etomo_dir=h4k2cys_etomo_dir,
-            h4k2cys_tiltstack_root=h4k2cys_tiltstack_root,
+            h4k2cys_tiltstack_roots=h4k2cys_tiltstack_roots,
         )
         warnings.extend(asset_warns)
         align_dest = dest_tomo / out_name
@@ -883,10 +912,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--h4k2cys-tiltstack-root",
         type=Path,
-        default=DEFAULT_H4K2CYS_TILTSTACK_ROOT,
+        nargs="*",
+        default=list(DEFAULT_H4K2CYS_TILTSTACK_ROOTS),
         help=(
-            f"H4K2Cys Warp tiltstack root containing {{tomoname}}/{{tomoname}}.st "
-            f"(default: {DEFAULT_H4K2CYS_TILTSTACK_ROOT})"
+            "H4K2Cys Warp tiltstack root(s) containing {tomoname}/{tomoname}.st "
+            "(default: warp_tiltseries_2.5/tiltstack and "
+            "warp_tiltseries_49/tiltstack; AMmilled49 prefers the latter)"
         ),
     )
     parser.add_argument(
@@ -960,7 +991,7 @@ def main(argv: list[str] | None = None) -> int:
             dest_root=args.dest_root,
             force=args.force,
             h4k2cys_etomo_dir=args.h4k2cys_etomo_dir,
-            h4k2cys_tiltstack_root=args.h4k2cys_tiltstack_root,
+            h4k2cys_tiltstack_roots=args.h4k2cys_tiltstack_root,
         )
         for w in warnings:
             print(f"  WARN: {w}")
