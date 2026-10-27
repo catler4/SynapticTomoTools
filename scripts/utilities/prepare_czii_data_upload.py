@@ -543,10 +543,14 @@ def resolve_h4k2cys_warp_assets(
     tomoname: str,
     etomo_dir: Path,
     tiltstack_roots: list[Path],
+    *,
+    processed_root: Path | None = None,
 ) -> tuple[list[tuple[Path, str]], list[str]]:
     """
     For H4K2Cys: locate Warp XML + tiltstack .st (instead of .xf / .mrc).
 
+    ``.st`` search order: Warp tiltstack roots, then
+    ``{processed_root}/15F1-H4K2Cys/TOP_TOMOS/{tomoname}/best_alignment``.
     Destination names always use the full ``tomoname``.
     """
     warnings: list[str] = []
@@ -562,6 +566,10 @@ def resolve_h4k2cys_warp_assets(
     st_dest = f"{tomoname}.st"
     short = position_basename(tomoname)
     ordered_roots = h4k2cys_tiltstack_roots_for(tomoname, tiltstack_roots)
+    proc_root = processed_root or DEFAULT_PROCESSED_ROOT
+    best_align_dir = (
+        proc_root / H4K2CYS_SET / "TOP_TOMOS" / tomoname / "best_alignment"
+    )
 
     st_src: Path | None = None
     for tiltstack_root in ordered_roots:
@@ -575,12 +583,16 @@ def resolve_h4k2cys_warp_assets(
         if st_src is not None:
             break
 
+    if st_src is None:
+        st_src = resolve_alignment_file(best_align_dir, tomoname, st_dest)
+
     if st_src is not None:
         items.append((st_src, st_dest))
     else:
         searched = ", ".join(str(r) for r in ordered_roots) or "(none)"
         warnings.append(
-            f"missing H4K2Cys tiltstack .st for {tomoname} under: {searched}"
+            f"missing H4K2Cys .st for {tomoname} under tiltstacks [{searched}] "
+            f"or {best_align_dir}"
         )
 
     return items, warnings
@@ -591,6 +603,7 @@ def collect_alignment_assets(
     tomoname: str,
     set_name: str,
     *,
+    processed_root: Path | None = None,
     h4k2cys_etomo_dir: Path | None = None,
     h4k2cys_tiltstack_roots: list[Path] | None = None,
 ) -> tuple[list[tuple[Path, str]], list[str]]:
@@ -636,7 +649,10 @@ def collect_alignment_assets(
             else list(DEFAULT_H4K2CYS_TILTSTACK_ROOTS)
         )
         warp_items, warp_warns = resolve_h4k2cys_warp_assets(
-            tomoname, etomo, tiltstacks
+            tomoname,
+            etomo,
+            tiltstacks,
+            processed_root=processed_root,
         )
         items.extend(warp_items)
         warnings.extend(warp_warns)
@@ -859,6 +875,7 @@ def build_plans_for_job(
             align_src,
             job.tomoname,
             job.set_name,
+            processed_root=processed_root,
             h4k2cys_etomo_dir=h4k2cys_etomo_dir,
             h4k2cys_tiltstack_roots=h4k2cys_tiltstack_roots,
         )
