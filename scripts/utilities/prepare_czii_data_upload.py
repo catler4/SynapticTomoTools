@@ -2,7 +2,8 @@
 """
 Assemble a CZII public-upload tree from processed tomograms + raw frames.
 
-Reads a tomogram CSV (``tomoname``, ``set``, ``alignment_dir``) and copies:
+Reads a tomogram CSV (``tomoname``, ``set``, ``alignment_dir``, ``cleft_IDs``)
+and copies:
 
   {dest}/{set}/{tomoname}/
     frames/                         # raw movies + mdocs + gain (once per tomo)
@@ -72,6 +73,7 @@ AUNP_STAR_DIMER = "aunp_tm_BP_active_zone_*_manual_refined_dimer.star"
 # Also accept hyphen variant if present on disk
 AUNP_STAR_MONOMER_ALT = "aunp_tm_BP_active_zone_*_manual_refined-monomer.star"
 AUNP_STAR_DIMER_ALT = "aunp_tm_BP_active_zone_*_manual_refined-dimer.star"
+AUNP_ZONE_RE = re.compile(r"aunp_tm_BP_active_zone_(\d+)_", re.IGNORECASE)
 
 XYZ_COLS = ("faCoordinateX", "faCoordinateY", "faCoordinateZ")
 XYZ_STAR_SUFFIX = "_xyz_only"  # inserted before .star; originals are kept
@@ -89,6 +91,8 @@ class TomogramJob:
     set_name: str
     tomoname: str
     alignment_dirs: list[str] = field(default_factory=list)
+    # alignment_dir -> allowed active-zone indices from CSV cleft_IDs
+    cleft_ids_by_alignment: dict[str, list[int]] = field(default_factory=dict)
 
 
 def map_alignment_dir(alignment_dir: str) -> str:
@@ -104,8 +108,41 @@ def map_alignment_dir(alignment_dir: str) -> str:
     )
 
 
+def parse_cleft_ids(raw: str | None) -> list[int]:
+    """Parse CSV ``cleft_IDs`` (e.g. ``0``, ``0,2``, ``\"0,1\"``) into ints."""
+    if raw is None:
+        return []
+    text = str(raw).strip().strip('"').strip("'")
+    if not text or text.lower() in ("nan", "none"):
+        return []
+    out: list[int] = []
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(int(part))
+        except ValueError:
+            continue
+    return out
+
+
+def aunp_star_zone(path: Path) -> int | None:
+    """Return active-zone index from an AuNP STAR basename, if any."""
+    m = AUNP_ZONE_RE.search(path.name)
+    return int(m.group(1)) if m else None
+
+
+def is_aunp_pick_star(path: Path) -> bool:
+    name = path.name
+    if not name.endswith(".star"):
+        return False
+    return "manual_refined" in name or name.startswith("aunp_tm_BP_active_zone_")
+
+
 def load_jobs(csv_path: Path, sets_filter: set[str] | None) -> list[TomogramJob]:
     grouped: dict[tuple[str, str], list[str]] = defaultdict(list)
+    clefts: dict[tuple[str, str], dict[str, list[int]]] = defaultdict(dict)
     with csv_path.open(newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
         required = {"tomoname", "set", "alignment_dir"}
@@ -122,10 +159,22 @@ def load_jobs(csv_path: Path, sets_filter: set[str] | None) -> list[TomogramJob]
             if not alignment or alignment.lower() in ("nan", "none"):
                 continue
             key = (set_name, tomoname)
+            zones = parse_cleft_ids(row.get("cleft_IDs"))
             if alignment not in grouped[key]:
                 grouped[key].append(alignment)
+                clefts[key][alignment] = zones
+            else:
+                # Same alignment listed twice: union cleft IDs
+                clefts[key][alignment] = sorted(
+                    set(clefts[key].get(alignment, [])) | set(zones)
+                )
     jobs = [
-        TomogramJob(set_name=s, tomoname=t, alignment_dirs=aligns)
+        TomogramJob(
+            set_name=s,
+            tomoname=t,
+            alignment_dirs=aligns,
+            cleft_ids_by_alignment=clefts[(s, t)],
+        )
         for (s, t), aligns in grouped.items()
     ]
     jobs.sort(key=lambda j: (j.set_name, j.tomoname))
@@ -603,6 +652,7 @@ def collect_alignment_assets(
     tomoname: str,
     set_name: str,
     *,
+    cleft_ids: list[int] | None = None,
     processed_root: Path | None = None,
     h4k2cys_etomo_dir: Path | None = None,
     h4k2cys_tiltstack_roots: list[Path] | None = None,
@@ -613,10 +663,14 @@ def collect_alignment_assets(
     relative_dest is e.g. ``tomoname.defocus`` or ``annotations/foo.star``.
     For ``15F1-H4K2Cys``, ``.defocus`` / ``.xf`` / ``{tomoname}.mrc`` are
     omitted and Warp ``.xml`` / ``.st`` are added instead.
+
+    AuNP pick STARs are filtered to ``cleft_ids`` (CSV active zones) when provided.
     """
     warnings: list[str] = []
     items: list[tuple[Path, str]] = []
     is_h4k2cys = set_name == H4K2CYS_SET
+    # Empty / missing cleft list → do not filter (legacy CSVs without cleft_IDs)
+    allowed_zones = set(cleft_ids) if cleft_ids else None
 
     if is_h4k2cys:
         # No .defocus / .xf / {tomoname}.mrc for this set; Warp .xml + .st instead
@@ -675,8 +729,17 @@ def collect_alignment_assets(
             patterns = [AUNP_STAR_DEFAULT]
 
         if aunps_dir.is_dir():
+            star_hits: list[Path] = []
             for pat in patterns:
-                ann_sources.extend(sorted(aunps_dir.glob(pat)))
+                star_hits.extend(sorted(aunps_dir.glob(pat)))
+            if allowed_zones is not None:
+                kept: list[Path] = []
+                for path in star_hits:
+                    zone = aunp_star_zone(path)
+                    if zone is None or zone in allowed_zones:
+                        kept.append(path)
+                star_hits = kept
+            ann_sources.extend(star_hits)
             for glb in ("presynapticmembranes.glb", "postsynapticmembranes.glb"):
                 g = aunps_dir / glb
                 if g.is_file():
@@ -686,14 +749,23 @@ def collect_alignment_assets(
         else:
             warnings.append(f"missing aunps/ under {align_path}")
 
+        star_ann = [p for p in ann_sources if p.suffix == ".star"]
+        if allowed_zones is not None:
+            found_zones = {aunp_star_zone(p) for p in star_ann}
+            found_zones.discard(None)
+            for zone in sorted(allowed_zones):
+                if zone not in found_zones:
+                    warnings.append(
+                        f"no AuNP STAR for active_zone_{zone} under {aunps_dir} "
+                        f"(cleft_IDs={sorted(allowed_zones)})"
+                    )
         if set_name == DIMER_SET:
-            if not any("monomer" in p.name for p in ann_sources if p.suffix == ".star"):
+            if not any("monomer" in p.name for p in star_ann):
                 warnings.append(f"no monomer STAR found under {aunps_dir}")
-            if not any("dimer" in p.name for p in ann_sources if p.suffix == ".star"):
+            if not any("dimer" in p.name for p in star_ann):
                 warnings.append(f"no dimer STAR found under {aunps_dir}")
-        else:
-            if not any(p.suffix == ".star" for p in ann_sources):
-                warnings.append(f"no manual_refined STAR found under {aunps_dir}")
+        elif not star_ann and allowed_zones is None:
+            warnings.append(f"no manual_refined STAR found under {aunps_dir}")
     else:
         # unlabeled: still copy membrane .glb files if present, but do not require AuNP STARs
         if aunps_dir.is_dir():
@@ -715,6 +787,31 @@ def collect_alignment_assets(
         items.append((src, f"annotations/{src.name}"))
 
     return items, warnings
+
+
+def prune_extra_aunp_stars(
+    annotations_dir: Path, allowed_zones: list[int], *, dry_run: bool
+) -> list[str]:
+    """
+    Remove AuNP pick STARs (and sibling *_xyz_only.star) whose active-zone
+    index is not in ``allowed_zones``.
+    """
+    messages: list[str] = []
+    if not annotations_dir.is_dir():
+        return messages
+    allowed = set(allowed_zones)
+    for path in sorted(annotations_dir.iterdir()):
+        if not path.is_file() or not is_aunp_pick_star(path):
+            continue
+        zone = aunp_star_zone(path)
+        if zone is None or zone in allowed:
+            continue
+        if dry_run:
+            messages.append(f"[dry-run] remove extra AuNP STAR: {path}")
+        else:
+            path.unlink()
+            messages.append(f"removed extra AuNP STAR: {path}")
+    return messages
 
 
 def plan_copy(src: Path, dest: Path, kind: str, force: bool) -> CopyPlan | None:
@@ -839,6 +936,7 @@ def build_plans_for_job(
     raw_root: Path,
     dest_root: Path,
     force: bool,
+    dry_run: bool = False,
     h4k2cys_etomo_dir: Path | None = None,
     h4k2cys_tiltstack_roots: list[Path] | None = None,
 ) -> tuple[list[CopyPlan], list[str]]:
@@ -871,10 +969,12 @@ def build_plans_for_job(
                 f"missing alignment dir {job.set_name}/{job.tomoname}/{alignment_dir}"
             )
             continue
+        cleft_ids = job.cleft_ids_by_alignment.get(alignment_dir, [])
         assets, asset_warns = collect_alignment_assets(
             align_src,
             job.tomoname,
             job.set_name,
+            cleft_ids=cleft_ids,
             processed_root=processed_root,
             h4k2cys_etomo_dir=h4k2cys_etomo_dir,
             h4k2cys_tiltstack_roots=h4k2cys_tiltstack_roots,
@@ -885,6 +985,14 @@ def build_plans_for_job(
             plan = plan_copy(src, align_dest / rel, f"alignment/{out_name}", force)
             if plan:
                 plans.append(plan)
+
+        # Drop AuNP STARs for AZs not listed in CSV (including leftovers from prior runs)
+        if job.set_name != UNLABELED_SET and cleft_ids:
+            warnings.extend(
+                prune_extra_aunp_stars(
+                    align_dest / "annotations", cleft_ids, dry_run=dry_run
+                )
+            )
 
     return plans, warnings
 
@@ -1000,13 +1108,18 @@ def main(argv: list[str] | None = None) -> int:
     n_xyz = 0
 
     for job in jobs:
-        print(f"\n=== {job.set_name}/{job.tomoname} ({', '.join(job.alignment_dirs)}) ===")
+        az_bits = []
+        for ad in job.alignment_dirs:
+            zones = job.cleft_ids_by_alignment.get(ad, [])
+            az_bits.append(f"{ad}[AZ={','.join(map(str, zones)) or '-'}]")
+        print(f"\n=== {job.set_name}/{job.tomoname} ({'; '.join(az_bits)}) ===")
         plans, warnings = build_plans_for_job(
             job,
             processed_root=args.processed_root,
             raw_root=args.raw_root,
             dest_root=args.dest_root,
             force=args.force,
+            dry_run=args.dry_run,
             h4k2cys_etomo_dir=args.h4k2cys_etomo_dir,
             h4k2cys_tiltstack_roots=args.h4k2cys_tiltstack_root,
         )
