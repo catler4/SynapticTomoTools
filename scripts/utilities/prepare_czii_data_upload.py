@@ -10,6 +10,9 @@ and copies:
     {renamed_alignment}/
       {tomoname}.defocus
       {tomoname}.xf                 # alignment transforms (most sets)
+      {tomoname}.tlt                # final aligned tilt angles (most sets)
+      tilt.com                      # tilt command for the deposited tomogram
+      {tomoname}.xtilt              # per-view X-axis tilt, only if present
       {tomoname}.mrc                # motion-corrected tilt stack (most sets)
       {tomoname}.xml / {tomoname}.st  # H4K2Cys only (Warp XML + tiltstack)
       {tomoname}_full_rec_BP_3DCTF_BIN4.mrc
@@ -21,9 +24,10 @@ Alignment rename:
   best_alignment      -> alignment_IMOD
   liza_azN[_rerun]    -> alignment_cleftN
 
-For set ``15F1-H4K2Cys`` only: skip ``.defocus`` / ``.xf`` / ``{tomoname}.mrc``;
-copy Warp ``{tomoname}.xml`` (warp_tiltseries_2.5) and ``{tomoname}.st``
-(tiltstack/{tomoname}/) instead.
+For set ``15F1-H4K2Cys`` only: skip ``.defocus`` / ``.xf`` / ``.tlt`` /
+``tilt.com`` / ``.xtilt`` / ``{tomoname}.mrc``; copy Warp ``{tomoname}.xml``
+and ``{tomoname}.st`` instead. AMmilled54/55 come from ``warp_tiltseries_2.5``;
+AMmilled49 comes from ``warp_tiltseries_49``.
 
 Example
 -------
@@ -51,11 +55,16 @@ _H4K2CYS_WARP_BASE = Path(
     "/goliath/processing/Gouaux/CJS/BestTomo/ProcessingCJS/analyses/"
     "20260324_H4K2Cys_TOMO_Warp_CJS"
 )
-DEFAULT_H4K2CYS_ETOMO_DIR = _H4K2CYS_WARP_BASE / "warp_tiltseries_2.5"
 # AMmilled54/55 under warp_tiltseries_2.5; AMmilled49 under warp_tiltseries_49
+DEFAULT_H4K2CYS_XML_DIR_2_5 = _H4K2CYS_WARP_BASE / "warp_tiltseries_2.5"
+DEFAULT_H4K2CYS_XML_DIR_49 = _H4K2CYS_WARP_BASE / "warp_tiltseries_49"
+DEFAULT_H4K2CYS_XML_DIRS = [
+    DEFAULT_H4K2CYS_XML_DIR_2_5,
+    DEFAULT_H4K2CYS_XML_DIR_49,
+]
 DEFAULT_H4K2CYS_TILTSTACK_ROOTS = [
-    _H4K2CYS_WARP_BASE / "warp_tiltseries_2.5" / "tiltstack",
-    _H4K2CYS_WARP_BASE / "warp_tiltseries_49" / "tiltstack",
+    DEFAULT_H4K2CYS_XML_DIR_2_5 / "tiltstack",
+    DEFAULT_H4K2CYS_XML_DIR_49 / "tiltstack",
 ]
 
 FRAME_SUFFIXES = (".tif", ".eer", ".mrc")
@@ -569,28 +578,46 @@ def resolve_file_with_position_fallback(
     return None
 
 
+def _prefer_h4k2cys_project(tomoname: str, paths: list[Path]) -> list[Path]:
+    """Put the Warp project that owns ``tomoname`` first. Do not fall back."""
+    token = (
+        "warp_tiltseries_49" if "AMmilled49" in tomoname else "warp_tiltseries_2.5"
+    )
+    preferred = [p for p in paths if token in p.as_posix()]
+    return preferred or list(paths)
+
+
+def h4k2cys_xml_dirs_for(
+    tomoname: str, dirs: list[Path] | None = None
+) -> list[Path]:
+    """
+    Warp project dirs that hold ``{tomoname}.xml``.
+
+    AMmilled49 uses ``warp_tiltseries_49`` only. Other H4K2Cys tomograms
+    (AMmilled54/55) use ``warp_tiltseries_2.5`` only. A single explicit dir
+    that does not match either name is used as given.
+    """
+    candidates = list(dirs) if dirs else list(DEFAULT_H4K2CYS_XML_DIRS)
+    return _prefer_h4k2cys_project(tomoname, candidates)
+
+
 def h4k2cys_tiltstack_roots_for(
     tomoname: str, roots: list[Path] | None = None
 ) -> list[Path]:
     """
-    Ordered tiltstack roots for H4K2Cys.
+    Tiltstack roots for H4K2Cys.
 
-    Prefer ``warp_tiltseries_49`` for AMmilled49 tomograms and
-    ``warp_tiltseries_2.5`` otherwise (AMmilled54/55), then fall back to the rest.
+    AMmilled49 uses ``warp_tiltseries_49`` only. AMmilled54/55 use
+    ``warp_tiltseries_2.5`` only. A single explicit root that does not match
+    either name is used as given.
     """
     candidates = list(roots) if roots else list(DEFAULT_H4K2CYS_TILTSTACK_ROOTS)
-    if "AMmilled49" in tomoname:
-        preferred = [p for p in candidates if "warp_tiltseries_49" in str(p)]
-        other = [p for p in candidates if p not in preferred]
-        return preferred + other
-    preferred = [p for p in candidates if "warp_tiltseries_2.5" in str(p)]
-    other = [p for p in candidates if p not in preferred]
-    return preferred + other
+    return _prefer_h4k2cys_project(tomoname, candidates)
 
 
 def resolve_h4k2cys_warp_assets(
     tomoname: str,
-    etomo_dir: Path,
+    etomo_dirs: list[Path],
     tiltstack_roots: list[Path],
     *,
     processed_root: Path | None = None,
@@ -598,7 +625,8 @@ def resolve_h4k2cys_warp_assets(
     """
     For H4K2Cys: locate Warp XML + tiltstack .st (instead of .xf / .mrc).
 
-    ``.st`` search order: Warp tiltstack roots, then
+    XML and ``.st`` both come from ``warp_tiltseries_49`` for AMmilled49 and
+    from ``warp_tiltseries_2.5`` otherwise. ``.st`` then falls back to
     ``{processed_root}/15F1-H4K2Cys/TOP_TOMOS/{tomoname}/best_alignment``.
     Destination names always use the full ``tomoname``.
     """
@@ -606,11 +634,17 @@ def resolve_h4k2cys_warp_assets(
     items: list[tuple[Path, str]] = []
 
     xml_dest = f"{tomoname}.xml"
-    xml_src = resolve_file_with_position_fallback(etomo_dir, tomoname, xml_dest)
+    xml_dirs = h4k2cys_xml_dirs_for(tomoname, etomo_dirs)
+    xml_src: Path | None = None
+    for xml_dir in xml_dirs:
+        xml_src = resolve_file_with_position_fallback(xml_dir, tomoname, xml_dest)
+        if xml_src is not None:
+            break
     if xml_src is not None:
         items.append((xml_src, xml_dest))
     else:
-        warnings.append(f"missing H4K2Cys Warp XML: {etomo_dir / xml_dest}")
+        searched = ", ".join(str(d) for d in xml_dirs) or "(none)"
+        warnings.append(f"missing H4K2Cys Warp XML for {tomoname} under {searched}")
 
     st_dest = f"{tomoname}.st"
     short = position_basename(tomoname)
@@ -654,15 +688,16 @@ def collect_alignment_assets(
     *,
     cleft_ids: list[int] | None = None,
     processed_root: Path | None = None,
-    h4k2cys_etomo_dir: Path | None = None,
+    h4k2cys_etomo_dirs: list[Path] | None = None,
     h4k2cys_tiltstack_roots: list[Path] | None = None,
 ) -> tuple[list[tuple[Path, str]], list[str]]:
     """
     Return (src, relative_dest_under_alignment_dir) pairs and warnings.
 
     relative_dest is e.g. ``tomoname.defocus`` or ``annotations/foo.star``.
-    For ``15F1-H4K2Cys``, ``.defocus`` / ``.xf`` / ``{tomoname}.mrc`` are
-    omitted and Warp ``.xml`` / ``.st`` are added instead.
+    For ``15F1-H4K2Cys``, ``.defocus`` / ``.xf`` / ``.tlt`` / ``tilt.com`` /
+    ``.xtilt`` / ``{tomoname}.mrc`` are omitted and Warp ``.xml`` / ``.st``
+    are added instead. ``.xtilt`` is copied only when the file exists.
 
     AuNP pick STARs are filtered to ``cleft_ids`` (CSV active zones) when provided.
     """
@@ -673,7 +708,7 @@ def collect_alignment_assets(
     allowed_zones = set(cleft_ids) if cleft_ids else None
 
     if is_h4k2cys:
-        # No .defocus / .xf / {tomoname}.mrc for this set; Warp .xml + .st instead
+        # No IMOD tilt-angle files for this set; Warp .xml + .st instead
         required = [
             f"{tomoname}_full_rec_BP_3DCTF_BIN4.mrc",
             f"{tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc",
@@ -682,6 +717,8 @@ def collect_alignment_assets(
         required = [
             f"{tomoname}.defocus",
             f"{tomoname}.xf",
+            f"{tomoname}.tlt",
+            "tilt.com",
             f"{tomoname}.mrc",
             f"{tomoname}_full_rec_BP_3DCTF_BIN4.mrc",
             f"{tomoname}_full_rec_BP_3DCTF_BIN4_ddw.mrc",
@@ -695,8 +732,19 @@ def collect_alignment_assets(
             continue
         warnings.append(f"missing {align_path / name}")
 
+    # Per-view X-axis tilt is only written when tiltalign solved for it.
+    if not is_h4k2cys:
+        xtilt_name = f"{tomoname}.xtilt"
+        xtilt_src = resolve_alignment_file(align_path, tomoname, xtilt_name)
+        if xtilt_src is not None:
+            items.append((xtilt_src, xtilt_name))
+
     if is_h4k2cys:
-        etomo = h4k2cys_etomo_dir or DEFAULT_H4K2CYS_ETOMO_DIR
+        etomo_dirs = (
+            h4k2cys_etomo_dirs
+            if h4k2cys_etomo_dirs
+            else list(DEFAULT_H4K2CYS_XML_DIRS)
+        )
         tiltstacks = (
             h4k2cys_tiltstack_roots
             if h4k2cys_tiltstack_roots
@@ -704,7 +752,7 @@ def collect_alignment_assets(
         )
         warp_items, warp_warns = resolve_h4k2cys_warp_assets(
             tomoname,
-            etomo,
+            etomo_dirs,
             tiltstacks,
             processed_root=processed_root,
         )
@@ -937,7 +985,7 @@ def build_plans_for_job(
     dest_root: Path,
     force: bool,
     dry_run: bool = False,
-    h4k2cys_etomo_dir: Path | None = None,
+    h4k2cys_etomo_dirs: list[Path] | None = None,
     h4k2cys_tiltstack_roots: list[Path] | None = None,
 ) -> tuple[list[CopyPlan], list[str]]:
     plans: list[CopyPlan] = []
@@ -976,7 +1024,7 @@ def build_plans_for_job(
             job.set_name,
             cleft_ids=cleft_ids,
             processed_root=processed_root,
-            h4k2cys_etomo_dir=h4k2cys_etomo_dir,
+            h4k2cys_etomo_dirs=h4k2cys_etomo_dirs,
             h4k2cys_tiltstack_roots=h4k2cys_tiltstack_roots,
         )
         warnings.extend(asset_warns)
@@ -1028,10 +1076,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--h4k2cys-etomo-dir",
         type=Path,
-        default=DEFAULT_H4K2CYS_ETOMO_DIR,
+        nargs="*",
+        default=list(DEFAULT_H4K2CYS_XML_DIRS),
         help=(
-            f"H4K2Cys Warp dir containing {{tomoname}}.xml "
-            f"(default: {DEFAULT_H4K2CYS_ETOMO_DIR})"
+            "H4K2Cys Warp dir(s) containing {tomoname}.xml "
+            "(default: warp_tiltseries_2.5 and warp_tiltseries_49; "
+            "AMmilled49 uses warp_tiltseries_49, AMmilled54/55 use warp_tiltseries_2.5)"
         ),
     )
     parser.add_argument(
@@ -1042,7 +1092,7 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "H4K2Cys Warp tiltstack root(s) containing {tomoname}/{tomoname}.st "
             "(default: warp_tiltseries_2.5/tiltstack and "
-            "warp_tiltseries_49/tiltstack; AMmilled49 prefers the latter)"
+            "warp_tiltseries_49/tiltstack; AMmilled49 uses the latter only)"
         ),
     )
     parser.add_argument(
@@ -1120,7 +1170,7 @@ def main(argv: list[str] | None = None) -> int:
             dest_root=args.dest_root,
             force=args.force,
             dry_run=args.dry_run,
-            h4k2cys_etomo_dir=args.h4k2cys_etomo_dir,
+            h4k2cys_etomo_dirs=args.h4k2cys_etomo_dir,
             h4k2cys_tiltstack_roots=args.h4k2cys_tiltstack_root,
         )
         for w in warnings:
